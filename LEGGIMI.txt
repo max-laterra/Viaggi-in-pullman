@@ -1,0 +1,132 @@
+VIAGGI IN PULLMAN · LA TERRA – COME METTERLA IN FUNZIONE
+=========================================================
+
+Come funziona
+-------------
+- L'app si apre da un indirizzo internet (GitHub Pages), come l'Agenda Flotta, e si installa
+  sul computer come un programma.
+- I dati stanno SOLO nella sua cartella di Dropbox: Dropbox › Applicazioni › Viaggi in Pullman La Terra
+  (in inglese: Apps › Viaggi in Pullman La Terra). L'app non può vedere né modificare nessun altro
+  file del vostro Dropbox, e non tocca la cartella dell'Agenda Flotta.
+- Tutti i computer delle tre agenzie si aggiornano tra loro in pochi secondi. Senza internet si
+  continua a lavorare: le modifiche partono appena torna la connessione.
+- Ognuno entra con il proprio nome e la propria password. Le password non si salvano: si salva
+  solo un'impronta, da cui non si può risalire alla password.
+
+Servono circa 20 minuti, una volta sola. L'ordine dei passi è importante.
+
+
+PASSO 1 – Pubblica l'app su GitHub Pages
+----------------------------------------
+Usate un repository NUOVO, separato da quello dell'Agenda Flotta.
+1. Estrai lo zip: ottieni la cartella "viaggi-in-pullman".
+2. Su github.com, con l'account dove c'è già l'Agenda: "+" in alto → "New repository".
+   - Nome: viaggi-in-pullman
+   - Visibilità: "Public" (con GitHub gratuito le Pages funzionano solo con repository
+     pubblici; nel codice non ci sono password né dati: i dati restano nel vostro Dropbox).
+   - Spunta "Add a README file" → "Create repository".
+3. Nel repository: "Add file" → "Upload files" → trascina TUTTO il CONTENUTO della cartella
+   (index.html, app.js, le cartelle icons e vendor, ecc.; non la cartella stessa)
+   → "Commit changes".
+4. "Settings" → "Pages" → Source: "Deploy from a branch" → Branch: "main", cartella "/ (root)"
+   → "Save". Dopo 1–2 minuti in alto compare l'indirizzo, ad esempio:
+      https://nomeaccount.github.io/viaggi-in-pullman/
+5. Apri l'indirizzo: deve comparire la schermata di primo avvio.
+   Annota l'indirizzo esatto (con la barra finale): serve al passo 2.
+
+
+PASSO 2 – Crea l'app Dropbox (gratuito)
+---------------------------------------
+1. Entra in Dropbox con l'account dell'azienda e vai su
+   https://www.dropbox.com/developers/apps → "Create app".
+2. Scegli: "Scoped access" → "App folder" (NON "Full Dropbox") → nome: "Viaggi in Pullman La Terra".
+3. Scheda "Permissions": spunta
+      files.metadata.read   files.content.read   files.content.write
+   e premi "Submit" in fondo alla pagina.
+4. Scheda "Settings":
+   - "Redirect URIs": incolla l'indirizzo del passo 1 esattamente come appare nel browser,
+     con la barra finale (es. https://nomeaccount.github.io/viaggi-in-pullman/) e premi "Add".
+   - "Allow public clients (Implicit Grant & PKCE)": deve essere "Allow".
+   - Copia la "App key" (una sequenza di lettere e numeri).
+
+
+PASSO 3 – Inserisci la chiave
+-----------------------------
+1. Su GitHub, nel repository viaggi-in-pullman, apri il file config.js → icona matita (Edit).
+2. Incolla la App key tra le virgolette:
+      dropboxAppKey: "la-tua-app-key"
+3. "Commit changes". Dopo 1–2 minuti l'app aggiornata è online.
+
+
+PASSO 4 – Primo avvio (su un solo computer)
+-------------------------------------------
+1. Apri l'indirizzo in Google Chrome.
+2. "Collega Dropbox" → accedi con l'account dell'azienda → "Consenti".
+3. Passo 1 di 2: crea l'account del tecnico (Super Master). Scegli un nome e una password e
+   conservali in un posto sicuro: servono per la manutenzione e per reimpostare le password
+   di tutti. Gli altri non vedono questo account.
+4. Passo 2 di 2: crea il tuo account Master (es. "Andrea").
+5. Scegli l'agenzia in cui lavori. In calendario trovi già tutti i viaggi dell'elenco 2027,
+   eventi e concerti compresi.
+6. Installa l'app: icona "Installa" a destra nella barra dell'indirizzo di Chrome.
+   Da quel momento la trovi tra i programmi del computer.
+
+
+PASSO 5 – Gli altri computer
+----------------------------
+Su ogni computer delle agenzie (Ragusa, Modica, Marina di Ragusa):
+1. Apri l'indirizzo in Chrome → "Collega Dropbox" → accedi con lo STESSO account Dropbox
+   dell'azienda → "Consenti". (Non rifare il primo avvio: gli account ci sono già.)
+2. Entra con il tuo nome e la tua password e scegli l'agenzia.
+3. Installa l'app come al passo 4.6.
+
+
+PASSO 6 – Crea gli account degli operatori
+------------------------------------------
+1. Entra come Master → Impostazioni → "Operatori e permessi" → "Nuovo account".
+2. Scrivi il nome, scegli il ruolo (Operatore, Master o Contabilità) e spunta le agenzie in cui
+   può entrare (nessuna spunta = tutte).
+3. Dai alla persona la password provvisoria: al primo accesso l'app le chiede di sceglierne una sua.
+4. Per l'ufficio contabilità crea un account con ruolo "Contabilità": vede solo Cassa e
+   Contabilità, senza poter modificare niente.
+
+
+PASSO 7 – Recupera le liste della versione di prova (se le hai)
+---------------------------------------------------------------
+1. Apri il vecchio file «La Terra OnBoard.html» sul computer dove lavoravi.
+2. Impostazioni → "Scarica una copia": si salva un file .json.
+3. Nella nuova app: Impostazioni → "Copia di sicurezza" → "Recupera da una copia" → scegli il file.
+   Le liste entrano nei viaggi dell'elenco 2027 ancora vuoti; i viaggi in più si aggiungono.
+   Le gite «(esempio)» non vengono copiate.
+
+
+PASSO 8 – Luoghi di partenza con Google Maps
+--------------------------------------------
+1. Impostazioni → "Luoghi di partenza e mappe" → "Aggiungi luogo".
+2. Scrivi il codice usato nella colonna «part» della lista (es. RG), la città e il punto di salita.
+3. Premi "Cerca su Maps", clicca sul punto esatto, poi "Condividi" → "Copia link" e incollalo
+   nella colonna «Link Google Maps». Il link arriva al cliente nel messaggio WhatsApp.
+
+
+DA SAPERE
+---------
+- Super Master: nella schermata di accesso tocca 10 volte il logo La Terra. Da lì il tecnico
+  vede il log tecnico, reimposta tutte le password (Master compresi), mette l'app in
+  manutenzione e inserisce le chiavi dell'invio automatico WhatsApp.
+- Incassi: dal numero a sinistra della prima riga di una prenotazione → "Registra un incasso".
+  Ogni incasso porta operatore, agenzia, cassa e metodo (POS, bonifico, contanti, PostePay o
+  misto). Un incasso sbagliato non si cancella: si «storna» dalla pagina Cassa.
+- Chiusura di cassa: pagina Cassa → "Chiudi la cassa": resoconto completo di contanti, POS,
+  bonifici e PostePay, con la colonna «Controllato» per i conti fatti a mano.
+- Prova su un solo computer: se all'inizio hai premuto «Prova l'app solo su questo computer», quando
+  colleghi Dropbox quello che avevi scritto in prova NON passa negli archivi condivisi (così non si
+  mescola con i dati veri). Per portare qualcosa, prima del collegamento scarica una copia
+  (Impostazioni › Copia di sicurezza) e poi recuperala.
+- Una sola finestra: su ogni computer tieni aperta l'app in una sola finestra o scheda.
+- Aggiornamenti: quando ricevi una versione nuova, carica i file nuovi nel repository
+  (Add file → Upload files) sovrascrivendo i vecchi. NON caricare un config.js vuoto sopra
+  quello con la chiave.
+- Sicurezza: le password proteggono l'app da chi non deve entrare; i dati veri sono protetti
+  dall'accesso al vostro Dropbox. Non condividete l'account Dropbox dell'azienda.
+- Dropbox tiene anche le versioni precedenti di ogni file (Dropbox › file › "Cronologia
+  versioni"): in caso di errore si può tornare indietro.
