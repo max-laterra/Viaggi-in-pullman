@@ -52,6 +52,8 @@ PASSO 2 – Crea l'app Dropbox (gratuito)
 
 PASSO 3 – Inserisci la chiave
 -----------------------------
+Dalla versione 1.2.1 la chiave è già nel config.js del pacchetto: questo passo serve solo se
+la App key dell'app Dropbox cambia.
 1. Su GitHub, nel repository viaggi-in-pullman, apri il file config.js → icona matita (Edit).
 2. Incolla la App key tra le virgolette:
       dropboxAppKey: "la-tua-app-key"
@@ -113,6 +115,11 @@ DA SAPERE
 - Super Master: nella schermata di accesso tocca 10 volte il logo La Terra. Da lì il tecnico
   vede il log tecnico, reimposta tutte le password (Master compresi), mette l'app in
   manutenzione e inserisce le chiavi dell'invio automatico WhatsApp.
+- Guasti: Super Master › «Diagnostica completa» › scegli il periodo › «Scarica la diagnostica
+  completa». Si scarica uno zip con eventi.csv (si apre con Excel) e riepilogo.txt. Con la casella
+  «Anche gli altri computer» ci sono gli eventi di tutti i computer delle agenzie (si copiano su
+  Dropbox ogni 10 minuti, nella cartella «diagnostica»).
+- Versione e novità di ogni aggiornamento: file README.txt nello zip.
 - Incassi: nella lista premi il pulsante «€» sulla prima riga di una prenotazione: a destra si
   apre il riquadro «Incasso e documento» con i dati del foglio CASSA (categoria, righe con
   quantità, € bus e € biglietto, supplemento fila, diritti, circuito, metodo anche misto, pratica).
@@ -133,9 +140,9 @@ DA SAPERE
   mescola con i dati veri). Per portare qualcosa, prima del collegamento scarica una copia
   (Impostazioni › Copia di sicurezza) e poi recuperala.
 - Una sola finestra: su ogni computer tieni aperta l'app in una sola finestra o scheda.
-- Aggiornamenti: quando ricevi una versione nuova, carica i file nuovi nel repository
-  (Add file → Upload files) sovrascrivendo i vecchi. NON caricare un config.js vuoto sopra
-  quello con la chiave.
+- Aggiornamenti: quando ricevi una versione nuova, carica TUTTI i file nuovi nel repository
+  (Add file → Upload files) sovrascrivendo i vecchi, config.js compreso: dalla versione 1.2.1
+  la chiave di Dropbox è già dentro. Le novità di ogni versione sono nel file README.txt.
 - Sicurezza: le password proteggono l'app da chi non deve entrare; i dati veri sono protetti
   dall'accesso al vostro Dropbox. Non condividete l'account Dropbox dell'azienda.
 - Dropbox tiene anche le versioni precedenti di ogni file (Dropbox › file › "Cronologia

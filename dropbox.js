@@ -215,8 +215,12 @@
   };
   }
 
+  // la App key si ricorda anche su questo computer: se per errore si carica un config.js senza chiave,
+  // i computer già collegati continuano a funzionare
+  const AK = "vip-dropbox-appkey-v1";
+  try { if (C.dropboxAppKey) localStorage.setItem(AK, C.dropboxAppKey); } catch (_) {}
   const main = make({
-    key: () => C.dropboxAppKey,
+    key: () => C.dropboxAppKey || (() => { try { return localStorage.getItem(AK) || ""; } catch (_) { return ""; } })(),
     read() { try { return JSON.parse(localStorage.getItem(TK) || "null"); } catch (_) { return null; } },
     save(t) { try { t ? localStorage.setItem(TK, JSON.stringify(t)) : localStorage.removeItem(TK); } catch (_) {} },
     ss: "vipdbx",

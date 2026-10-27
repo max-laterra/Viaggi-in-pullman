@@ -1,6 +1,6 @@
 // Rende l'app utilizzabile anche senza connessione. Il numero cambia da solo a ogni nuova versione.
-const VERSION = "viaggi-laterra-1.1";
-const SHELL = ["./", "./index.html", "./app.js?v=1.1", "./app.css?v=1.1", "./config.js?v=1.1", "./dropbox.js?v=1.1", "./layouts.js?v=1.1", "./vendor/jszip.min.js",
+const VERSION = "viaggi-laterra-1.2.1";
+const SHELL = ["./", "./index.html", "./app.js?v=1.2.1", "./app.css?v=1.2.1", "./config.js?v=1.2.1", "./dropbox.js?v=1.2.1", "./layouts.js?v=1.2.1", "./vendor/jszip.min.js",
   "./vendor/pdfjs/pdf.min.mjs", "./vendor/pdfjs/pdf.worker.min.mjs", "./logo.jpg", "./posto.html", "./manifest.webmanifest",
   "./icons/icon-192.png", "./icons/icon-512.png", "./icons/apple-touch-icon.png", "./icons/favicon-64.png"];
 self.addEventListener("install", (e) => { e.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting())); });

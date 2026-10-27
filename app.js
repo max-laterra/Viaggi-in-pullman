@@ -1,6 +1,6 @@
 (function () {
   'use strict';
-  const VERSION = '1.1';
+  const VERSION = '1.2.1';
   const LOGO = './logo.jpg';
   const KEY = 'laterra.prenotazioniPosti.v1';
   const $ = (s, r = document) => r.querySelector(s);
@@ -98,6 +98,188 @@
     return { all, order, host, pair, geo, porta2, uscita, last, rank, sideOrders: [bySide('sx'), bySide('dx')], cap: all.length - host.size };
   }
   window.LAYOUTS.forEach(L => { L.info = analyze(L); LMAP[L.id] = L; });
+
+  // ---------- diagnostica completa (per il Super Master) ----------
+  // Ogni computer annota TUTTO quello che succede nell'app: avvio, accessi, pagine aperte, pulsanti premuti,
+  // campi modificati (solo QUALE campo, mai il contenuto), salvataggi, sincronizzazione con Dropbox
+  // (richieste, errori, conflitti), avvisi mostrati, errori del programma, rallentamenti, rete persa e ritrovata.
+  // Gli eventi restano 21 giorni su questo computer (IndexedDB) e ogni 10 minuti vengono copiati su Dropbox in
+  // /diagnostica/aaaa-mm/aaaa-mm-gg_<computer>.log (file che l'app non scarica sugli altri computer).
+  // Il Super Master scarica uno zip con gli eventi di tutti i computer, il registro e lo stato dell'app.
+  // Non si annotano mai: password, contenuto dei campi, chiavi di Dropbox o di WhatsApp.
+  const DIAG = (() => {
+    const DBN = 'viaggi-laterra-diag', MAX = 80000, KEEP_DAYS = 21, UPK = 'vip-diag-up-v1';
+    const SID = Date.now().toString(36) + Math.random().toString(36).slice(2, 5); // questa apertura dell'app
+    let db = null, q = [], seq = 0, flushT = null, ctxFn = () => ({}), dev = '', lastUp = 0, newSinceUp = 0, upBusy = false;
+    const ring = [];
+    const dayOf = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const cut = (s, n = 300) => { s = String(s == null ? '' : s); return s.length > n ? s.slice(0, n) + '…' : s; };
+    function clean(x, depth = 0) {
+      if (x == null || typeof x === 'number' || typeof x === 'boolean') return x;
+      if (typeof x === 'string') return cut(x);
+      if (depth > 3) return '…';
+      if (Array.isArray(x)) return x.slice(0, 25).map(v => clean(v, depth + 1));
+      if (typeof x === 'object') { const o = {}; Object.keys(x).slice(0, 30).forEach(k => { if (/pass|pw|token|secret|hash|salt|key/i.test(k)) return; o[k] = clean(x[k], depth + 1); }); return o; }
+      return cut(x);
+    }
+    function ev(k, m, x) {
+      try {
+        const d = new Date(); let c = {}; try { c = ctxFn() || {}; } catch (e) { /* niente */ }
+        const r = { t: d.toISOString(), d: dayOf(d), s: SID, n: ++seq, k, m: cut(m, 500) };
+        if (x !== undefined) r.x = clean(x);
+        if (c.u) r.u = c.u; if (c.ag) r.ag = c.ag; if (c.v) r.v = c.v;
+        q.push(r); ring.push(r); if (ring.length > 400) ring.shift(); newSinceUp++;
+        if (!flushT) flushT = setTimeout(flush, 1500);
+      } catch (e) { /* la diagnostica non deve mai fermare il lavoro */ }
+    }
+    function idb() {
+      return new Promise((res) => {
+        try {
+          const r = indexedDB.open(DBN, 1);
+          r.onupgradeneeded = () => { const s = r.result.createObjectStore('ev', { autoIncrement: true }); s.createIndex('d', 'd'); };
+          r.onsuccess = () => res(r.result); r.onerror = () => res(null); r.onblocked = () => res(null);
+        } catch (e) { res(null); }
+      });
+    }
+    async function flush() {
+      flushT = null; if (!q.length) return; if (!db) return; const batch = q; q = [];
+      try { await new Promise((res, rej) => { const t = db.transaction('ev', 'readwrite'); const s = t.objectStore('ev'); batch.forEach(r => s.add(r)); t.oncomplete = res; t.onerror = () => rej(t.error); t.onabort = () => rej(t.error); }); }
+      catch (e) { q = batch.concat(q).slice(-5000); }
+    }
+    async function prune() {
+      if (!db) return; const old = dayOf(new Date(Date.now() - KEEP_DAYS * 864e5));
+      try {
+        await new Promise((res) => { const t = db.transaction('ev', 'readwrite'); const ix = t.objectStore('ev').index('d'); ix.openCursor(IDBKeyRange.upperBound(old, true)).onsuccess = e => { const c = e.target.result; if (c) { c.delete(); c.continue(); } }; t.oncomplete = res; t.onerror = res; });
+        const n = await new Promise(res => { const t = db.transaction('ev', 'readonly'); const r = t.objectStore('ev').count(); r.onsuccess = () => res(r.result); r.onerror = () => res(0); });
+        if (n > MAX) { let del = n - MAX; await new Promise((res) => { const t = db.transaction('ev', 'readwrite'); t.objectStore('ev').openCursor().onsuccess = e => { const c = e.target.result; if (c && del-- > 0) { c.delete(); c.continue(); } }; t.oncomplete = res; t.onerror = res; }); }
+      } catch (e) { /* niente */ }
+    }
+    async function read(fromDay, toDay) {
+      await flush(); if (!db) return ring.filter(r => r.d >= fromDay && r.d <= toDay);
+      return new Promise(res => { try { const t = db.transaction('ev', 'readonly'); const r = t.objectStore('ev').index('d').getAll(IDBKeyRange.bound(fromDay, toDay)); r.onsuccess = () => res(r.result || []); r.onerror = () => res([]); } catch (e) { res([]); } });
+    }
+
+    // ---- statistiche delle richieste in rete (le riuscite si contano, gli errori e le lente si annotano una per una) ----
+    const http = {}; let httpSince = Date.now();
+    function httpNote(key, ok, ms) { const h = http[key] = http[key] || { n: 0, err: 0, ms: 0, max: 0 }; h.n++; if (!ok) h.err++; h.ms += ms; h.max = Math.max(h.max, ms); }
+    function httpSummary() {
+      const keys = Object.keys(http); if (!keys.length) return;
+      ev('rete', `Richieste negli ultimi ${Math.round((Date.now() - httpSince) / 60000)} minuti`, Object.fromEntries(keys.map(k => [k, { n: http[k].n, errori: http[k].err, media_ms: Math.round(http[k].ms / http[k].n), max_ms: Math.round(http[k].max) }])));
+      keys.forEach(k => delete http[k]); httpSince = Date.now();
+    }
+    function hookFetch() {
+      const of = window.fetch; if (!of || of.__diag) return;
+      const nf = async function (input, init) {
+        const url = typeof input === 'string' ? input : (input && input.url) || '';
+        let u; try { u = new URL(url, location.href); } catch (e) { return of.apply(this, arguments); }
+        if (u.origin === location.origin) return of.apply(this, arguments);
+        const hd = (init && init.headers) || {}; let arg = ''; try { arg = hd['Dropbox-API-Arg'] || (hd.get && hd.get('Dropbox-API-Arg')) || ''; } catch (e) { arg = ''; }
+        let fpath = ''; try { fpath = arg ? JSON.parse(arg).path || '' : ''; } catch (e) { fpath = ''; }
+        if (/^\/diagnostica\//.test(fpath)) return of.apply(this, arguments);
+        const ep = u.host.replace(/\.(dropboxapi|facebook)\.com$/, '') + u.pathname.replace(/\/v\d+(\.\d+)?\//, '/').replace(/\/\d{6,}\//g, '/<id>/');
+        const t0 = performance.now(); const lp = /longpoll/.test(u.pathname);
+        try {
+          const r = await of.apply(this, arguments); const ms = performance.now() - t0;
+          httpNote(ep, r.ok, ms);
+          if (!r.ok) ev('rete-errore', `${(init && init.method) || 'GET'} ${ep} → ${r.status}`, { file: fpath, ms: Math.round(ms), retryAfter: r.headers.get('Retry-After') || undefined });
+          else if (ms > 8000 && !lp) ev('rete-lenta', `${ep} ${Math.round(ms)} ms`, { file: fpath });
+          return r;
+        } catch (e) {
+          const ms = performance.now() - t0; httpNote(ep, false, ms);
+          ev('rete-errore', `${(init && init.method) || 'GET'} ${ep} → ${e && e.name === 'AbortError' ? 'tempo scaduto' : 'nessuna risposta'}`, { file: fpath, ms: Math.round(ms), err: e && (e.name + ': ' + e.message) });
+          throw e;
+        }
+      };
+      nf.__diag = true; window.fetch = nf;
+    }
+
+    // ---- errori del programma, avvisi in console, rallentamenti, rete, finestra ----
+    function hookErrors() {
+      window.__diagOn = true;
+      (window.__earlyErr || []).forEach(e => ev('errore', 'Prima dell\'avvio: ' + e.m + (e.file ? ' · ' + e.file : ''), e)); window.__earlyErr = [];
+      window.addEventListener('error', e => { if (e.target && e.target !== window && (e.target.src || e.target.href)) { ev('errore', 'Risorsa non caricata: ' + cut(e.target.src || e.target.href, 200)); return; } ev('errore', e.message || 'Errore', { file: e.filename, riga: e.lineno, col: e.colno, stack: e.error && e.error.stack ? cut(e.error.stack, 1500) : '' }); }, true);
+      window.addEventListener('unhandledrejection', e => { const r = e.reason || {}; ev('errore', 'Operazione non riuscita: ' + cut(r.message || r.code || r.summary || String(r), 300), { code: r.code, status: r.status, summary: r.summary ? cut(r.summary, 400) : undefined, stack: r.stack ? cut(r.stack, 1500) : undefined }); });
+      ['error', 'warn'].forEach(lv => { const o = console[lv]; console[lv] = function () { try { ev('console-' + lv, Array.from(arguments).map(a => a && a.stack ? a.stack : typeof a === 'object' ? JSON.stringify(clean(a)) : String(a)).join(' ')); } catch (e) { /* niente */ } return o.apply(console, arguments); }; });
+      window.addEventListener('online', () => ev('rete', 'Internet tornato'));
+      window.addEventListener('offline', () => ev('rete', 'Internet assente'));
+      document.addEventListener('visibilitychange', () => { ev('finestra', document.hidden ? 'App nascosta (altra finestra o schermo spento)' : 'App di nuovo in primo piano'); if (document.hidden) flush(); });
+      window.addEventListener('pagehide', () => { ev('finestra', 'App chiusa o ricaricata'); flush(); });
+      try { new PerformanceObserver(l => l.getEntries().forEach(en => { if (en.duration > 400) ev('lento', `Il programma si è bloccato per ${Math.round(en.duration)} ms`, { vista: (ctxFn() || {}).v }); })).observe({ type: 'longtask', buffered: true }); } catch (e) { /* non disponibile */ }
+      if (navigator.serviceWorker) navigator.serviceWorker.addEventListener('controllerchange', () => ev('avvio', 'Installata una nuova versione dell\'app (service worker)'));
+    }
+    // ---- cosa fa l'operatore: pulsanti, campi modificati (mai il testo), moduli ----
+    function hookUser() {
+      document.addEventListener('click', e => {
+        const el = e.target.closest && e.target.closest('[data-act]'); if (!el) return;
+        const d = el.dataset; const x = {}; ['id', 'v', 'k', 'trip', 'bus', 'sec', 'i'].forEach(k => { if (d[k] != null) x[k] = d[k]; });
+        ev('azione', d.act + (el.textContent ? ' · ' + cut(el.textContent.replace(/\s+/g, ' ').trim(), 60) : ''), Object.keys(x).length ? x : undefined);
+      }, true);
+      document.addEventListener('change', e => {
+        const el = e.target; if (!el || !el.dataset) return; if (el.type === 'password') return;
+        const keys = Object.entries(el.dataset).map(([k, v]) => `${k}=${cut(v, 30)}`).join(' ');
+        const x = { campo: keys || el.id || el.name || el.tagName.toLowerCase(), tipo: el.type || el.tagName.toLowerCase() };
+        if (el.type === 'checkbox' || el.type === 'radio') x.valore = el.checked; else if (el.tagName === 'SELECT' || el.type === 'date' || el.type === 'month') x.valore = el.value; else x.lunghezza = String(el.value || '').length;
+        if (el.type === 'file') x.file = Array.from(el.files || []).map(f => `${f.name} (${Math.round(f.size / 1024)} KB)`);
+        ev('campo', 'Modificato ' + x.campo, x);
+      }, true);
+      document.addEventListener('submit', e => { const f = e.target; ev('modulo', 'Inviato il modulo ' + (f.dataset.f || f.id || f.name || ''), { campi: Array.from(f.elements || []).filter(x => x.name && x.type !== 'password').map(x => x.name) }); }, true);
+      document.addEventListener('drop', e => { const t = e.target.closest && e.target.closest('[data-seat],[data-droplist],[data-droptrip]'); ev('trascina', 'Rilasciato su ' + (t ? Object.entries(t.dataset).map(([k, v]) => `${k}=${v}`).join(' ') : 'pagina'), { files: Array.from((e.dataTransfer && e.dataTransfer.files) || []).map(f => `${f.name} (${Math.round(f.size / 1024)} KB)`) }); }, true);
+    }
+    async function bootInfo() {
+      const n = navigator; const x = {
+        versione: typeof VERSION !== 'undefined' ? VERSION : '', indirizzo: location.origin + location.pathname, browser: n.userAgent, sistema: n.platform, lingua: n.language,
+        fuso: Intl.DateTimeFormat().resolvedOptions().timeZone, schermo: `${screen.width}x${screen.height} @${window.devicePixelRatio}`, finestra: `${innerWidth}x${innerHeight}`,
+        installata: matchMedia('(display-mode: standalone)').matches, online: n.onLine, cpu: n.hardwareConcurrency, memoriaGB: n.deviceMemory,
+        connessione: n.connection ? `${n.connection.effectiveType || ''} ${n.connection.downlink || ''}Mb/s` : '', serviceWorker: !!(n.serviceWorker && n.serviceWorker.controller), webcodecs: typeof window.VideoEncoder === 'function'
+      };
+      try { if (n.storage && n.storage.estimate) { const s = await n.storage.estimate(); x.spazioUsatoMB = Math.round((s.usage || 0) / 1048576); x.spazioMB = Math.round((s.quota || 0) / 1048576); } } catch (e) { /* niente */ }
+      try { if (n.storage && n.storage.persisted) x.archivioPersistente = await n.storage.persisted(); } catch (e) { /* niente */ }
+      ev('avvio', 'App aperta', x);
+    }
+    // ---- copia su Dropbox (ogni 10 minuti se ci sono eventi nuovi) ----
+    async function upload(force) {
+      const D = window.VIPDBX; if (upBusy || !dev || !D || !D.isLinked() || !navigator.onLine) return;
+      if (!force && (!newSinceUp || Date.now() - lastUp < 10 * 60000)) return;
+      upBusy = true;
+      try {
+        await flush(); const done = (() => { try { return JSON.parse(localStorage.getItem(UPK) || '{}'); } catch (e) { return {}; } })();
+        const today = dayOf(new Date()); const days = [today];
+        for (let i = 1; i <= 3; i++) { const d = dayOf(new Date(Date.now() - i * 864e5)); if (!done[d]) days.push(d); }
+        for (const d of days) {
+          const evs = await read(d, d); if (!evs.length) { if (d !== today) done[d] = 1; continue; }
+          const body = new TextEncoder().encode(evs.map(r => JSON.stringify(Object.assign({ c: dev }, r))).join('\n') + '\n');
+          await D.upload(`/diagnostica/${d.slice(0, 7)}/${d}_${dev}.log`, body, 'overwrite');
+          if (d !== today) done[d] = 1;
+        }
+        Object.keys(done).forEach(k => { if (k < dayOf(new Date(Date.now() - 10 * 864e5))) delete done[k]; });
+        try { localStorage.setItem(UPK, JSON.stringify(done)); } catch (e) { /* niente */ }
+        lastUp = Date.now(); newSinceUp = 0;
+      } catch (e) { ev('diagnostica', 'Copia della diagnostica su Dropbox non riuscita: ' + (e && (e.code || e.message)), { status: e && e.status }); }
+      finally { upBusy = false; }
+    }
+    async function start() {
+      db = await idb(); hookFetch(); hookErrors(); hookUser(); await prune(); bootInfo(); flush();
+      setInterval(() => { httpSummary(); upload(false); }, 5 * 60000);
+      setInterval(prune, 6 * 3600000);
+    }
+    return {
+      ev, start, read, flush, upload, ring, SID,
+      set ctx(f) { ctxFn = f; }, set dev(v) { dev = v; }, get dev() { return dev; },
+      async remote(fromDay, toDay, skipDev) {
+        const D = window.VIPDBX; if (!D || !D.isLinked()) return { files: [], err: 'Dropbox non collegato' };
+        const out = []; let res;
+        try { res = await D.listFolder('/diagnostica'); } catch (e) { return { files: [], err: 'Elenco non riuscito: ' + (e.code || e.message) }; }
+        const entries = [];
+        while (res) { entries.push(...(res.entries || [])); if (!res.has_more) break; res = await D.listFolder(null, res.cursor); }
+        for (const en of entries) {
+          const m = /\/(\d{4}-\d{2}-\d{2})_([^/]+)\.log$/.exec(en.path_lower || ''); if (en['.tag'] !== 'file' || !m) continue;
+          if (m[1] < fromDay || m[1] > toDay || m[2] === skipDev) continue;
+          try { const r = await D.download(en.path_lower); if (r) out.push({ name: en.name || en.path_lower.split('/').pop(), day: m[1], dev: m[2], text: new TextDecoder().decode(r.buf) }); } catch (e) { out.push({ name: en.name || en.path_lower.split('/').pop(), day: m[1], dev: m[2], text: '', err: e.code || e.message }); }
+        }
+        return { files: out };
+      }
+    };
+  })();
 
   // ---------- stato ----------
   // S si costruisce dai file dell'archivio (STORE): un viaggio per file, più impostazioni, utenti e anagrafica.
@@ -349,7 +531,7 @@
     if (/\b(sx|sinistra|sinistro|sin)\b|lato autista|dietro (l'|lo |all'\s*)?autista/.test(t)) { P.lato = 'sx'; found = true; }
     else if (/\b(dx|destra|destro)\b|lato porta|lato hostess/.test(t)) { P.lato = 'dx'; found = true; }
     if (/dietro (l'|lo |all'\s*)?autista/.test(t) && !P.fila) P.fila = 1;
-    if (/finestrin/.test(t)) { P.pos = 'win'; found = true; } else if (/corridoio/.test(t)) { P.pos = 'aisle'; found = true; }
+    if (/finestr/.test(t)) { P.pos = 'win'; found = true; } else if (/\bcorr(idoio|\.|\b)/.test(t)) { P.pos = 'aisle'; found = true; }
     if (/soffre|mal d[ia] (auto|pullman|viaggio|strada)|nausea/.test(t) && !P.fila && !P.zone.includes('front')) { P.zone.push('front'); found = true; }
     return found ? P : null;
   }
@@ -1425,6 +1607,7 @@
   // ---------- finestre ----------
   let pending = null;
   function openModal(title, body, foot, wide) {
+    DIAG.ev('finestra', 'Aperta la finestra «' + String(title).replace(/<[^>]+>/g, '').replace(/&[a-z#0-9]+;/g, ' ').trim() + '»');
     $('#modal-root').innerHTML = `<div class="scrim" data-act="scrim"><div class="modal${wide ? ' wide' : ''}" role="dialog" aria-modal="true" aria-label="${esc(title)}"><div class="modal-h"><h2>${title}</h2><button class="btn ghost" data-act="close" aria-label="Chiudi">${ICON.close}</button></div><div class="modal-b">${body}</div><div class="modal-f">${foot}</div></div></div>`;
     const first = $('#modal-root input, #modal-root textarea'); if (first) setTimeout(() => first.focus(), 30);
   }
@@ -2108,7 +2291,9 @@
       if (rec.data && mergeFor(path) !== lww) d = mergeFor(path)(d, rec.data);
       files.set(path, { rev: rec.rev, data: d }); ver++;
       persist(path); dirty.add(path); saveQ(); kick(); emit();
+      const now = Date.now(); if (!putSeen[path] || now - putSeen[path] > 15000) { putSeen[path] = now; DIAG.ev('salva', 'Salvato ' + path, { inAttesa: dirty.size }); }
     }
+    const putSeen = {};
 
     // ---- Dropbox ----
     const enc = new TextEncoder(), dec = new TextDecoder();
@@ -2123,12 +2308,12 @@
       for (;;) {
         for (const en of res.entries || []) {
           const p = en.path_lower;
-          if (en['.tag'] === 'deleted') { if (files.has(p) && !dirty.has(p)) { files.delete(p); persist(p); changed.push(p); } continue; }
+          if (en['.tag'] === 'deleted') { if (files.has(p) && !dirty.has(p)) { files.delete(p); persist(p); changed.push(p); DIAG.ev('sync', 'Cancellato da un altro computer: ' + p); } continue; }
           if (en['.tag'] !== 'file' || !/\.json$/.test(p)) continue;
           const loc = files.get(p); if (loc && loc.rev === en.rev) continue;
           const r = await D.download(p); if (!r) continue;
-          let remote; try { remote = JSON.parse(dec.decode(r.buf)); } catch (e) { continue; }
-          if (dirty.has(p) && loc) files.set(p, { rev: r.meta.rev || en.rev, data: mergeFor(p)(loc.data, remote) });
+          let remote; try { remote = JSON.parse(dec.decode(r.buf)); } catch (e) { DIAG.ev('sync-errore', 'File illeggibile su Dropbox: ' + p, { bytes: r.buf && r.buf.byteLength }); continue; }
+          if (dirty.has(p) && loc) { files.set(p, { rev: r.meta.rev || en.rev, data: mergeFor(p)(loc.data, remote) }); DIAG.ev('sync-unione', 'Unito con le modifiche di un altro computer: ' + p); }
           else files.set(p, { rev: r.meta.rev || en.rev, data: remote });
           persist(p); changed.push(p); ver++;
         }
@@ -2137,11 +2322,12 @@
         res = await D.listFolder(null, res.cursor);
       }
       markPulled();
+      if (changed.length) DIAG.ev('sync', `Ricevuti ${changed.length} file da Dropbox`, { file: changed.slice(0, 25) });
       return changed;
     }
     function markPulled() { if (!st.pulled) { st.pulled = true; lsSet(PK, true); } }
     async function pushOnce() {
-      const D = DBX(); const changed = []; let fail = null;
+      const D = DBX(); const changed = []; let fail = null; const sent = [];
       for (const p of [...dirty]) {
        try {
         const rec = files.get(p); if (!rec) { dirty.delete(p); continue; }
@@ -2150,9 +2336,10 @@
             const meta = await D.upload(p, enc.encode(JSON.stringify(rec.data)), rec.rev ? { update: rec.rev } : 'add');
             const cur = files.get(p); files.set(p, { rev: meta.rev, data: cur ? cur.data : rec.data }); persist(p);
             if (cur && JSON.stringify(cur.data) === JSON.stringify(rec.data)) dirty.delete(p);
-            break;
+            sent.push(p); break;
           } catch (e) {
             if (e.code !== 'conflict') throw e;
+            DIAG.ev('sync-conflitto', `${p}: cambiato nel frattempo da un altro computer, unisco (tentativo ${tryN + 1})`);
             const r = await D.download(p);
             if (!r) { rec.rev = null; continue; }
             let remote = null; try { remote = JSON.parse(dec.decode(r.buf)); } catch (x) { remote = null; }
@@ -2160,9 +2347,10 @@
             files.set(p, { rev: r.meta.rev, data: merged }); persist(p); Object.assign(rec, files.get(p)); changed.push(p); ver++;
           }
         }
-       } catch (e) { fail = fail || e; if (e.code === 'network' || e.code === 'no_auth') break; }
+       } catch (e) { fail = fail || e; DIAG.ev('sync-errore', 'Invio non riuscito: ' + p, { code: e.code, status: e.status, summary: e.summary }); if (e.code === 'network' || e.code === 'no_auth') break; }
       }
       saveQ();
+      if (sent.length) DIAG.ev('sync', `Inviati ${sent.length} file a Dropbox`, { file: sent.slice(0, 25), restano: dirty.size });
       if (fail) { const e = fail; e.changed = changed; throw e; }
       return changed;
     }
@@ -2171,7 +2359,7 @@
       for (const p of [...blobQ]) {
         const b = await tx('blobs', 'readonly', (s) => s.get(p)).catch(() => null);
         if (!b) { blobQ.delete(p); continue; }
-        try { await D.upload(p, b, 'overwrite'); blobQ.delete(p); } catch (e) { if (e.code === 'network' || e.code === 'no_auth') break; }
+        try { await D.upload(p, b, 'overwrite'); blobQ.delete(p); DIAG.ev('sync', 'Inviato il file ' + p, { KB: Math.round((b.size || 0) / 1024) }); } catch (e) { DIAG.ev('sync-errore', 'Invio del file non riuscito: ' + p, { code: e.code, status: e.status }); if (e.code === 'network' || e.code === 'no_auth') break; }
       }
       lsSet(QK + '-b', [...blobQ]);
     }
@@ -2185,7 +2373,7 @@
           if (b.length) onRemote(b);
           await pushBlobs();
           st.error = ''; st.last = new Date();
-        } catch (e) { st.error = e && e.code ? e.code : 'errore'; if (window.ACC) ACC.tlog('errore', 'Sincronizzazione Dropbox: ' + (e && (e.code + (e.status ? ' ' + e.status : '')) || e)); throw e; }
+        } catch (e) { st.error = e && e.code ? e.code : 'errore'; DIAG.ev('sync-errore', 'Sincronizzazione interrotta: ' + st.error, { code: e && e.code, status: e && e.status, summary: e && e.summary, msg: e && e.message }); if (window.ACC) ACC.tlog('errore', 'Sincronizzazione Dropbox: ' + (e && (e.code + (e.status ? ' ' + e.status : '')) || e)); throw e; }
         finally { st.syncing = false; emit(); }
       });
     }
@@ -2199,9 +2387,9 @@
         try {
           await syncNow(); wait = 2000;
           const cur = lsGet(CK, null);
-          if (cur) { const lp = await DBX().longpoll(cur, 45); if (lp && lp.backoff) await sleep(lp.backoff * 1000); }
+          if (cur) { const lp = await DBX().longpoll(cur, 45); if (lp && lp.backoff) { DIAG.ev('sync', `Dropbox chiede di aspettare ${lp.backoff} s`); await sleep(lp.backoff * 1000); } }
           else await sleep(5000);
-        } catch (e) { await sleep(wait); wait = Math.min(60000, wait * 2); }
+        } catch (e) { DIAG.ev('sync', `Nuovo tentativo tra ${Math.round(wait / 1000)} s`); await sleep(wait); wait = Math.min(60000, wait * 2); }
       }
     }
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -2221,12 +2409,15 @@
     async function delBlob(path) { await tx('blobs', 'readwrite', (s) => s.delete(path)).catch(() => {}); blobQ.delete(path); lsSet(QK + '-b', [...blobQ]); if (linked()) DBX().remove(path).catch(() => {}); }
 
     return {
-      dropUnsynced() { [...files.keys()].forEach((p) => { const r = files.get(p); if (r && !r.rev) { files.delete(p); persist(p); dirty.delete(p); } }); blobQ.clear(); lsSet(QK + '-b', []); saveQ(); },
+      pendingList: () => [...dirty, ...blobQ],
+      sizes() { const o = {}; files.forEach((r, p) => { const k = p.split('/').slice(0, 2).join('/') || '/'; const b = JSON.stringify(r.data || null).length; const x = o[k] = o[k] || { file: 0, KB: 0, senzaRev: 0 }; x.file++; x.KB += b / 1024; if (!r.rev) x.senzaRev++; }); Object.values(o).forEach(x => { x.KB = Math.round(x.KB); }); return o; },
+      cursor: () => !!lsGet(CK, null),
+      dropUnsynced() { DIAG.ev('sync', 'Primo collegamento a Dropbox: tolti i dati di prova di questo computer'); [...files.keys()].forEach((p) => { const r = files.get(p); if (r && !r.rev) { files.delete(p); persist(p); dirty.delete(p); } }); blobQ.clear(); lsSet(QK + '-b', []); saveQ(); },
       ver: () => ver,
       open, get, list, put, putBlob, getBlob, delBlob, syncNow, loop, kick, status, device,
       mergeTrip, mergeFor, set onRemote(f) { onRemote = f; }, set onStatus(f) { onStatus = f; },
       // per le prove: svuota la copia locale
-      async wipe() { files.clear(); dirty.clear(); blobQ.clear(); saveQ(); lsSet(CK, null); lsSet(PK, null); st.pulled = false; await tx('files', 'readwrite', (s) => s.clear()); await tx('blobs', 'readwrite', (s) => s.clear()); }
+      async wipe() { DIAG.ev('sync', 'Copia di questo computer cancellata: la riscarico da Dropbox'); files.clear(); dirty.clear(); blobQ.clear(); saveQ(); lsSet(CK, null); lsSet(PK, null); st.pulled = false; await tx('files', 'readwrite', (s) => s.clear()); await tx('blobs', 'readwrite', (s) => s.clear()); }
     };
   })();
 
@@ -2271,6 +2462,7 @@
     async check(name, pw) { const n = normName(name); for (const [id, u] of Object.entries(this.users())) { if (normName(u.name) !== n || u.active === false) continue; if ((await pwHash(pw, u.salt, u.iter || ITER)) === u.hash) return id; } return null; },
     // registro tecnico: un file al giorno per computer, letto solo dal Super Master
     tlog(lv, m) {
+      DIAG.ev('registro-' + lv, m);
       try {
         const d = new Date(), day = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
         const p = `/registro/${day.slice(0, 7)}/${day}_${STORE.device.id}.json`;
@@ -2996,7 +3188,7 @@
     return `<div class="sup"><div class="pagehead"><div><h1>Super Master</h1><div class="sub">Invisibile agli altri account · ${st.linked ? 'Dropbox collegato' : 'solo su questo computer'} · versione ${esc(VERSION)}</div></div><div class="hbtns"><button class="btn" data-act="lexport">Scarica il registro</button><button class="btn" data-act="logout">Esci</button></div></div>
       <div class="two"><section class="box sup-log" aria-label="Log tecnico"><div class="sh"><h2>Log tecnico · ultimi 7 giorni</h2><div class="seg"><button data-act="lgf" data-v="all" aria-pressed="${UI.lgf !== 'err'}">Tutto</button><button data-act="lgf" data-v="err" aria-pressed="${UI.lgf === 'err'}">Errori e avvisi</button></div></div>
         <div class="logl">${ev.map(e => `<div class="lg ${e.lv}"><span>${esc(dayISO(new Date(e.at)).slice(5).split('-').reverse().join('/'))} ${esc(hm(e.at))}</span><span class="lv">${esc(e.lv.toUpperCase())}</span><span>${esc(e.who ? e.who + ' · ' : '')}${esc(e.ag ? agName(e.ag) + ' · ' : '')}${esc(e.m)}<small> · ${esc(e.dev)}</small></span></div>`).join('') || '<div class="small">Niente nel registro.</div>'}</div></section>
-        <div class="sup-col"><section class="box form"><h2>Password e account</h2>
+        <div class="sup-col">${diagBox()}<section class="box form"><h2>Password e account</h2>
           ${Object.entries(ACC.users()).filter(([id]) => id !== ACC.sess.uid).map(([id, u]) => `<div class="kv"><span><b>${esc(u.name)}</b> · ${esc(ROLE_L[u.role])}${u.active === false ? ' · disattivato' : ''}</span><button class="btn sm" data-act="ureset" data-id="${id}">Reimposta</button></div>`).join('') || '<div class="small">Nessun altro account.</div>'}
           <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn danger" data-act="resetall">Reimposta tutte le password, Master compresi</button><button class="btn" data-act="unewm">+ Nuovo Master</button></div></section>
         <section class="box form"><h2>Solo per il tecnico</h2>
@@ -3023,11 +3215,94 @@
     ACC.tlog('avviso', `Reimpostate tutte le password (${ids.length} account)`); closeModal(); render(); toast(`Reimpostate ${ids.length} password`);
   }
 
+  // ---------- diagnostica completa: uno zip con tutto quello che serve per capire un guasto ----------
+  async function diagExport() {
+    const days = +(($('#dg-days') || {}).value || 7); const all = !!($('#dg-all') || {}).checked;
+    const to = dayISO(new Date()); const from = dayISO(new Date(Date.now() - (days - 1) * 864e5));
+    const btn = $('[data-act=diagexport]'); if (btn) { btn.disabled = true; btn.textContent = 'Preparo il file…'; }
+    DIAG.ev('diagnostica', `Il Super Master scarica la diagnostica (${days} giorni${all ? ', tutti i computer' : ''})`);
+    try {
+      const mine = await DIAG.read(from, to);
+      const byDev = { [STORE.device.id]: mine.map(r => Object.assign({ c: STORE.device.id }, r)) };
+      let remErr = '';
+      if (all) {
+        const R = await DIAG.remote(from, to, STORE.device.id); remErr = R.err || '';
+        R.files.forEach(f => { const arr = byDev[f.dev] = byDev[f.dev] || []; f.text.split('\n').forEach(l => { if (!l.trim()) return; try { arr.push(JSON.parse(l)); } catch (e) { /* riga rovinata */ } }); if (f.err) remErr += ` ${f.name}: ${f.err}`; });
+      }
+      const devNames = {}; Object.keys(byDev).forEach(d => { const rev = byDev[d].slice().reverse(); const a = rev.find(r => r.k === 'accesso' && r.u) || rev.find(r => r.u); devNames[d] = a ? `${a.u}${a.ag ? ' · ' + agName(a.ag) : ''}` : ''; });
+      const allEv = Object.values(byDev).flat().sort((a, b) => a.t.localeCompare(b.t) || (a.n - b.n));
+      const reg = STORE.list('/registro/').filter(([p]) => !p.startsWith('/registro/dispositivi/')).flatMap(([, d]) => (d.ev || []).map(e => Object.assign({ dev: d.dev }, e))).filter(e => { const dd = dayISO(new Date(e.at)); return dd >= from && dd <= to; }).sort((a, b) => a.at.localeCompare(b.at));
+      const hm2 = iso => { const d = new Date(iso); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`; };
+      const q = v => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`;
+      const KL = { avvio: 'Avvio', accesso: 'Accesso', pagina: 'Pagina aperta', azione: 'Pulsante', campo: 'Campo modificato', modulo: 'Modulo', trascina: 'Trascinamento', finestra: 'Finestra', avviso: 'Messaggio mostrato', salva: 'Salvataggio', sync: 'Sincronizzazione', 'sync-unione': 'Unione con altro computer', 'sync-conflitto': 'Conflitto risolto', 'sync-errore': 'ERRORE sincronizzazione', rete: 'Rete', 'rete-errore': 'ERRORE rete', 'rete-lenta': 'Rete lenta', errore: 'ERRORE programma', 'console-error': 'ERRORE console', 'console-warn': 'Avviso console', lento: 'Rallentamento', stato: 'Stato', diagnostica: 'Diagnostica', 'registro-info': 'Registro', 'registro-avviso': 'Registro · avviso', 'registro-errore': 'ERRORE registro' };
+      const isErr = r => /errore/.test(r.k);
+      const csv = '﻿' + [['Data', 'Ora', 'Computer', 'Chi c\'era', 'Sessione', 'N.', 'Utente', 'Agenzia', 'Pagina', 'Tipo', 'Cosa è successo', 'Dettagli'].map(q).join(';')]
+        .concat(allEv.map(r => [fmtDate(r.d), hm2(r.t), r.c, devNames[r.c] || '', r.s, r.n, r.u || '', r.ag ? agName(r.ag) : '', r.v || '', KL[r.k] || r.k, r.m, r.x ? JSON.stringify(r.x) : ''].map(q).join(';'))).join('\r\n');
+      const errs = allEv.filter(isErr);
+      const cnt = {}; allEv.forEach(r => { cnt[r.k] = (cnt[r.k] || 0) + 1; });
+      const st = STORE.status(); const n = navigator;
+      let est = {}; try { est = n.storage && n.storage.estimate ? await n.storage.estimate() : {}; } catch (e) { est = {}; }
+      const users = Object.values(ACC.users()).map(u => `  - ${u.name} · ${ROLE_L[u.role]}${u.active === false ? ' · DISATTIVATO' : ''}${u.mustChange ? ' · deve cambiare password' : ''} · agenzie: ${(u.agencies || []).length ? u.agencies.map(agName).join(', ') : 'tutte'}${u.sigla ? ' · sigla ' + u.sigla : ''}${u.pwAt ? ' · password del ' + fmtDate(dayISO(new Date(u.pwAt))) : ''}`).join('\n');
+      const sizes = STORE.sizes(); const wc = waCfg();
+      const lines = [
+        'VIAGGI IN PULLMAN · LA TERRA — DIAGNOSTICA', '='.repeat(44), '',
+        `Creato il ${fmtDate(to)} alle ${hm2(new Date().toISOString())} da ${ACC.me().name} su questo computer (${STORE.device.id})`,
+        `Periodo: dal ${fmtDate(from)} al ${fmtDate(to)} (${days} giorni)`,
+        `Versione dell'app: ${VERSION}`, `Indirizzo: ${location.origin + location.pathname}`, '',
+        'COMPUTER NEL FILE', ...Object.keys(byDev).map(d => `  - ${d}${d === STORE.device.id ? ' (questo)' : ''}: ${byDev[d].length} eventi${devNames[d] ? ' · ultimo utente ' + devNames[d] : ''}`),
+        all ? (remErr ? `  ! Altri computer: ${remErr}` : '  (gli altri computer copiano la loro diagnostica su Dropbox ogni 10 minuti)') : '  (solo questo computer: non è stata spuntata la casella «tutti i computer»)', '',
+        'RIEPILOGO', `  Eventi: ${allEv.length} · errori: ${errs.length}`, ...Object.entries(cnt).sort((a, b) => b[1] - a[1]).map(([k, v]) => `    ${(KL[k] || k).padEnd(28)} ${v}`), '',
+        'ULTIMI ERRORI (i più recenti in alto)', ...(errs.slice(-40).reverse().map(r => `  ${fmtDate(r.d)} ${hm2(r.t)} · ${r.c} · ${r.u || '-'} · ${r.m}`)), errs.length ? '' : '  Nessun errore nel periodo.', '',
+        'QUESTO COMPUTER', `  Browser: ${n.userAgent}`, `  Schermo: ${screen.width}x${screen.height} · finestra ${innerWidth}x${innerHeight} · app installata: ${matchMedia('(display-mode: standalone)').matches ? 'sì' : 'no'}`,
+        `  Internet: ${n.onLine ? 'sì' : 'no'} · spazio usato ${Math.round((est.usage || 0) / 1048576)} MB su ${Math.round((est.quota || 0) / 1048576)} MB`, '',
+        'SINCRONIZZAZIONE', `  Dropbox: ${st.hasKey ? (st.linked ? 'collegato' : 'NON collegato') : 'chiave mancante in config.js'} · primo scaricamento fatto: ${st.pulled ? 'sì' : 'NO'} · segnalibro Dropbox: ${STORE.cursor() ? 'sì' : 'no'}`,
+        `  Ultima sincronizzazione: ${st.last ? st.last.toLocaleString('it-IT') : '—'} · errore attuale: ${st.error || 'nessuno'} · modifiche in attesa: ${st.pending}`,
+        ...STORE.pendingList().slice(0, 50).map(p => `    in attesa: ${p}`), '',
+        'ARCHIVIO DI QUESTO COMPUTER (cartella · file · dimensione · file mai arrivati su Dropbox)', ...Object.entries(sizes).sort().map(([k, v]) => `  ${k.padEnd(14)} ${String(v.file).padStart(5)} file · ${String(v.KB).padStart(6)} KB${v.senzaRev ? ' · ' + v.senzaRev + ' mai inviati' : ''}`), '',
+        `DATI: ${S.trips.length} viaggi · ${Object.keys(S.clients.clienti || {}).length} clienti in anagrafica · ${allMovs().length} movimenti di cassa · agenzie: ${S.cfg.agenzie.map(a => a.nome).join(', ')}`,
+        `WhatsApp automatico: ${waReady(wc) ? 'attivo' : 'non configurato'} · telefono agenzia: ${S.cfg.telAgenzia ? 'sì' : 'no'} · manutenzione: ${S.cfg.maint ? 'ATTIVA' : 'no'}`, '',
+        'ACCOUNT', users, '',
+        'Nel file non ci sono password, chiavi di Dropbox o di WhatsApp, né il contenuto dei campi scritti dagli operatori.'
+      ];
+      const readme = `COME SI LEGGE QUESTO FILE\n=========================\n\n1. riepilogo.txt: versione, computer, stato della sincronizzazione, ultimi errori, account.\n2. eventi.csv: tutti gli eventi in ordine di tempo, di tutti i computer. Si apre con Excel\n   (doppio clic). Usa i filtri sulla colonna «Tipo»: le righe con ERRORE sono i guasti.\n3. registro.csv: il registro tecnico (accessi, incassi, chiusure, password) che vedi anche nella pagina Super Master.\n4. computer/<codice>.jsonl: gli eventi grezzi di ogni computer, una riga per evento (per l'analisi tecnica).\n\nTipi di evento: ${Object.entries(KL).map(([k, v]) => `${v} (${k})`).join(', ')}.\n\nPer capire un guasto: cerca in eventi.csv l'ora in cui è successo e guarda le righe prima e dopo\n(cosa ha premuto l'operatore, quale pagina era aperta, se internet c'era, cosa ha risposto Dropbox).\n`;
+      const regCsv = '﻿' + [['Data', 'Ora', 'Computer', 'Livello', 'Utente', 'Agenzia', 'Messaggio'].map(q).join(';')].concat(reg.map(e => [fmtDate(dayISO(new Date(e.at))), hm2(e.at), e.dev, e.lv, e.who || '', e.ag ? agName(e.ag) : '', e.m].map(q).join(';'))).join('\r\n');
+      const zip = new window.JSZip();
+      zip.file('LEGGIMI.txt', readme); zip.file('riepilogo.txt', lines.join('\r\n')); zip.file('eventi.csv', csv); zip.file('registro.csv', regCsv);
+      Object.entries(byDev).forEach(([d, arr]) => zip.file(`computer/${d}.jsonl`, arr.sort((a, b) => a.t.localeCompare(b.t) || a.n - b.n).map(r => JSON.stringify(r)).join('\n') + '\n'));
+      const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE' });
+      const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `diagnostica-viaggi-${to}.zip`; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+      toast(`Diagnostica pronta: ${allEv.length} eventi da ${Object.keys(byDev).length} ${Object.keys(byDev).length === 1 ? 'computer' : 'computer'}${errs.length ? ` · ${errs.length} errori` : ''}`);
+    } catch (e) { DIAG.ev('errore', 'Diagnostica non riuscita: ' + (e.message || e.code), { stack: e.stack }); toast('Non sono riuscito a preparare la diagnostica: ' + (e.message || e.code || 'errore')); }
+    finally { if (btn) { btn.disabled = false; btn.textContent = 'Scarica la diagnostica completa'; } }
+  }
+  function diagBox() {
+    const r = DIAG.ring; const today = dayISO(new Date()); const errs = r.filter(x => /errore/.test(x.k));
+    return `<section class="box form diag"><h2>Diagnostica completa</h2>
+      <div class="small">Ogni computer annota tutto quello che succede nell'app (pagine, pulsanti, salvataggi, sincronizzazione, errori, rete, rallentamenti) e lo copia su Dropbox ogni 10 minuti. Non annota password né il testo scritto nei campi.</div>
+      <div class="kv"><span>Su questo computer da quando è aperta l'app</span><b>${r.length >= 400 ? 'oltre 400' : r.length} eventi · ${errs.length} errori</b></div>
+      ${errs.slice(-3).reverse().map(x => `<div class="kv"><span class="small">${esc(hm(x.t))} · ${esc(x.m)}</span></div>`).join('')}
+      <div class="dg-row"><label>Periodo<select id="dg-days"><option value="1">Oggi</option><option value="3">Ultimi 3 giorni</option><option value="7" selected>Ultimi 7 giorni</option><option value="14">Ultimi 14 giorni</option><option value="21">Ultimi 21 giorni</option></select></label>
+        <label class="chk"><input type="checkbox" id="dg-all"${STORE.status().linked ? ' checked' : ' disabled'}> Anche gli altri computer</label></div>
+      <div><button class="btn primary" data-act="diagexport">Scarica la diagnostica completa</button></div>
+      <div class="small">Si scarica uno zip: dentro c'è «eventi.csv» da aprire con Excel e «riepilogo.txt» con lo stato dell'app. Giorno di oggi: ${esc(fmtDate(today))}.</div></section>`;
+  }
+
   // ---------- render ----------
   const FOCUS_KEYS = ['hq', 'aq', 'r', 'ar', 'nr', 'f', 'q', 'qs', 'qt', 'tf', 'dep2', 'dep', 'k', 'bind', 'cl', 'cfgag', 'cfgl', 'pf', 'pl', 'pff', 'pfm', 'usig'];
-  const ACT_PERM = { unew: 'users', unewm: 'tech', ureset: 'users', usave: 'users', resetall: 'tech', doresetall: 'tech', savekeys: 'tech', wipelocal: 'tech', lgf: 'tech', lexport: 'tech', lnew: 'settings', ldel: 'settings', savewa: 'settings', savetel: 'settings', export: 'settings', pay: 'cassa', paypanel: 'viaggi', pfsave: 'cassa', cashmov: 'cassa', cashsave: 'cassa', storno: 'cassa', cclose: 'cassa', ccsave: 'cassa', clnew: 'anag', cldel: 'anag', newtrip: 'viaggi', deltrip: 'viaggi' };
+  const ACT_PERM = { unew: 'users', unewm: 'tech', ureset: 'users', usave: 'users', resetall: 'tech', doresetall: 'tech', savekeys: 'tech', wipelocal: 'tech', lgf: 'tech', lexport: 'tech', diagexport: 'tech', lnew: 'settings', ldel: 'settings', savewa: 'settings', savetel: 'settings', export: 'settings', pay: 'cassa', paypanel: 'viaggi', pfsave: 'cassa', cashmov: 'cassa', cashsave: 'cassa', storno: 'cassa', cclose: 'cassa', ccsave: 'cassa', clnew: 'anag', cldel: 'anag', newtrip: 'viaggi', deltrip: 'viaggi' };
   const VIEW_PERM = { home: 'viaggi', models: 'viaggi', trip: 'viaggi', anag: 'anag', conta: 'conta', super: 'tech' };
+  let lastNav = '', lastSess = '';
   function render() {
+    const t0 = performance.now();
+    try { renderIn(); } catch (e) { DIAG.ev('errore', 'Errore nel disegnare la pagina: ' + e.message, { stack: e.stack, vista: UI.view, sezione: UI.sec }); throw e; }
+    const ms = performance.now() - t0;
+    const sk = ACC.sess ? `${ACC.sess.uid}|${ACC.sess.ag || ''}` : '';
+    if (sk !== lastSess) { const me = ACC.me(); DIAG.ev('accesso', sk ? `Dentro come ${me ? me.name + ' (' + ROLE_L[me.role] + ')' : '?'}${ACC.sess.ag ? ' · ' + agName(ACC.sess.ag) : ''}` : 'Nessuno collegato (schermata di accesso)'); lastSess = sk; }
+    const nk = gateStep() ? 'accesso:' + gateStep() : `${UI.view}|${UI.tripId || ''}|${UI.sec || ''}|${UI.ssec || ''}|${UI.ctab || ''}`;
+    if (nk !== lastNav) { const t = UI.view === 'trip' && trip(); DIAG.ev('pagina', gateStep() ? 'Schermata ' + gateStep() : `${UI.view}${t ? ' · ' + t.nome + ' (' + t.data + ')' : ''}${UI.view === 'trip' ? ' · ' + (UI.sec || 'lista') : ''}`, { ms: Math.round(ms) }); lastNav = nk; }
+    else if (ms > 250) DIAG.ev('lento', `Pagina ridisegnata in ${Math.round(ms)} ms`, { vista: UI.view });
+  }
+  function renderIn() {
     acClose();
     const step = gateStep();
     if (step) {
@@ -3056,7 +3331,7 @@
   }
   function commit() { save(); render(); }
   let toastT;
-  function toast(msg) { const el = $('#toast'); el.textContent = msg; el.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => { el.hidden = true; }, 3600); }
+  function toast(msg) { DIAG.ev('avviso', msg); const el = $('#toast'); el.textContent = msg; el.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => { el.hidden = true; }, 3600); }
   const ddmm = () => fmtDate(todayISO()).slice(0, 5);
 
   // ---------- menu delle righe ----------
@@ -3239,6 +3514,7 @@
       case 'savekeys': waSettingsSave(); ACC.tlog('avviso', 'Chiavi WhatsApp aggiornate'); toast('Chiavi salvate'); render(); break;
       case 'lgf': UI.lgf = el.dataset.v; render(); break;
       case 'lexport': exportLog(); break;
+      case 'diagexport': diagExport(); break;
       case 'wipelocal': confirmBox('Riscarica da Dropbox', 'Cancello la copia dei dati su questo computer e la riscarico da Dropbox. Le modifiche non ancora inviate si perdono.', 'Riscarica', () => { ACC.tlog('avviso', 'Copia locale cancellata e riscaricata'); setTimeout(() => STORE.wipe().then(() => location.reload()), 400); }); break;
       // anagrafica
       case 'clsel': UI.cl = el.dataset.id; render(); break;
@@ -3541,7 +3817,7 @@
   }
 
   // test interni (usati solo in fase di verifica)
-  window.__posti = { get S() { return S; }, UI, render, deriveBookings, syncAll, seatIndex, officeLabels, parseTripDocx, autoAssign, prefStatus, bkMoney, summaryOf, LMAP, dropFamily, dropPerson, STORE, ACC, flush, allMovs, payTotals, cashSaldo, giornoData, xlRow,
+  window.__posti = { get S() { return S; }, UI, render, deriveBookings, syncAll, seatIndex, officeLabels, parseTripDocx, autoAssign, prefStatus, bkMoney, summaryOf, LMAP, dropFamily, dropPerson, STORE, ACC, flush, allMovs, payTotals, cashSaldo, giornoData, xlRow, DIAG,
     demo() { const d = demoState(); d.trips.forEach(t => { delete t.demo; S.trips.push(t); t.rows.forEach(r => upsertFromRow(r)); }); flush(); render(); return d.trips.map(t => t.id); } };
 
   // ---------- avvio ----------
@@ -3559,7 +3835,9 @@
   }
   (async () => {
     await oneWindow();
-    await STORE.open();
+    DIAG.ctx = () => { const me = ACC.sess && ACC.me(); return { u: me ? me.name : '', ag: ACC.sess && ACC.sess.ag || '', v: UI.view === 'trip' ? 'trip:' + (UI.tripId || '') : UI.view }; };
+    await DIAG.start();
+    await STORE.open(); DIAG.dev = STORE.device.id; DIAG.ev('avvio', 'Archivio aperto', { computer: STORE.device.id, dal: STORE.device.since, stato: STORE.status(), inAttesa: STORE.pendingList().slice(0, 30) });
     if (window.VIPDBX && VIPDBX.isMine && VIPDBX.isMine()) {
       try { if (await VIPDBX.finishLogin()) STORE.dropUnsynced(); localStorage.removeItem(LOCAL_MODE); } catch (e) { GATE.msg = 'Il collegamento a Dropbox non è riuscito: riprova.'; }
     }
@@ -3575,6 +3853,7 @@
     { const st = STORE.status(); const local = localStorage.getItem(LOCAL_MODE) === '1' || !st.hasKey; if ((local && !st.linked) || st.pulled) { seedCatalog(); buildAnagrafica(); } }
     render();
     STORE.loop();
+    setInterval(() => { const st = STORE.status(); DIAG.ev('stato', `Stato: ${st.linked ? (st.error ? 'errore ' + st.error : 'sincronizzato') : 'non collegato'} · ${st.pending} in attesa`, { online: navigator.onLine, ultimaSync: st.last ? st.last.toISOString() : null, pagina: UI.view, memoriaMB: performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1048576) : undefined, viaggi: S.trips.length }); }, 10 * 60000);
     if (ACC.me()) ACC.tlog('info', 'Apertura dell\'app');
   })();
 })();

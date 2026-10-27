@@ -1045,3 +1045,6 @@ input.btn[type=date],input.btn[type=month]{font:600 14px var(--sans);color:var(-
 .whead.bigl{grid-template-columns:minmax(0,1.3fr) minmax(0,3.1fr)}
 .paypanel .seg.wrap{display:grid!important;grid-template-columns:repeat(auto-fit,minmax(104px,1fr));width:100%;flex-direction:row}
 .paypanel .seg.wrap button{white-space:nowrap;padding:7px 8px}
+.diag .dg-row{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:end}
+.diag .dg-row label{display:flex;flex-direction:column;gap:4px;font-size:13px;font-weight:600}
+.diag .dg-row label.chk{flex-direction:row;align-items:center;font-weight:500}
