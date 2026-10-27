@@ -1,6 +1,6 @@
 (function () {
   'use strict';
-  const VERSION = '1.0';
+  const VERSION = '1.1';
   const LOGO = './logo.jpg';
   const KEY = 'laterra.prenotazioniPosti.v1';
   const $ = (s, r = document) => r.querySelector(s);
@@ -303,8 +303,18 @@
     else if (tipo === 'bam') base = Q.bambini ?? Q.adulti;
     else if (tipo === '3l') base = Q.terzo ?? Q.adulti;
     else base = room && room.persone.length === 1 && Q.singola != null ? Q.singola : Q.adulti;
+    const tk = ticketOf(t, tipo);
+    if (base == null && (tk || isBigl(t))) base = 0;
     if (base == null) return null;
-    return base + supplOf(t, bk, p);
+    return base + supplOf(t, bk, p) + tk;
+  }
+  // biglietto dell'evento (intero o ridotto) + diritti di prevendita, per chi lo compra con l'agenzia
+  const isBigl = t => t.cat === 'biglietteria';
+  function ticketOf(t, tipo) {
+    const Q = t.quota || {}; if (Q.tkt1 == null && Q.tkt2 == null) return 0;
+    if (tipo === 'free') return 0;
+    const tk = tipo === 'bam' || tipo === 'inf' ? (Q.tkt2 ?? Q.tkt1) : Q.tkt1;
+    return (+tk || 0) + (+Q.diritti || 0);
   }
   function bkMoney(t, bk) {
     const ctx = new Map(); roomsOf(bk).forEach(r => r.persone.forEach((p, i) => ctx.set(p.id, { room: r, idx: i })));
@@ -1109,7 +1119,9 @@
   }
 
   // ---------- viste ----------
-  const listCols = tour => tour
+  const listCols = (tour, bigl) => bigl
+    ? [['cognome', 'cognome'], ['nome', 'nome'], ['tel', 'contatto'], ['note', 'note / mail'], ['pagato', '€']]
+    : tour
     ? [['cognome', 'cognome'], ['nome', 'nome'], ['nascita', 'data'], ['tel', 'contatto'], ['natoA', 'nato/a a'], ['part', 'P'], ['hotel', 'hotel'], ['cam', 'C'], ['fila', 'fila'], ['note', 'note / mail'], ['pagato', 'P']]
     : [['cognome', 'cognome'], ['nome', 'nome'], ['nascita', 'data'], ['tel', 'contatto'], ['part', 'part'], ['fila', 'fila'], ['note', 'note / mail'], ['pagato', '€']];
   const ATTC = [['cognome', 'Cognome'], ['nome', 'Nome'], ['nascita', 'data di nascita'], ['tel', 'contatto'], ['part', 'part'], ['note', 'note'], ['richiesta', 'data di richiesta'], ['avviso', 'data di avviso'], ['risposta', 'risposta del cliente']];
@@ -1134,7 +1146,7 @@
       ${me ? `<button class="me" data-act="memenu" aria-label="${esc(me.name)}: account"><span class="av">${esc((me.name || '?')[0].toUpperCase())}</span><span class="mt"><b>${esc(me.name)}</b><small>${esc(ROLE_L[me.role])}</small></span></button>` : ''}
     </div></header>`;
   }
-  const CAT_L = { gita: 'Gita', tour: 'Tour', evento: 'Evento' };
+  const CAT_L = { gita: 'Gita', tour: 'Tour', evento: 'Evento', biglietteria: 'Biglietteria' };
   const tripCat = t => t.cat || (t.fine && t.fine !== t.data ? 'tour' : 'gita');
   const nGiorni = t => !t.fine || t.fine === t.data ? 1 : Math.round((parseD(t.fine) - parseD(t.data)) / 864e5) + 1;
   function homeYear() {
@@ -1157,7 +1169,7 @@
     const byM = {}; list.forEach(t => { const m = +t.data.slice(5, 7) - 1; (byM[m] = byM[m] || []).push(t); });
     const demo = '';
     const ycnt = yy => S.trips.filter(t => t.data.slice(0, 4) === yy).length;
-    const mcount = arr => { const g = arr.filter(t => tripCat(t) === 'gita').length, tt = arr.filter(t => tripCat(t) === 'tour').length, e = arr.filter(t => tripCat(t) === 'evento').length; return [g ? `${g} ${g > 1 ? 'gite' : 'gita'}` : '', tt ? `${tt} tour` : '', e ? `${e} ${e > 1 ? 'eventi' : 'evento'}` : ''].filter(Boolean).join(' · '); };
+    const mcount = arr => { const g = arr.filter(t => tripCat(t) === 'gita').length, tt = arr.filter(t => tripCat(t) === 'tour').length, e = arr.filter(t => tripCat(t) === 'evento').length, bg = arr.filter(t => tripCat(t) === 'biglietteria').length; return [g ? `${g} ${g > 1 ? 'gite' : 'gita'}` : '', tt ? `${tt} tour` : '', e ? `${e} ${e > 1 ? 'eventi' : 'evento'}` : '', bg ? `${bg} biglietteria` : ''].filter(Boolean).join(' · '); };
     return `${demo}
       <div class="pagehead"><div><h1>Viaggi ${esc(y)}</h1><div class="sub">${ofYear.length} ${ofYear.length === 1 ? 'viaggio' : 'viaggi'} in programma${mcount(ofYear) ? ' · ' + mcount(ofYear) : ''}. Apri la lista per le prenotazioni, «Posti sul bus» per la piantina.</div></div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
@@ -1166,7 +1178,7 @@
         </div></div>
       <div class="hfilters">
         <div class="seg" role="group" aria-label="Anno">${years.map(yy => `<button data-act="year" data-v="${yy}" aria-pressed="${yy === y}">${yy} <small>${ycnt(yy)}</small></button>`).join('')}</div>
-        <div class="seg catseg" role="group" aria-label="Tipo">${[['tutte', `Tutte ${ofYear.length}`], ['gita', `Gite ${cnt('gita')}`], ['tour', `Tour ${cnt('tour')}`], ...(cnt('evento') ? [['evento', `Eventi ${cnt('evento')}`]] : [])].map(([v, l]) => `<button data-act="hcat" data-v="${v}" aria-pressed="${cat === v}" class="c-${v}">${l}</button>`).join('')}</div>
+        <div class="seg catseg" role="group" aria-label="Tipo">${[['tutte', `Tutte ${ofYear.length}`], ['gita', `Gite ${cnt('gita')}`], ['tour', `Tour ${cnt('tour')}`], ...(cnt('evento') ? [['evento', `Eventi ${cnt('evento')}`]] : []), ...(cnt('biglietteria') ? [['biglietteria', `Biglietteria ${cnt('biglietteria')}`]] : [])].map(([v, l]) => `<button data-act="hcat" data-v="${v}" aria-pressed="${cat === v}" class="c-${v}">${l}</button>`).join('')}</div>
         <label class="chk small"><input type="checkbox" data-act="hidepast"${UI.hidePast ? ' checked' : ''}> Nascondi quelle già fatte</label>
         <input class="search" type="search" data-hq="1" placeholder="Cerca viaggio o codice (es. T08)" value="${esc(UI.hq || '')}" aria-label="Cerca">
       </div>
@@ -1180,7 +1192,7 @@
     const c = tripCat(t); const d = parseD(t.data); const n = nGiorni(t); const f = t.fine ? parseD(t.fine) : null;
     const past = (t.fine || t.data) < today;
     const when = n > 1 ? `${GIORNI[d.getDay()].slice(0, 3)} ${d.getDate()} ${MESI[d.getMonth()]} → ${GIORNI[f.getDay()].slice(0, 3)} ${f.getDate()} ${MESI[f.getMonth()]} · ${n} giorni` : `${GIORNI[d.getDay()]} · in giornata`;
-    const st = !T.pers ? '<span class="pill neutral">lista vuota</span>' : `<span class="pill ${T.seated === T.pers ? 'ok' : 'tbd'}">${T.pers} persone${T.seated < T.pers ? ` · ${T.pers - T.seated} senza posto` : ''}</span>`;
+    const st = !T.pers ? '<span class="pill neutral">lista vuota</span>' : c === 'biglietteria' ? `<span class="pill neutral">${T.pers} biglietti</span>` : `<span class="pill ${T.seated === T.pers ? 'ok' : 'tbd'}">${T.pers} persone${T.seated < T.pers ? ` · ${T.pers - T.seated} senza posto` : ''}</span>`;
     const buses = t.buses.length ? `<span class="pill neutral">${ICON.bus} ${t.buses.length} bus · ${t.buses.reduce((a, b) => a + busStats(b).tot, 0)}/${T.cap}</span>` : '';
     return `<article class="trow c-${c}${t.extra ? ' extra' : ''}${past ? ' past' : ''}" data-droptrip="${t.id}">
       <div class="tr-d" data-act="opentrip" data-id="${t.id}"><b>${d.getDate()}${n > 1 && f.getMonth() === d.getMonth() ? `<small>–${f.getDate()}</small>` : ''}</b><span>${GIORNI[d.getDay()].slice(0, 3)}</span></div>
@@ -1189,7 +1201,7 @@
         <div class="tr-m"><span>${esc(when)}</span>${t.quota && t.quota.hotel ? `<span>Hotel ${esc(t.quota.hotel)}</span>` : ''}${past ? '<span>già fatta</span>' : ''}</div>
       </div>
       <div class="tr-s">${st}${buses}</div>
-      <div class="tr-a"><button class="btn sm" data-act="opentrip" data-id="${t.id}" data-sec="lista">${ICON.list} Lista</button><button class="btn sm" data-act="opentrip" data-id="${t.id}" data-sec="posti">${ICON.bus} Posti</button></div>
+      <div class="tr-a"><button class="btn sm" data-act="opentrip" data-id="${t.id}" data-sec="lista">${ICON.list} Lista</button>${c !== 'biglietteria' ? `<button class="btn sm" data-act="opentrip" data-id="${t.id}" data-sec="posti">${ICON.bus} Posti</button>` : ''}</div>
     </article>`;
   }
   function busRow(t, b) {
@@ -1222,36 +1234,38 @@
   }
   function tripView() {
     const t = trip(); if (!t) { UI.view = 'home'; return homeView(); }
-    tripInit(t); ensureBlank(t);
+    tripInit(t); ensureBlank(t); const bigl = tripCat(t) === 'biglietteria'; if (bigl) UI.sec = 'lista';
     if (!bus() && t.buses.length) UI.busId = t.buses[0].id;
     const D = syncAll(t); const SI = seatIndex(t); const T = summaryOf(t, D, SI);
     const head = `<div class="crumbs"><a data-act="nav" data-v="home">Viaggi</a><span>›</span><span>${esc(t.nome)}</span></div>
       <div class="tripbar" data-droptrip="${t.id}"><h1>${esc(t.nome)}</h1><span class="pill neutral">${esc(fmtTripDate(t, true))}</span>${progBox(t)}<button class="btn sm ghost" data-act="edittrip">${ICON.edit} Modifica gita</button></div>
-      <div class="ptabs" role="tablist"><button role="tab" data-act="sec" data-v="lista" aria-selected="${UI.sec !== 'posti'}">${ICON.list} Lista prenotazioni <span>${T.pers} persone${T.att ? ` · ${T.att} in attesa` : ''}</span></button><button role="tab" data-act="sec" data-v="posti" aria-selected="${UI.sec === 'posti'}">${ICON.bus} Posti sul bus <span>${T.seated}/${T.pers} con il posto</span></button></div>`;
+      <div class="ptabs" role="tablist"><button role="tab" data-act="sec" data-v="lista" aria-selected="${UI.sec !== 'posti'}">${ICON.list} ${bigl ? 'Biglietti venduti' : 'Lista prenotazioni'} <span>${T.pers} persone${T.att ? ` · ${T.att} in attesa` : ''}</span></button>${bigl ? '' : `<button role="tab" data-act="sec" data-v="posti" aria-selected="${UI.sec === 'posti'}">${ICON.bus} Posti sul bus <span>${T.seated}/${T.pers} con il posto</span></button>`}</div>`;
     return head + (UI.sec === 'posti' ? postiView(t, D, SI, T) : listaView(t, D, SI, T));
   }
 
   // ----- sezione 1: la lista prenotazioni, come il file Word -----
   function headBlock(t) {
-    const Q = t.quota; const tour = isTourT(t);
+    const Q = t.quota; const tour = isTourT(t); const cat = tripCat(t); const bigl = cat === 'biglietteria'; const tk = bigl || cat === 'evento';
     const e = (k, ph = '') => `<input class="hc num" data-q="${k}" inputmode="decimal" value="${Q[k] != null ? esc(String(Q[k]).replace('.', ',')) : ''}" placeholder="${ph}">`;
     const tx = (k, ph = '') => `<input class="hc" data-qt="${k}" value="${esc(Q[k] || '')}" placeholder="${ph}">`;
+    const tkRow = tk ? `<div class="wh-tkt"><b>${bigl ? 'Biglietto' : 'Biglietto dell\'evento (se lo vendete voi)'}</b><label>intero €${e('tkt1')}</label><label><input class="hc lab" data-qt="tkt2L" value="${esc(Q.tkt2L || 'ridotto')}" aria-label="Nome del ridotto"> €${e('tkt2')}</label><label>diritti € (a biglietto)${e('diritti')}</label><label>circuito<select class="hc" data-qt="circuito"><option value="">—</option>${CIRCUITI.map(c => `<option${Q.circuito === c ? ' selected' : ''}>${c}</option>`).join('')}</select></label></div>` : '';
     const deps = [0, 1, 2].map(i => { const d = t.partenze[i] || {}; return `<div class="hdep"><input class="hc" data-dep2="${i}" data-k="citta" value="${esc(d.citta || '')}" placeholder="città"><input class="hc" data-dep2="${i}" data-k="luogo" value="${esc(d.luogo || '')}" placeholder="luogo"><input class="hc" data-dep2="${i}" data-k="ora" value="${esc(d.ora || '')}" placeholder="ora"></div>`; }).join('');
-    return `<div class="whead">
+    return `<div class="whead${bigl ? ' bigl' : ''}">
       <div class="wh-title"><textarea class="hc big" data-tf="nome" rows="3" aria-label="Nome della gita">${esc(t.nome)}</textarea></div>
-      <div class="wh-grid">
+      ${bigl ? '' : `<div class="wh-grid">
         <label>Adulti €</label>${e('adulti')}${tour ? `<label>singola €</label>${e('singola')}` : '<span></span><span></span>'}
         <label>Data</label><div class="hdates"><input class="hc" type="date" data-tf="data" value="${esc(t.data)}" aria-label="Partenza"><span>al</span><input class="hc" type="date" data-tf="fine" value="${esc(t.fine || '')}" aria-label="Rientro"></div>
         <label><input class="hc lab" data-qt="bambiniL" value="${esc(Q.bambiniL || (tour ? '3/11 anni' : '4/11 anni'))}" aria-label="Età bambini"> €</label>${e('bambini')}${tour ? `<label>3° letto ad. €</label>${e('terzo')}` : '<span></span><span></span>'}
         <label>acconto €</label>${e('acconto')}${tour ? `<label>${esc(Q.infantL || '0/2 anni')} €</label>${e('infant', '0')}` : '<span></span><span></span>'}
         <label>saldo €</label><div class="hdates">${e('saldo')}<span>il</span><input class="hc" type="date" data-qt="saldoEntro" value="${esc(Q.saldoEntro || '')}" aria-label="Saldo entro il"></div>
         ${tour ? `<label>Hotel</label><div class="span3">${tx('hotel', 'nome hotel, città')}</div>` : ''}
-      </div>
-      <div class="wh-deps"><b>Partenze</b>${deps}</div>
+      </div>`}${bigl ? `<div class="wh-grid"><label>Data</label><div class="hdates"><input class="hc" type="date" data-tf="data" value="${esc(t.data)}" aria-label="Data dell'evento"></div></div>` : ''}
+      ${tkRow}
+      ${bigl ? '' : `<div class="wh-deps"><b>Partenze</b>${deps}</div>`}
     </div>
     <div class="wnotes"><label>Nota 1: <input class="hc" data-tf="note1" value="${esc(t.note1 || '')}"></label><label>Nota 2: <input class="hc" data-tf="note2" value="${esc(t.note2 || '')}"></label></div>`;
   }
-  function wRow(t, r, i, cols, ctx) {
+  function wRow(t, r, i, cols, ctx, bigl) {
     const x = ctx.byRow[r.id]; const head = x && x.k === 0; const bk = x && x.bk;
     const ok = bk && saldato(bk); const seat = ctx.SI[r.id];
     let cls = x ? `g${x.gi % 2}` : 'blank'; if (head) cls += ' gh'; if (ok) cls += ' paid'; if (bk && UI.sel === bk.id) cls += ' sel'; if (UI.selP === r.id) cls += ' selp';
@@ -1262,11 +1276,12 @@
     const tip = head && bk._m ? `Totale ${euro(bk._m.due)} · pagato ${euro(bk._m.paid)}${bk._m.rest ? ' · da pagare ' + euro(bk._m.rest) : ''}${bk.mancano ? ` · mancano ${bk.mancano} nomi` : ''}` : '';
     return `<tr class="${cls}" data-rowid="${r.id}">
       <td class="wn">${drag}<button class="rn" data-act="rowmenu" data-id="${r.id}" aria-label="Riga ${i + 1}: azioni">${i + 1}</button></td>
-      ${cols.map(([f, l]) => `<td class="c-${f}${head && f === 'cognome' && bk.mancano ? ' miss' : ''}"${head && f === 'cognome' && tip ? ` title="${esc(tip)}"` : ''}><input class="wc" data-r="${r.id}" data-f="${f}" value="${esc(r[f] || '')}" aria-label="${esc(l)} riga ${i + 1}" autocomplete="off"></td>`).join('')}
-      <td class="wpos">${seatTxt}${head && paidMovs(t.id, bk.id) ? ` <span class="pill neutral" title="Incassato con «Registra un incasso»: lo trovi nella Cassa">${ICON.euro}${esc(fmtNum(paidMovs(t.id, bk.id)))} in cassa</span>` : ''}</td></tr>`;
+      ${cols.map(([f, l]) => head && f === 'pagato' ? `<td class="c-pagato"><button class="eurobtn${ok ? ' ok' : bk._m && bk._m.paid ? ' part' : ''}${UI.pay && UI.pay.bkId === bk.id ? ' on' : ''}" data-act="paypanel" data-id="${bk.id}" title="Incasso e documento (scontrino o fattura)" aria-label="Incasso e documento di ${esc(bkName(bk))}">${bk._m && bk._m.paid ? esc(fmtNum(bk._m.paid)) : '€'}</button></td>` : `<td class="c-${f}${head && f === 'cognome' && bk.mancano ? ' miss' : ''}"${head && f === 'cognome' && tip ? ` title="${esc(tip)}"` : ''}><input class="wc" data-r="${r.id}" data-f="${f}" value="${esc(r[f] || '')}" aria-label="${esc(l)} riga ${i + 1}" autocomplete="off"></td>`).join('')}
+      ${bigl ? '' : `<td class="wpos">${seatTxt}</td>`}</tr>`;
   }
   function listaView(t, D, SI, T) {
-    const tour = isTourT(t); const cols = listCols(tour);
+    const bigl = tripCat(t) === 'biglietteria'; const tour = !bigl && isTourT(t); const cols = listCols(tour, bigl);
+    const pp = UI.pay && UI.pay.tripId === t.id ? payPanelHTML(t) : ''; if (UI.pay && !pp) UI.pay = null;
     const byRow = {}; D.forEach((bk, gi) => bk.persone.forEach((p, k) => { byRow[p.id] = { bk, gi, k }; }));
     const ctx = { byRow, SI };
     const Q = t.quota;
@@ -1284,19 +1299,20 @@
         <button class="btn sm" data-act="timport">${ICON.upload} Importa da Word</button>
         <button class="btn sm" data-act="printlist">${ICON.print} Stampa lista</button>
         ${tour ? `<button class="btn sm" data-act="rooming">${ICON.print} Rooming list</button>` : ''}
-        <button class="btn sm${UI.dock ? ' dark' : ' primary'}" data-act="dock" aria-pressed="${!!UI.dock}">${ICON.dock} ${UI.dock ? 'Nascondi piantina' : 'Piantina accanto'}</button>
+        ${bigl ? '' : `<button class="btn sm${UI.dock && !pp ? ' dark' : ' primary'}" data-act="dock" aria-pressed="${!!UI.dock && !pp}">${ICON.dock} ${UI.dock && !pp ? 'Nascondi piantina' : 'Piantina accanto'}</button>`}
       </div>
-      <div class="wtw" data-droplist="1"><table class="wl"><thead><tr><th>N</th>${cols.map(([f, l]) => `<th class="c-${f}">${esc(l)}</th>`).join('')}<th>posto</th></tr></thead>
-        <tbody>${t.rows.map((r, i) => wRow(t, r, i, cols, ctx)).join('')}</tbody></table></div>
-      <div class="whelp small">Si scrive come in Word: «Rossi x 3» sulla prima riga e le altre persone sotto. Invio = riga sotto. Il numero a sinistra apre il menu della riga (inserisci, elimina, lista d'attesa, non parte più). Cognome <span class="pos">verde</span> = saldato. Per mettere i posti trascina ${ICON.grip} sulla piantina: dalla prima riga si sposta tutta la prenotazione, dalle altre la singola persona.</div>
-      <div class="wsupp"><h3 class="wt">Supplementi per i posti assegnati</h3><table class="wl wl-s"><tr>${sup(1, '1ª fila')}${sup(2, '2ª fila')}${sup(3, '3ª fila')}${sup(4, '4ª fila')}${sup('p2', '2° porta')}</tr></table>
-        <label class="chk"><input type="checkbox" data-tchk="guida"${t.guida ? ' checked' : ''}> ------- x guida e 2° autista (sul bus resta un posto per loro)</label></div>
+      <div class="wtw" data-droplist="1"><table class="wl"><thead><tr><th>N</th>${cols.map(([f, l]) => `<th class="c-${f}">${esc(l)}</th>`).join('')}${bigl ? '' : '<th>posto</th>'}</tr></thead>
+        <tbody>${t.rows.map((r, i) => wRow(t, r, i, cols, ctx, bigl)).join('')}</tbody></table></div>
+      <div class="whelp small">${bigl ? 'Una riga per cliente: «Rossi x 2» e i nomi sotto. Con il pulsante «€» si registra l\'incasso e si prepara lo scontrino.' : `Si scrive come in Word`}${bigl ? '' : `: «Rossi x 3» sulla prima riga e le altre persone sotto. Invio = riga sotto. Il numero a sinistra apre il menu della riga (inserisci, elimina, lista d'attesa, non parte più). Cognome <span class="pos">verde</span> = saldato. Per mettere i posti trascina ${ICON.grip} sulla piantina: dalla prima riga si sposta tutta la prenotazione, dalle altre la singola persona. Il pulsante «€» della prima riga apre l'incasso con scontrino o fattura.`}</div>
+      ${bigl ? '' : `<div class="wsupp"><h3 class="wt">Supplementi per i posti assegnati</h3><table class="wl wl-s"><tr>${sup(1, '1ª fila')}${sup(2, '2ª fila')}${sup(3, '3ª fila')}${sup(4, '4ª fila')}${sup('p2', '2° porta')}</tr></table>
+        <label class="chk"><input type="checkbox" data-tchk="guida"${t.guida ? ' checked' : ''}> ------- x guida e 2° autista (sul bus resta un posto per loro)</label></div>`}
       <h3 class="wt">Lista d'attesa</h3>
       <div class="wtw"><table class="wl wl-att"><thead><tr><th>N</th>${ATTC.map(([, l]) => `<th>${esc(l)}</th>`).join('')}</tr></thead><tbody>
         ${t.attesa.map((r, i) => `<tr${isEmptyRow(r) ? ' class="blank"' : ''}><td class="wn"><button class="rn" data-act="attmenu" data-id="${r.id}" aria-label="Azioni">${i + 1}</button></td>${ATTC.map(([f, l]) => `<td><input class="wc" data-ar="${r.id}" data-f="${f}" value="${esc(r[f] || '')}" aria-label="${esc(l)}"></td>`).join('')}</tr>`).join('')}
       </tbody></table></div>
       ${annTable('da', 'Non partono più – da rimborsare')}${annTable('fatto', 'Non partono più – già rimborsati')}${annTable('no', 'Non partono più – hanno rinunciato senza avere rimborso')}`;
-    return `<div class="lwrap${UI.dock ? ' dock' : ''}"><div class="lmain">${main}</div>${UI.dock ? `<aside class="ldock">${mapPanel(t, 'dock')}</aside>` : ''}</div>`;
+    const side = pp || (UI.dock && !bigl ? mapPanel(t, 'dock') : '');
+    return `<div class="lwrap${side ? ' dock' : ''}${pp ? ' paying' : ''}"><div class="lmain">${main}</div>${side ? `<aside class="ldock">${side}</aside>` : ''}</div>`;
   }
 
   // ----- sezione 2: posti sul bus (lista + piantina insieme) -----
@@ -1423,7 +1439,7 @@
       <div class="field"><label for="t-nome">Nome della gita</label><input id="t-nome" value="${esc(t ? t.nome : '')}" placeholder="es. Notre Dame de Paris - Messina"></div>
       <div class="grid2"><div class="field"><label for="t-data">Data di partenza</label><input id="t-data" type="date" value="${esc(t ? t.data : todayISO())}"></div>
       <div class="field"><label for="t-fine">Data di rientro (se più giorni)</label><input id="t-fine" type="date" value="${esc(t ? t.fine || '' : '')}"></div></div>
-      <div class="grid3"><div class="field"><label for="t-cat">Tipo</label><select id="t-cat">${['gita', 'tour', 'evento'].map(c => `<option value="${c}"${(t ? tripCat(t) : 'gita') === c ? ' selected' : ''}>${CAT_L[c]}</option>`).join('')}</select></div>
+      <div class="grid3"><div class="field"><label for="t-cat">Tipo</label><select id="t-cat">${['gita', 'tour', 'evento', 'biglietteria'].map(c => `<option value="${c}"${(t ? tripCat(t) : 'gita') === c ? ' selected' : ''}>${CAT_L[c]}</option>`).join('')}</select></div>
       <div class="field"><label for="t-code">Codice (es. G07, T08)</label><input id="t-code" value="${esc(t ? t.code || '' : '')}"></div>
       <label class="chk" style="align-self:end"><input type="checkbox" id="t-extra"${t && t.extra ? ' checked' : ''}> Data extra (replica)</label></div>
       <div class="field"><label for="t-prog">Link al programma (PDF su Dropbox o pagina del sito)</label><input id="t-prog" value="${esc(t ? t.programma || '' : '')}" placeholder="https://www.laterra.it/..."></div>`,
@@ -1466,21 +1482,22 @@
   }
   // la lista stampata come il file Word
   function listPages(t) {
-    const tour = isTourT(t); const Q = t.quota; const SI = seatIndex(t);
-    const cols = listCols(tour);
+    const bigl = tripCat(t) === 'biglietteria'; const tour = !bigl && isTourT(t); const Q = t.quota; const SI = seatIndex(t);
+    const cols = listCols(tour, bigl);
+    const paidH = {}; deriveBookings(t).forEach(bk => { const v = bkMoney(t, bk).paid; if (v) paidH[bk.id] = fmtNum(v); });
     const full = t.rows.filter(r => !isEmptyRow(r));
-    const tr = (r, i, extra) => `<tr><td>${i + 1}</td>${cols.map(([f]) => `<td>${esc(r[f] || '')}</td>`).join('')}${extra ? extra(r) : ''}</tr>`;
+    const tr = (r, i, extra) => `<tr><td>${i + 1}</td>${cols.map(([f]) => `<td>${esc(f === 'pagato' && paidH[r.id] ? paidH[r.id] : r[f] || '')}</td>`).join('')}${extra ? extra(r) : ''}</tr>`;
     const head = `<thead><tr><th>N</th>${cols.map(([, l]) => `<th>${esc(l)}</th>`).join('')}`;
     const ann = k => t.annullati.filter(r => r.stato === k && !isEmptyRow(r));
     const annT = (k, title) => ann(k).length ? `<h3 class="lt">${title}</h3><table class="lpt">${head}<th>data di annullo</th></tr></thead><tbody>${ann(k).map((r, i) => tr(r, i, x => `<td>${esc(x.dataAnn || '')}</td>`)).join('')}</tbody></table>` : '';
     const att = t.attesa.filter(r => !isEmptyRow(r));
     const sp = [1, 2, 3, 4].map(f => Q.suppl[f]); 
     return `<div class="page lp">
-      <table class="lph"><tr><td class="tt" rowspan="3">${esc(t.nome)}</td><td>Adulti</td><td>${euro(Q.adulti)}</td>${tour ? `<td>singola</td><td>${euro(Q.singola)}</td>` : ''}<td rowspan="3" class="deps">${(t.partenze || []).map(d => `${esc(d.citta)} ${esc(d.luogo)} ${esc(d.ora)}`).join('<br>')}</td></tr>
+      ${bigl ? `<table class="lph"><tr><td class="tt">${esc(t.nome)}</td><td>Data</td><td>${esc(fmtTripDate(t))}</td><td>intero</td><td>${euro(Q.tkt1)}</td><td>${esc(Q.tkt2L || 'ridotto')}</td><td>${euro(Q.tkt2)}</td><td>diritti</td><td>${euro(Q.diritti)}</td></tr></table>` : `<table class="lph"><tr><td class="tt" rowspan="3">${esc(t.nome)}</td><td>Adulti</td><td>${euro(Q.adulti)}</td>${tour ? `<td>singola</td><td>${euro(Q.singola)}</td>` : ''}<td rowspan="3" class="deps">${(t.partenze || []).map(d => `${esc(d.citta)} ${esc(d.luogo)} ${esc(d.ora)}`).join('<br>')}</td></tr>
         <tr><td>Data</td><td>${esc(fmtTripDate(t))}</td>${tour ? `<td>${esc(Q.bambiniL || '3/11 anni')}</td><td>${euro(Q.bambini)}</td>` : ''}</tr>
-        <tr><td>${tour ? 'Hotel' : esc(Q.bambiniL || '4/11 anni')}</td><td>${tour ? esc(Q.hotel || '') : euro(Q.bambini)}</td>${tour ? `<td>acconto / saldo</td><td>${euro(Q.acconto)} / ${euro(Q.saldo)}${Q.saldoEntro ? ' il ' + esc(fmtDate(Q.saldoEntro)) : ''}</td>` : ''}</tr></table>
+        <tr><td>${tour ? 'Hotel' : esc(Q.bambiniL || '4/11 anni')}</td><td>${tour ? esc(Q.hotel || '') : euro(Q.bambini)}</td>${tour ? `<td>acconto / saldo</td><td>${euro(Q.acconto)} / ${euro(Q.saldo)}${Q.saldoEntro ? ' il ' + esc(fmtDate(Q.saldoEntro)) : ''}</td>` : ''}</tr></table>`}
       ${t.note1 ? `<div class="lnote">Nota 1: ${esc(t.note1)}</div>` : ''}${t.note2 ? `<div class="lnote">Nota 2: ${esc(t.note2)}</div>` : ''}
-      <table class="lpt">${head}<th>posto</th></tr></thead><tbody>${full.map((r, i) => tr(r, i, x => `<td>${SI[x.id] ? esc(SI[x.id].b.label.replace(/^Bus\s*/i, 'B')) + ' · ' + SI[x.id].s : ''}</td>`)).join('')}</tbody></table>
+      <table class="lpt">${head}${bigl ? '' : '<th>posto</th>'}</tr></thead><tbody>${full.map((r, i) => tr(r, i, bigl ? null : x => `<td>${SI[x.id] ? esc(SI[x.id].b.label.replace(/^Bus\s*/i, 'B')) + ' · ' + SI[x.id].s : ''}</td>`)).join('')}</tbody></table>
       ${t.guida ? '<div class="lnote">------- x guida e 2° autista</div>' : ''}
       ${sp.some(v => v != null) || Q.suppl.p2 != null ? `<h3 class="lt">Supplementi per i posti assegnati</h3><div class="lnote">1ª fila ${euro(sp[0])} · 2ª fila ${euro(sp[1])} · 3ª fila ${euro(sp[2])} · 4ª fila ${euro(sp[3])} · 2° porta ${euro(Q.suppl.p2)}</div>` : ''}
       ${att.length ? `<h3 class="lt">Lista d'attesa</h3><table class="lpt"><thead><tr><th>N</th>${ATTC.map(([, l]) => `<th>${esc(l)}</th>`).join('')}</tr></thead><tbody>${att.map((r, i) => `<tr><td>${i + 1}</td>${ATTC.map(([f]) => `<td>${esc(r[f] || '')}</td>`).join('')}</tr>`).join('')}</tbody></table>` : ''}
@@ -2506,10 +2523,17 @@
   // Ogni incasso è un «movimento» con operatore, agenzia, cassa, metodo (anche misto) e cliente.
   // Ogni computer scrive i suoi movimenti in un suo file del giorno: due agenzie che incassano insieme non si disturbano.
   // Gli incassi non si cancellano: si corregge con uno «storno» (movimento uguale e contrario), così il resoconto resta vero.
-  const METODI = [['contanti', 'Contanti'], ['pos', 'POS'], ['bonifico', 'Bonifico'], ['postepay', 'PostePay']];
+  // metodi con cui si incassa (come le colonne Cash, Pos, € altro + Modalità del foglio CASSA)
+  const METODI = [['contanti', 'Contanti'], ['pos', 'POS'], ['bonifico', 'Bonifico'], ['postepay', 'PostePay'], ['paypal', 'PayPal'], ['assegno', 'Assegno'], ['buono', 'Buono regalo'], ['voucher', 'Voucher']];
   const MET_L = Object.fromEntries(METODI);
-  const MET_C = { contanti: 'm-cont', pos: 'm-pos', bonifico: 'm-bon', postepay: 'm-pp' };
+  // nei resoconti i metodi meno usati vanno insieme in «Altri»
+  const METG = [['contanti', 'Contanti'], ['pos', 'POS'], ['bonifico', 'Bonifico'], ['postepay', 'PostePay'], ['altro', 'Altri']];
+  const mg = m => (['contanti', 'pos', 'bonifico', 'postepay'].includes(m) ? m : 'altro');
+  const MET_C = { contanti: 'm-cont', pos: 'm-pos', bonifico: 'm-bon', postepay: 'm-pp', altro: 'm-alt', paypal: 'm-alt', assegno: 'm-alt', buono: 'm-alt', voucher: 'm-alt' };
+  const isInc = m => m.tipo !== 'prelievo' && m.tipo !== 'apporto';
   const dayISO = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  // ora locale (gli orari si salvano in UTC)
+  const hm = iso => { const d = new Date(iso); return isNaN(d) ? '' : `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
   const money = v => (Math.round((+v || 0) * 100) / 100).toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €';
   const movPath = day => `/cassa/movimenti/${day.slice(0, 7)}/${day}_${STORE.device.id}.json`;
   const okMov = m => m && m.id && typeof m.day === 'string' && typeof m.at === 'string' && Array.isArray(m.parts);
@@ -2517,14 +2541,14 @@
   // quanto ha pagato una prenotazione con gli incassi registrati nell'app (la colonna «pagato» della lista resta per quelli di prima)
   let PMI = null, PMV = -1;
   function paidMovs(tripId, bkId) {
-    if (PMV !== STORE.ver() || !PMI) { PMI = new Map(); allMovs().forEach(m => { const k = m.tripId + '|' + m.bkId; PMI.set(k, (PMI.get(k) || 0) + (+m.tot || 0)); }); PMV = STORE.ver(); }
+    if (PMV !== STORE.ver() || !PMI) { PMI = new Map(); allMovs().filter(isInc).forEach(m => { const k = m.tripId + '|' + m.bkId; PMI.set(k, (PMI.get(k) || 0) + (+m.tot || 0)); }); PMV = STORE.ver(); }
     return PMI.get(tripId + '|' + bkId) || 0;
   }
   const chiusura = (day, ag) => STORE.get(`/cassa/chiusure/${day}_${ag}.json`);
   const agName = id => { const a = S.cfg.agenzie.find(x => x.id === id); return a ? a.nome : id || '—'; };
   const cassaName = id => { const a = S.cfg.agenzie.find(x => x.id === id); return a ? a.cassa || a.nome : '—'; };
   const sumBy = (movs, f) => { const o = {}; movs.forEach(m => (m.parts || []).forEach(p => { const k = f(m, p); o[k] = (o[k] || 0) + (+p.a || 0); })); return o; };
-  const totOf = movs => movs.reduce((a, m) => a + (+m.tot || 0), 0);
+  const totOf = movs => movs.filter(isInc).reduce((a, m) => a + (+m.tot || 0), 0);
   function addMov(m) {
     const d = new Date(); const day = dayISO(d);
     const mv = Object.assign({ id: 'm' + uid(), at: d.toISOString(), day, uid: ACC.sess.uid, who: ACC.me().name, ag: ACC.sess.ag || '', cassa: cassaName(ACC.sess.ag), dev: STORE.device.id }, m);
@@ -2535,51 +2559,14 @@
   }
   const fmtNum = v => { const r = Math.round(v * 100) / 100; return Number.isInteger(r) ? String(r) : String(r).replace('.', ','); };
 
-  // ---- finestra «Registra un incasso» per una prenotazione ----
-  function payModal(bkId) {
-    const t = trip(); const D = deriveBookings(t); const bk = D.find(x => x.id === bkId); if (!bk) return;
-    if (!ACC.sess.ag) return toast('Scegli prima l\'agenzia in cui lavori (in alto)');
-    const m = bkMoney(t, bk); const rest = m.rest != null ? m.rest : 0;
-    const hist = allMovs().filter(x => x.tripId === t.id && x.bkId === bkId).sort((a, b) => a.at.localeCompare(b.at));
-    UI.modal = { kind: 'pay', bkId, met: 'contanti', rest: m.rest };
-    openModal(`Incasso · ${esc(bkName(bk))} x ${Math.max(bk.n || 0, bk.persone.length)}`, `
-      <div class="pay-sum"><div><span>Totale viaggio</span><b>${m.due != null ? money(m.due) : 'prezzo da completare'}</b></div><div><span>Già pagato</span><b>${money(m.paid)}</b></div><div class="hi"><span>Da incassare</span><b>${m.rest != null ? money(m.rest) : '—'}</b></div></div>
-      <div class="field"><label for="pay-imp">Importo incassato adesso</label><input id="pay-imp" class="pay-imp" data-payimp="1" inputmode="decimal" value="${rest > 0 ? esc(fmtNum(rest)) : ''}" placeholder="0,00" autocomplete="off"><span class="pay-warn" id="pay-warn" role="status"></span></div>
-      <div class="field"><label>Metodo di pagamento</label><div class="pay-met" role="radiogroup" aria-label="Metodo di pagamento">${[...METODI, ['misto', 'Misto']].map(([k, l]) => `<button type="button" role="radio" aria-checked="${k === 'contanti'}" data-act="paymet" data-k="${k}">${l}</button>`).join('')}</div></div>
-      <div class="field" id="pay-mix" hidden><label>Pagamento misto: quanto con ogni metodo</label>${METODI.map(([k, l]) => `<div class="pay-row"><span>${l}</span><input data-mix="${k}" inputmode="decimal" placeholder="0,00" aria-label="${l}" autocomplete="off"></div>`).join('')}<div class="small" id="pay-mixok"></div></div>
-      <div class="field"><label for="pay-note">Nota (facoltativa)</label><input id="pay-note" placeholder="es. numero ricevuta, bonifico del 12/10"></div>
-      <div class="small">Registrato da <b>${esc(ACC.me().name)}</b> · Agenzia <b>${esc(agName(ACC.sess.ag))}</b> · <b>${esc(cassaName(ACC.sess.ag))}</b>. Finisce nel resoconto di oggi.</div>
-      ${hist.length ? `<div class="field"><label>Incassi già registrati</label><div class="pay-hist">${hist.map(x => `<div><span>${esc(fmtDate(x.day))} · ${esc(x.who)} · ${esc(agName(x.ag))}</span><span>${(x.parts || []).map(p => `<span class="mpill ${MET_C[p.m]}">${esc(MET_L[p.m])}${x.parts.length > 1 ? ' ' + esc(fmtNum(p.a)) : ''}</span>`).join(' ')}</span><b>${money(x.tot)}</b></div>`).join('')}</div></div>` : ''}`,
-      `<button class="btn" data-act="close">Annulla</button><button class="btn primary" data-act="paysave">Registra incasso</button>`);
-    setTimeout(() => { const i = $('#pay-imp'); if (i) { i.focus(); i.select(); payWarn(); } }, 40);
-  }
-  function payWarn() { const el = $('#pay-warn'); if (!el) return; const v = parseEuro($('#pay-imp').value); const r = UI.modal.rest; el.textContent = v != null && r != null && v > r + 0.009 ? (r <= 0 ? 'Attenzione: questa prenotazione risulta già pagata tutta.' : `Attenzione: è più del dovuto di ${money(v - r)}.`) : ''; }
-  function payCheck() {
-    const imp = parseEuro($('#pay-imp').value); const met = UI.modal.met;
-    if (!imp || imp <= 0) return { err: 'Scrivi l\'importo incassato' };
-    if (met !== 'misto') return { parts: [{ m: met, a: imp }], imp };
-    const parts = METODI.map(([k]) => ({ m: k, a: parseEuro(($(`[data-mix="${k}"]`) || {}).value) || 0 })).filter(p => p.a > 0);
-    const s = Math.round(parts.reduce((a, p) => a + p.a, 0) * 100) / 100;
-    if (parts.length < 2) return { err: 'Nel pagamento misto scrivi almeno due metodi' };
-    if (Math.abs(s - imp) > 0.009) return { err: `I metodi fanno ${money(s)}, l'importo è ${money(imp)}` };
-    return { parts, imp };
-  }
-  function paySave() {
-    const t = trip(); const D = deriveBookings(t); const bk = D.find(x => x.id === UI.modal.bkId); if (!bk) return closeModal();
-    const r = payCheck(); if (r.err) return toast(r.err);
-    const m = bkMoney(t, bk); const tipo = m.rest != null && r.imp >= m.rest - 0.009 ? 'saldo' : 'acconto';
-    const mv = addMov({ tripId: t.id, tripN: t.nome, tripD: t.data, bkId: bk.id, cliente: `${bkName(bk)} x ${Math.max(bk.n || 0, bk.persone.length)}`, tel: (bk.persone.find(p => p.tel) || {}).tel || '', tipo, parts: r.parts, note: ($('#pay-note').value || '').trim() });
-    ACC.tlog('info', `Incasso ${money(mv.tot)} (${r.parts.map(p => MET_L[p.m]).join(' + ')}) · ${mv.cliente} · ${t.nome}`);
-    closeModal(); commit(); toast(`Incasso registrato: ${money(mv.tot)} · ${tipo}`);
-  }
   function storno(id) {
     const m = allMovs().find(x => x.id === id); if (!m) return;
     if (allMovs().some(x => x.storno === id)) return toast('Questo incasso è già stato stornato');
-    confirmBox('Storna incasso', `Annullo l'incasso di <b>${money(m.tot)}</b> di ${esc(m.cliente)}? Nel resoconto resta segnato, con un movimento uguale e contrario.`, 'Storna', () => {
+    confirmBox('Storna incasso', `Annullo l'incasso di <b>${money(m.tot)}</b> di ${esc(m.cliente)}? Nel resoconto resta segnato, con un movimento uguale e contrario${m.doc === 'scontrino' ? ' (nota di credito dello scontrino)' : m.doc === 'fattura' ? ' (nota di credito della fattura)' : ''}.`, 'Storna', () => {
       const t = S.trips.find(x => x.id === m.tripId);
-      addMov({ tripId: m.tripId, tripN: m.tripN, tripD: m.tripD, bkId: m.bkId, cliente: m.cliente, tipo: 'storno', storno: id, ag: m.ag, cassa: m.cassa, parts: m.parts.map(p => ({ m: p.m, a: -p.a })), note: `storno dell'incasso del ${fmtDate(m.day)}${ACC.sess.ag && ACC.sess.ag !== m.ag ? ' (fatto da ' + agName(ACC.sess.ag) + ')' : ''}` });
+      addMov({ tripId: m.tripId, tripN: m.tripN, tripD: m.tripD, bkId: m.bkId, cliente: m.cliente, tipo: 'storno', storno: id, ag: m.ag, cassa: m.cassa, doc: m.doc === 'fattura' ? 'ncfattura' : m.doc === 'scontrino' ? 'ncscontrino' : m.doc, docStato: m.doc === 'fattura' || m.doc === 'scontrino' ? 'da_emettere' : '', cat: m.cat, desc: m.desc, circuito: m.circuito, lines: (m.lines || []).map(l => Object.assign({}, l, { q: -l.q })), suppl: -(m.suppl || 0), dir: m.dir, docTot: -(m.docTot || 0), agenzia: -(m.agenzia || 0), biglietti: -(m.biglietti || 0), parts: m.parts.map(p => ({ m: p.m, a: -p.a })), note: `storno dell'incasso del ${fmtDate(m.day)}${ACC.sess.ag && ACC.sess.ag !== m.ag ? ' (fatto da ' + agName(ACC.sess.ag) + ')' : ''}` });
       ACC.tlog('avviso', `Storno ${money(m.tot)} · ${m.cliente} · ${m.tripN}`);
-      commit(); toast('Incasso stornato');
+      commit(); if (UI.pay) payRefresh(); toast('Incasso stornato');
     });
   }
 
@@ -2588,43 +2575,44 @@
     const day = UI.cday || todayISO(); const all = ACC.can('cassaAll');
     const agf = all ? (UI.cag || 'tutte') : ACC.sess.ag;
     const movs = allMovs().filter(m => m.day === day && (agf === 'tutte' || m.ag === agf)).sort((a, b) => a.at.localeCompare(b.at));
-    const per = sumBy(movs, (m, p) => p.m); const perAg = sumBy(movs, m => m.ag); const tot = totOf(movs);
-    const cnt = k => movs.filter(m => m.parts.some(p => p.m === k)).length;
+    const inc = movs.filter(isInc); const per = sumBy(inc, (m, p) => mg(p.m)); const perAg = sumBy(inc, m => m.ag); const tot = totOf(movs);
+    const cnt = k => inc.filter(m => m.parts.some(p => mg(p.m) === k)).length;
     const d = parseD(day); const prev = new Date(d); prev.setDate(d.getDate() - 1); const next = new Date(d); next.setDate(d.getDate() + 1);
     const agBtns = all ? `<div class="seg" role="group" aria-label="Agenzia">${[['tutte', 'Tutte'], ...S.cfg.agenzie.map(a => [a.id, a.nome])].map(([k, l]) => `<button data-act="cag" data-v="${k}" aria-pressed="${agf === k}">${esc(l)}</button>`).join('')}</div>` : `<span class="pill neutral">${esc(agName(agf))} · ${esc(cassaName(agf))}</span>`;
     const closeAg = agf !== 'tutte' ? agf : (ACC.sess.ag || '');
     const ch = closeAg && chiusura(day, closeAg);
     const canClose = !ACC.can('readonly') && closeAg && (ACC.sess.ag === closeAg || ACC.can('cassaAll'));
     const stornati = new Set(movs.filter(m => m.storno).map(m => m.storno));
-    return `<div class="pagehead"><div><h1>${day === todayISO() ? 'Resoconto di oggi' : 'Resoconto del ' + esc(fmtDate(day))}</h1><div class="sub">${esc(fmtDate(day, true))} · ${movs.length} ${movs.length === 1 ? 'movimento' : 'movimenti'}${ch ? ` · <b>cassa ${esc(agName(closeAg))} chiusa</b> da ${esc(ch.who)} alle ${esc(ch.at.slice(11, 16))}` : ''}</div></div>
-        <div class="hbtns">${agBtns}<button class="btn" data-act="cday" data-v="${dayISO(prev)}">‹ Giorno prima</button>${day < todayISO() ? `<button class="btn" data-act="cday" data-v="${dayISO(next)}">Giorno dopo ›</button>` : ''}<input type="date" class="btn" data-cdate="1" value="${esc(day)}" aria-label="Scegli il giorno"><button class="btn" data-act="cprint">${ICON.print} Stampa</button>${canClose ? `<button class="btn primary" data-act="cclose">${ch ? 'Rivedi la chiusura' : 'Chiudi la cassa'}${agf === 'tutte' ? ' di ' + esc(agName(closeAg)) : ''}</button>` : ''}</div></div>
-      <div class="tiles"><div class="tile dark"><span>Totale del giorno</span><b>${money(tot)}</b></div>${METODI.map(([k, l]) => `<div class="tile"><span><i class="mdot ${MET_C[k]}"></i>${l}</span><b>${money(per[k] || 0)}</b><small>${cnt(k)} ${cnt(k) === 1 ? 'incasso' : 'incassi'}</small></div>`).join('')}</div>
-      <section class="box tablecard"><div class="tscroll"><table class="rt"><thead><tr><th>Ora</th><th>Cliente</th><th>Viaggio</th><th>Operatore</th><th>Agenzia</th><th>Cassa</th><th>Metodo</th><th class="r">Importo</th><th></th></tr></thead><tbody>
-        ${movs.map(m => `<tr class="${m.tipo === 'storno' ? 'neg' : ''}${stornati.has(m.id) ? ' gone' : ''}"><td>${esc(m.at.slice(11, 16))}</td><td><b>${esc(m.cliente)}</b><br><small>${esc(m.tipo)}${m.note ? ' · ' + esc(m.note) : ''}</small></td><td>${esc(m.tripN || '')}</td><td>${esc(m.who)}</td><td>${esc(agName(m.ag))}</td><td>${esc(m.cassa || cassaName(m.ag))}</td><td>${(m.parts || []).map(p => `<span class="mpill ${MET_C[p.m]}">${esc(MET_L[p.m])}${m.parts.length > 1 ? ' ' + esc(fmtNum(p.a)) : ''}</span>`).join(' ')}</td><td class="r"><b>${money(m.tot)}</b></td><td class="r">${m.tipo !== 'storno' && !stornati.has(m.id) && !ACC.can('readonly') && (ACC.can('cassaAll') || (m.uid === ACC.sess.uid && m.day === todayISO())) ? `<button class="btn sm ghost" data-act="storno" data-id="${m.id}">Storna</button>` : stornati.has(m.id) ? '<small>stornato</small>' : ''}</td></tr>`).join('') || `<tr><td colspan="9" class="emptyrow">Nessun incasso in questo giorno.</td></tr>`}
+    return `<div class="pagehead"><div><h1>${day === todayISO() ? 'Resoconto di oggi' : 'Resoconto del ' + esc(fmtDate(day))}</h1><div class="sub">${esc(fmtDate(day, true))} · ${movs.length} ${movs.length === 1 ? 'movimento' : 'movimenti'}${ch ? ` · <b>cassa ${esc(agName(closeAg))} chiusa</b> da ${esc(ch.who)} alle ${esc(hm(ch.at))}` : ''}</div></div>
+        <div class="hbtns">${agBtns}<button class="btn" data-act="cday" data-v="${dayISO(prev)}">‹ Giorno prima</button>${day < todayISO() ? `<button class="btn" data-act="cday" data-v="${dayISO(next)}">Giorno dopo ›</button>` : ''}<input type="date" class="btn" data-cdate="1" value="${esc(day)}" aria-label="Scegli il giorno"><button class="btn" data-act="cprint">${ICON.print} Stampa</button>${!ACC.can('readonly') && ACC.sess.ag ? '<button class="btn" data-act="cashmov" data-k="prelievo">Prelievo</button><button class="btn" data-act="cashmov" data-k="apporto">Apporto</button>' : ''}${canClose ? `<button class="btn primary" data-act="cclose">${ch ? 'Rivedi la chiusura' : 'Chiudi la cassa'}${agf === 'tutte' ? ' di ' + esc(agName(closeAg)) : ''}</button>` : ''}</div></div>
+      <div class="tiles"><div class="tile dark"><span>Totale del giorno</span><b>${money(tot)}</b></div>${METG.map(([k, l]) => `<div class="tile"><span><i class="mdot ${MET_C[k]}"></i>${l}</span><b>${money(per[k] || 0)}</b><small>${cnt(k)} ${cnt(k) === 1 ? 'incasso' : 'incassi'}</small></div>`).join('')}</div>
+      <section class="box tablecard"><div class="tscroll"><table class="rt"><thead><tr><th>Ora</th><th>Cliente</th><th>Viaggio</th><th>Documento</th><th>Operatore</th><th>Agenzia</th><th>Metodo</th><th class="r">Importo</th><th></th></tr></thead><tbody>
+        ${movs.map(m => `<tr class="${m.tipo === 'storno' || m.tipo === 'prelievo' ? 'neg' : ''}${stornati.has(m.id) ? ' gone' : ''}"><td>${esc(hm(m.at))}</td><td><b>${esc(m.cliente)}</b><br><small>${esc(m.tipo)}${m.note ? ' · ' + esc(m.note) : ''}</small></td><td>${esc(m.tripN || m.desc || '')}${m.cat ? `<br><small>${esc(m.cat)}</small>` : ''}</td><td>${docPill(m)}</td><td>${esc(m.who)}</td><td>${esc(agName(m.ag))}</td><td>${(m.parts || []).map(p => `<span class="mpill ${MET_C[p.m]}">${esc(MET_L[p.m] || p.m)}${m.parts.length > 1 ? ' ' + esc(fmtNum(p.a)) : ''}</span>`).join(' ')}</td><td class="r"><b>${money(m.tot)}</b></td><td class="r">${isInc(m) && m.tipo !== 'storno' && !stornati.has(m.id) && !ACC.can('readonly') && (ACC.can('cassaAll') || (m.uid === ACC.sess.uid && m.day === todayISO())) ? `<button class="btn sm ghost" data-act="storno" data-id="${m.id}">Storna</button>` : stornati.has(m.id) ? '<small>stornato</small>' : ''}</td></tr>`).join('') || `<tr><td colspan="9" class="emptyrow">Nessun incasso in questo giorno.</td></tr>`}
       </tbody></table></div>
       ${movs.length && agf === 'tutte' ? `<div class="rt-foot">${S.cfg.agenzie.map(a => `<span>${esc(a.nome)} <b>${money(perAg[a.id] || 0)}</b></span>`).join('')}<span>Totale <b>${money(tot)}</b></span></div>` : ''}</section>`;
   }
   // chiusura della cassa: resoconto completo di contanti, POS, bonifici e PostePay
   function closeModalCassa() {
     const day = UI.cday || todayISO(); const ag = (ACC.can('cassaAll') && UI.cag && UI.cag !== 'tutte') ? UI.cag : ACC.sess.ag;
-    const movs = allMovs().filter(m => m.day === day && m.ag === ag); const per = sumBy(movs, (m, p) => p.m); const tot = totOf(movs);
-    const ch = chiusura(day, ag);
+    const movs = allMovs().filter(m => m.day === day && m.ag === ag && isInc(m)); const per = sumBy(movs, (m, p) => mg(p.m)); const tot = totOf(movs);
+    const ch = chiusura(day, ag); const sal = cashSaldo(ag, day);
     UI.modal = { kind: 'cclose', day, ag };
     openModal(`Chiusura cassa · ${esc(agName(ag))} · ${esc(fmtDate(day))}`, `
       <div class="infobox">Resoconto completo della <b>${esc(cassaName(ag))}</b>: controlla i totali di ogni metodo con lo scontrino del POS, l'estratto dei bonifici e i contanti in cassa.</div>
       <table class="rt close"><thead><tr><th>Metodo</th><th class="r">Movimenti</th><th class="r">Totale</th><th class="r">Controllato</th></tr></thead><tbody>
-        ${METODI.map(([k, l]) => `<tr><td><i class="mdot ${MET_C[k]}"></i>${l}</td><td class="r">${movs.filter(m => m.parts.some(p => p.m === k)).length}</td><td class="r"><b>${money(per[k] || 0)}</b></td><td class="r"><input class="cc-in" data-cc="${k}" inputmode="decimal" placeholder="${esc(fmtNum(per[k] || 0))}" value="${ch && ch.contati && ch.contati[k] != null ? esc(fmtNum(ch.contati[k])) : ''}" aria-label="${l} controllato"></td></tr>`).join('')}
+        ${METG.map(([k, l]) => `<tr><td><i class="mdot ${MET_C[k]}"></i>${l}</td><td class="r">${movs.filter(m => m.parts.some(p => mg(p.m) === k)).length}</td><td class="r"><b>${money(per[k] || 0)}</b></td><td class="r"><input class="cc-in" data-cc="${k}" inputmode="decimal" placeholder="${esc(fmtNum(per[k] || 0))}" value="${ch && ch.contati && ch.contati[k] != null ? esc(fmtNum(ch.contati[k])) : ''}" aria-label="${l} controllato"></td></tr>`).join('')}
         <tr class="tot"><td>Totale</td><td class="r">${movs.length}</td><td class="r"><b>${money(tot)}</b></td><td class="r" id="cc-diff"></td></tr></tbody></table>
+      <div class="infobox">Contanti in cassa secondo l'app: <b>${money(sal.fine)}</b> (inizio giornata ${money(sal.inizio)}, incassati ${money(sal.inc)}${sal.prel ? `, prelievi ${money(sal.prel)}` : ''}${sal.app ? `, apporti ${money(sal.app)}` : ''}).</div>
       <div class="small">Nella colonna «Controllato» scrivi quanto risulta a te (contanti contati, totale dello scontrino POS…). Se lasci vuoto, vale il totale dell'app.</div>
       <div class="field"><label for="cc-note">Nota sulla chiusura</label><input id="cc-note" value="${esc(ch ? ch.note || '' : '')}" placeholder="es. versati in banca 300 €"></div>
-      ${ch ? `<div class="small">Già chiusa da <b>${esc(ch.who)}</b> il ${esc(fmtDate(ch.at.slice(0, 10)))} alle ${esc(ch.at.slice(11, 16))}: se salvi di nuovo, la chiusura si aggiorna.</div>` : ''}`,
+      ${ch ? `<div class="small">Già chiusa da <b>${esc(ch.who)}</b> il ${esc(fmtDate(dayISO(new Date(ch.at))))} alle ${esc(hm(ch.at))}: se salvi di nuovo, la chiusura si aggiorna.</div>` : ''}`,
       `<button class="btn" data-act="close">Annulla</button><button class="btn" data-act="ccprint">${ICON.print} Stampa</button><button class="btn primary" data-act="ccsave">${ch ? 'Aggiorna la chiusura' : 'Chiudi la cassa'}</button>`);
     ccDiff();
   }
   function ccRead() {
-    const { day, ag } = UI.modal; const movs = allMovs().filter(m => m.day === day && m.ag === ag); const per = sumBy(movs, (m, p) => p.m);
+    const { day, ag } = UI.modal; const movs = allMovs().filter(m => m.day === day && m.ag === ag && isInc(m)); const per = sumBy(movs, (m, p) => mg(p.m));
     const contati = {}; let diff = 0;
-    METODI.forEach(([k]) => { const el = $(`[data-cc="${k}"]`); const v = el && el.value.trim() ? parseEuro(el.value) : null; if (v != null) { contati[k] = v; diff += v - (per[k] || 0); } });
+    METG.forEach(([k]) => { const el = $(`[data-cc="${k}"]`); const v = el && el.value.trim() ? parseEuro(el.value) : null; if (v != null) { contati[k] = v; diff += v - (per[k] || 0); } });
     return { movs, per, contati, diff: Math.round(diff * 100) / 100 };
   }
   function ccDiff() { const el = $('#cc-diff'); if (!el) return; const r = ccRead(); el.innerHTML = !Object.keys(r.contati).length ? '' : Math.abs(r.diff) < 0.009 ? '<span class="pill ok">Quadra</span>' : `<span class="pill warn">${r.diff > 0 ? 'In più' : 'Manca'} ${money(Math.abs(r.diff))}</span>`; }
@@ -2637,11 +2625,11 @@
   }
   function printCassa(day, ag) {
     const movs = allMovs().filter(m => m.day === day && (!ag || ag === 'tutte' || m.ag === ag)).sort((a, b) => a.at.localeCompare(b.at));
-    const per = sumBy(movs, (m, p) => p.m); const ch = ag && ag !== 'tutte' ? chiusura(day, ag) : null;
+    const per = sumBy(movs.filter(isInc), (m, p) => mg(p.m)); const ch = ag && ag !== 'tutte' ? chiusura(day, ag) : null;
     const html = `<div class="page flow rep"><div class="rep-h"><img src="${LOGO}" alt=""><div><h2>Resoconto di cassa${ag && ag !== 'tutte' ? ' · ' + esc(agName(ag)) : ''}</h2><span>${esc(fmtDate(day, true))}</span></div></div>
-      <table class="rt"><thead><tr><th>Metodo</th><th class="r">Totale</th>${ch ? '<th class="r">Controllato</th>' : ''}</tr></thead><tbody>${METODI.map(([k, l]) => `<tr><td>${l}</td><td class="r">${money(per[k] || 0)}</td>${ch ? `<td class="r">${ch.contati && ch.contati[k] != null ? money(ch.contati[k]) : '—'}</td>` : ''}</tr>`).join('')}<tr class="tot"><td>Totale</td><td class="r">${money(totOf(movs))}</td>${ch ? `<td class="r">${Math.abs(ch.diff || 0) < 0.009 ? 'quadra' : 'differenza ' + money(ch.diff)}</td>` : ''}</tr></tbody></table>
-      <table class="rt"><thead><tr><th>Ora</th><th>Cliente</th><th>Viaggio</th><th>Operatore</th><th>Agenzia</th><th>Metodo</th><th class="r">Importo</th></tr></thead><tbody>${movs.map(m => `<tr><td>${esc(m.at.slice(11, 16))}</td><td>${esc(m.cliente)}${m.tipo === 'storno' ? ' (storno)' : ''}</td><td>${esc(m.tripN || '')}</td><td>${esc(m.who)}</td><td>${esc(agName(m.ag))}</td><td>${m.parts.map(p => esc(MET_L[p.m]) + (m.parts.length > 1 ? ' ' + esc(fmtNum(p.a)) : '')).join(' + ')}</td><td class="r">${money(m.tot)}</td></tr>`).join('') || '<tr><td colspan="7">Nessun incasso.</td></tr>'}</tbody></table>
-      ${ch ? `<p>Chiusa da ${esc(ch.who)} alle ${esc(ch.at.slice(11, 16))}${ch.note ? ' · ' + esc(ch.note) : ''}</p>` : ''}<div class="pm-foot"><span>Viaggi in Pullman · La Terra</span><span>Stampato il ${esc(fmtDate(todayISO()))}</span></div></div>`;
+      <table class="rt"><thead><tr><th>Metodo</th><th class="r">Totale</th>${ch ? '<th class="r">Controllato</th>' : ''}</tr></thead><tbody>${METG.map(([k, l]) => `<tr><td>${l}</td><td class="r">${money(per[k] || 0)}</td>${ch ? `<td class="r">${ch.contati && ch.contati[k] != null ? money(ch.contati[k]) : '—'}</td>` : ''}</tr>`).join('')}<tr class="tot"><td>Totale</td><td class="r">${money(totOf(movs))}</td>${ch ? `<td class="r">${Math.abs(ch.diff || 0) < 0.009 ? 'quadra' : 'differenza ' + money(ch.diff)}</td>` : ''}</tr></tbody></table>
+      <table class="rt"><thead><tr><th>Ora</th><th>Cliente</th><th>Viaggio</th><th>Operatore</th><th>Agenzia</th><th>Metodo</th><th class="r">Importo</th></tr></thead><tbody>${movs.map(m => `<tr><td>${esc(hm(m.at))}</td><td>${esc(m.cliente)}${m.tipo === 'storno' ? ' (storno)' : m.tipo === 'prelievo' ? ' (prelievo)' : m.tipo === 'apporto' ? ' (apporto)' : ''}</td><td>${esc(m.tripN || '')}</td><td>${esc(m.who)}</td><td>${esc(agName(m.ag))}</td><td>${m.parts.map(p => esc(MET_L[p.m] || p.m) + (m.parts.length > 1 ? ' ' + esc(fmtNum(p.a)) : '')).join(' + ')}</td><td class="r">${money(m.tot)}</td></tr>`).join('') || '<tr><td colspan="7">Nessun incasso.</td></tr>'}</tbody></table>
+      ${ch ? `<p>Chiusa da ${esc(ch.who)} alle ${esc(hm(ch.at))}${ch.note ? ' · ' + esc(ch.note) : ''}</p>` : ''}<div class="pm-foot"><span>Viaggi in Pullman · La Terra</span><span>Stampato il ${esc(fmtDate(todayISO()))}</span></div></div>`;
     showPrint(`Resoconto ${fmtDate(day)}`, html);
   }
   function showPrint(title, body) {
@@ -2653,40 +2641,264 @@
   // ---- pagina «Contabilità» (Master e ufficio contabilità) ----
   function contaView() {
     const mon = UI.cmon || todayISO().slice(0, 7);
-    const movs = allMovs().filter(m => m.day.slice(0, 7) === mon);
+    if (UI.ctab !== 'mese') return giornoView();
+    const movs = allMovs().filter(m => m.day.slice(0, 7) === mon && isInc(m));
     const [yy, mm] = mon.split('-').map(Number); const prev = `${mm === 1 ? yy - 1 : yy}-${String(mm === 1 ? 12 : mm - 1).padStart(2, '0')}`; const next = `${mm === 12 ? yy + 1 : yy}-${String(mm === 12 ? 1 : mm + 1).padStart(2, '0')}`;
-    const cell = (ag, k) => movs.filter(m => !ag || m.ag === ag).reduce((a, m) => a + m.parts.filter(p => !k || p.m === k).reduce((x, p) => x + p.a, 0), 0);
+    const cell = (ag, k) => movs.filter(m => !ag || m.ag === ag).reduce((a, m) => a + m.parts.filter(p => !k || mg(p.m) === k).reduce((x, p) => x + p.a, 0), 0);
     const days = [...new Set(movs.map(m => m.day))].sort().reverse();
-    const chRows = days.flatMap(d => S.cfg.agenzie.filter(a => movs.some(m => m.day === d && m.ag === a.id)).map(a => { const c = chiusura(d, a.id); const t = totOf(movs.filter(m => m.day === d && m.ag === a.id)); return `<tr><td>${esc(fmtDate(d).slice(0, 5))}</td><td><b>${esc(a.nome)}</b><br><small>${c ? `chiusa da ${esc(c.who)} alle ${esc(c.at.slice(11, 16))}` : 'non ancora chiusa'}</small></td><td class="r"><b>${money(t)}</b></td><td class="r">${!c ? '<span class="pill tbd">Da chiudere</span>' : Math.abs(c.diff || 0) < 0.009 ? '<span class="pill ok">Quadra</span>' : `<span class="pill warn">${c.diff > 0 ? 'In più' : 'Manca'} ${money(Math.abs(c.diff))}</span>`}</td></tr>`; }));
+    const chRows = days.flatMap(d => S.cfg.agenzie.filter(a => movs.some(m => m.day === d && m.ag === a.id)).map(a => { const c = chiusura(d, a.id); const t = totOf(movs.filter(m => m.day === d && m.ag === a.id)); return `<tr><td>${esc(fmtDate(d).slice(0, 5))}</td><td><b>${esc(a.nome)}</b><br><small>${c ? `chiusa da ${esc(c.who)} alle ${esc(hm(c.at))}` : 'non ancora chiusa'}</small></td><td class="r"><b>${money(t)}</b></td><td class="r">${!c ? '<span class="pill tbd">Da chiudere</span>' : Math.abs(c.diff || 0) < 0.009 ? '<span class="pill ok">Quadra</span>' : `<span class="pill warn">${c.diff > 0 ? 'In più' : 'Manca'} ${money(Math.abs(c.diff))}</span>`}</td></tr>`; }));
     const tripsM = [...new Set(movs.map(m => m.tripId))].map(id => S.trips.find(t => t.id === id)).filter(Boolean);
     const upcoming = S.trips.filter(t => (t.fine || t.data) >= todayISO() && t.rows.some(r => !isEmptyRow(r)));
     const tl = [...new Set([...tripsM, ...upcoming])].sort((a, b) => a.data.localeCompare(b.data)).slice(0, 40);
     const tripLine = t => { let due = 0, paid = 0, unk = false; deriveBookings(t).forEach(bk => { const m = bkMoney(t, bk); paid += m.paid; if (m.due == null) unk = true; else due += m.due; }); const inMon = totOf(movs.filter(m => m.tripId === t.id)); const pc = due ? Math.min(100, Math.round(paid / due * 100)) : 0;
       return `<tr><td><b>${esc(t.nome)}</b><br><small>${esc(fmtTripDate(t))}</small></td><td class="r">${money(inMon)}</td><td class="r">${money(paid)}</td><td class="r">${unk ? 'prezzi da completare' : money(due)}</td><td class="bar-c"><span class="bar1"><i style="width:${pc}%"></i></span></td></tr>`; };
-    return `<div class="pagehead"><div><h1>Contabilità</h1><div class="sub">Incassi, chiusure di cassa e viaggi: tutto in sola lettura, pronto da esportare.</div></div>
+    return `${contaTabs()}<div class="pagehead"><div><h1>Contabilità · ${esc(MESI_L[mm - 1])} ${yy}</h1><div class="sub">Incassi, chiusure di cassa e viaggi: tutto in sola lettura, pronto da esportare.</div></div>
         <div class="hbtns"><button class="btn" data-act="cmon" data-v="${prev}">‹</button><input type="month" class="btn" data-cmon="1" value="${esc(mon)}" aria-label="Mese"><button class="btn" data-act="cmon" data-v="${next}">›</button><button class="btn" data-act="cexport">Scarica per Excel</button><button class="btn" data-act="cprintm">${ICON.print} Stampa il mese</button></div></div>
-      <section class="box tablecard"><h2 class="ch">Incassi di ${esc(MESI_L[mm - 1])} ${yy} per agenzia e metodo</h2><div class="tscroll"><table class="rt"><thead><tr><th>Agenzia · cassa</th>${METODI.map(([, l]) => `<th class="r">${l}</th>`).join('')}<th class="r">Totale</th></tr></thead><tbody>
-        ${S.cfg.agenzie.map(a => `<tr><td>${esc(a.nome)} · ${esc(a.cassa || a.nome)}</td>${METODI.map(([k]) => `<td class="r">${money(cell(a.id, k))}</td>`).join('')}<td class="r"><b>${money(cell(a.id))}</b></td></tr>`).join('')}
-        <tr class="tot"><td>Totale</td>${METODI.map(([k]) => `<td class="r">${money(cell(null, k))}</td>`).join('')}<td class="r"><b>${money(cell(null))}</b></td></tr></tbody></table></div></section>
+      <section class="box tablecard"><h2 class="ch">Incassi di ${esc(MESI_L[mm - 1])} ${yy} per agenzia e metodo</h2><div class="tscroll"><table class="rt"><thead><tr><th>Agenzia · cassa</th>${METG.map(([, l]) => `<th class="r">${l}</th>`).join('')}<th class="r">Totale</th></tr></thead><tbody>
+        ${S.cfg.agenzie.map(a => `<tr><td>${esc(a.nome)} · ${esc(a.cassa || a.nome)}</td>${METG.map(([k]) => `<td class="r">${money(cell(a.id, k))}</td>`).join('')}<td class="r"><b>${money(cell(a.id))}</b></td></tr>`).join('')}
+        <tr class="tot"><td>Totale</td>${METG.map(([k]) => `<td class="r">${money(cell(null, k))}</td>`).join('')}<td class="r"><b>${money(cell(null))}</b></td></tr></tbody></table></div></section>
       <div class="two"><section class="box tablecard"><h2 class="ch">Chiusure di cassa</h2><div class="tscroll"><table class="rt"><tbody>${chRows.join('') || '<tr><td class="emptyrow">Nessun incasso in questo mese.</td></tr>'}</tbody></table></div></section>
         <section class="box tablecard"><h2 class="ch">Situazione per viaggio</h2><div class="tscroll"><table class="rt"><thead><tr><th>Viaggio</th><th class="r">Nel mese</th><th class="r">Incassato</th><th class="r">Totale</th><th></th></tr></thead><tbody>${tl.map(tripLine).join('') || '<tr><td class="emptyrow">Nessun viaggio.</td></tr>'}</tbody></table></div></section></div>`;
   }
   function exportMonth() {
-    const mon = UI.cmon || todayISO().slice(0, 7); const movs = allMovs().filter(m => m.day.slice(0, 7) === mon).sort((a, b) => a.at.localeCompare(b.at));
-    const q = v => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`; const n = v => String(Math.round(v * 100) / 100).replace('.', ',');
-    const rows = [['Data', 'Ora', 'Agenzia', 'Cassa', 'Operatore', 'Cliente', 'Viaggio', 'Data viaggio', 'Tipo', ...METODI.map(([, l]) => l), 'Totale', 'Nota']];
-    movs.forEach(m => rows.push([fmtDate(m.day), m.at.slice(11, 16), agName(m.ag), m.cassa, m.who, m.cliente, m.tripN, m.tripD ? fmtDate(m.tripD) : '', m.tipo, ...METODI.map(([k]) => n(m.parts.filter(p => p.m === k).reduce((a, p) => a + p.a, 0))), n(m.tot), m.note || '']));
-    const csv = '﻿' + rows.map(r => r.map(q).join(';')).join('\r\n');
-    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' })); a.download = `incassi-${mon}.csv`; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
-    ACC.tlog('info', `Esportati gli incassi di ${mon} (${movs.length} movimenti)`);
+    const mon = UI.cmon || todayISO().slice(0, 7);
+    exportCassa(allMovs().filter(m => m.day.slice(0, 7) === mon), `cassa-${mon}.csv`);
+    ACC.tlog('info', `Esportati gli incassi di ${mon}`);
   }
   function printMonth() {
     const mon = UI.cmon || todayISO().slice(0, 7); const [yy, mm] = mon.split('-').map(Number);
-    const movs = allMovs().filter(m => m.day.slice(0, 7) === mon);
-    const cell = (ag, k) => movs.filter(m => !ag || m.ag === ag).reduce((a, m) => a + m.parts.filter(p => !k || p.m === k).reduce((x, p) => x + p.a, 0), 0);
+    const movs = allMovs().filter(m => m.day.slice(0, 7) === mon && isInc(m));
+    const cell = (ag, k) => movs.filter(m => !ag || m.ag === ag).reduce((a, m) => a + m.parts.filter(p => !k || mg(p.m) === k).reduce((x, p) => x + p.a, 0), 0);
     showPrint(`Contabilità ${MESI_L[mm - 1]} ${yy}`, `<div class="page flow rep"><div class="rep-h"><img src="${LOGO}" alt=""><div><h2>Incassi di ${esc(MESI_L[mm - 1])} ${yy}</h2><span>per agenzia e metodo di pagamento</span></div></div>
-      <table class="rt"><thead><tr><th>Agenzia</th>${METODI.map(([, l]) => `<th class="r">${l}</th>`).join('')}<th class="r">Totale</th></tr></thead><tbody>${S.cfg.agenzie.map(a => `<tr><td>${esc(a.nome)}</td>${METODI.map(([k]) => `<td class="r">${money(cell(a.id, k))}</td>`).join('')}<td class="r">${money(cell(a.id))}</td></tr>`).join('')}<tr class="tot"><td>Totale</td>${METODI.map(([k]) => `<td class="r">${money(cell(null, k))}</td>`).join('')}<td class="r">${money(cell(null))}</td></tr></tbody></table>
+      <table class="rt"><thead><tr><th>Agenzia</th>${METG.map(([, l]) => `<th class="r">${l}</th>`).join('')}<th class="r">Totale</th></tr></thead><tbody>${S.cfg.agenzie.map(a => `<tr><td>${esc(a.nome)}</td>${METG.map(([k]) => `<td class="r">${money(cell(a.id, k))}</td>`).join('')}<td class="r">${money(cell(a.id))}</td></tr>`).join('')}<tr class="tot"><td>Totale</td>${METG.map(([k]) => `<td class="r">${money(cell(null, k))}</td>`).join('')}<td class="r">${money(cell(null))}</td></tr></tbody></table>
       <div class="pm-foot"><span>Viaggi in Pullman · La Terra</span><span>Stampato il ${esc(fmtDate(todayISO()))}</span></div></div>`);
+  }
+
+  // ---------- riquadro «Incasso e documento» accanto alla lista ----------
+  // Si apre dal pulsante «€» della prenotazione. I campi sono quelli del foglio CASSA dell'agenzia:
+  // documento, categoria, cliente, descrizione, righe (quantità, € bus, € biglietto), supplemento fila, diritti,
+  // circuito ed emissione dei biglietti, pagamento (anche misto), pratica e canale.
+  // Nello scontrino va solo la parte agenzia (bus + supplementi + diritti); i biglietti del circuito restano a parte.
+  const CATS = ['Gita', 'SoloBus', 'BusEdiritti', 'TicketEdiritti', 'SoloTicket', 'EscursioniEstive', 'Aretusa', 'MaltaEdiritti', 'Tour', 'BuonoRegalo'];
+  const DOCS = [['scontrino', 'Scontrino'], ['fattura', 'Fattura'], ['caparra', 'Caparra'], ['nessuno', 'Senza documento']];
+  const DOC_L = { scontrino: 'Scontrino', fattura: 'Fattura', caparra: 'Caparra', nessuno: 'Senza documento', ncscontrino: 'Nota di credito scontrino', ncfattura: 'Nota di credito fattura', prelievo: 'Prelievo', apporto: 'Apporto' };
+  const DOC_X = { scontrino: 'V.Banco', fattura: 'Fattura', caparra: 'Caparra', nessuno: 'Sospeso', ncscontrino: 'NC V.Banco', ncfattura: 'NC Fattura', prelievo: 'PRELIEVO', apporto: 'APPORTO' };
+  const CIRCUITI = ['T.OneRG', 'T.OneMD', 'BoxRG', 'BoxMD', 'Viva', 'CiaoRG', 'CiaoMD', 'CiaoMDR', 'LiveRG', 'LiveMD', 'B-Fast', 'On-Line'];
+  const CANALI = ['In agenzia', 'WA Agenzia', 'Mail', 'Facebook', 'Sito Web', 'WA Andrea'];
+  const AGC = { rg: 'RAG', md: 'MOD', mr: 'MAR' };
+  const r2 = v => Math.round((+v || 0) * 100) / 100;
+  const sigla = (uidv, name) => { const u = ACC.users()[uidv]; return (u && u.sigla) || String(name || '').trim().slice(0, 2).toUpperCase(); };
+  function docPill(m) {
+    if (!m.doc) return m.tipo === 'storno' ? '<small>storno</small>' : '';
+    const l = DOC_L[m.doc] || m.doc;
+    return `<span class="mpill ${m.docStato === 'da_emettere' ? 'm-pp' : 'm-alt'}" title="${m.docStato === 'da_emettere' ? 'Documento da emettere: la stampante non è ancora collegata' : ''}">${esc(l)}${m.docStato === 'da_emettere' ? ' · da emettere' : ''}</span>`;
+  }
+  const yy2 = iso => { const [y, m, d] = String(iso || '').split('-'); return d ? `${d}/${m}/${y.slice(2)}` : ''; };
+
+  // proposta dei campi, presa dalla lista e dai prezzi del viaggio
+  function payDraft(t, bk) {
+    const Q = t.quota || {}; const m = bkMoney(t, bk); const cat = tripCat(t);
+    const tkOn = Q.tkt1 != null || Q.tkt2 != null; const dir = tkOn ? (+Q.diritti || 0) : 0;
+    const groups = []; let suppl = 0;
+    bk.persone.forEach((p, i) => {
+      const per = m.per[i] || {}; const tipo = per.tipo; const sup = supplOf(t, bk, p) || 0; suppl += sup;
+      const tk = tkOn && tipo !== 'free' ? (+(tipo === 'bam' || tipo === 'inf' ? (Q.tkt2 ?? Q.tkt1) : Q.tkt1) || 0) : 0;
+      const bus = per.v != null ? r2(per.v - sup - (tk ? tk + dir : 0)) : 0;
+      const l = tipo === 'bam' || tipo === 'inf' ? 'Ridotto' : 'Intero';
+      const g = groups.find(x => x.bus === bus && x.tkt === tk && x.l === l); if (g) g.q++; else groups.push({ l, q: 1, bus, tkt: tk });
+    });
+    while (groups.length > 3) { const x = groups.pop(); groups[2].q += x.q; }
+    while (groups.length < 3) groups.push({ l: groups.length === 1 ? 'Ridotto' : 'Ridotto 3', q: 0, bus: 0, tkt: 0 });
+    const nT = groups.reduce((a, g) => a + (g.tkt ? g.q : 0), 0);
+    const autoCat = cat === 'tour' ? 'Tour' : cat === 'gita' ? 'Gita' : cat === 'evento' ? (nT ? 'BusEdiritti' : 'SoloBus') : cat === 'biglietteria' ? (dir ? 'TicketEdiritti' : 'SoloTicket') : 'Gita';
+    const h = bk.head; const cl = h.cid && S.clients.clienti[h.cid];
+    const circ = Q.circuito || (tkOn ? (ACC.sess.ag === 'md' ? 'T.OneMD' : 'T.OneRG') : '');
+    return {
+      doc: cat === 'tour' ? 'fattura' : 'scontrino', cat: autoCat, cliente: `${bkName(bk)} ${bk.persone[0] ? bk.persone[0].nome : ''}`.trim().toUpperCase(),
+      desc: `${yy2(t.data)} ${t.nome}`.toLowerCase(), lines: groups, suppl: r2(suppl), dir, circuito: circ, emis: todayISO(), ant: false,
+      imp: m.rest != null && m.rest > 0 ? r2(m.rest) : '', met: 'contanti', mix: {}, pratica: '', canale: 'In agenzia', dataPag: todayISO(), pagante: '', note: '',
+      legacy: h.pagato || '',
+      fatt: { cf: (cl && cl.cf) || '', ind: (cl && cl.indirizzo) || '', cap: (cl && cl.cap) || '', citta: (cl && cl.citta) || '', sdi: (cl && cl.sdi) || '', pec: (cl && cl.pec) || '' }
+    };
+  }
+  function payTotals(f) {
+    const nT = f.lines.reduce((a, l) => a + (+l.tkt ? +l.q || 0 : 0), 0);
+    const bus = r2(f.lines.reduce((a, l) => a + (+l.q || 0) * (+l.bus || 0), 0));
+    const tkt = r2(f.lines.reduce((a, l) => a + (+l.q || 0) * (+l.tkt || 0), 0));
+    const dirT = r2(nT * (+f.dir || 0)); const sup = r2(+f.suppl || 0);
+    return { nT, bus, tkt, dirT, sup, tot: r2(bus + tkt + dirT + sup), agenzia: r2(bus + dirT + sup) };
+  }
+  function payOpen(bkId) {
+    const t = trip(); if (!t) return; const bk = deriveBookings(t).find(x => x.id === bkId); if (!bk) return;
+    UI.pay = { tripId: t.id, bkId, f: payDraft(t, bk) }; UI.sec = 'lista'; render();
+    setTimeout(() => { const i = $('#pf-imp'); if (i) { i.focus(); i.select(); } const p = $('.paypanel'); if (p && p.scrollIntoView && window.innerWidth < 1100) p.scrollIntoView({ block: 'start' }); }, 30);
+  }
+  function payClose() { UI.pay = null; render(); }
+  function payRefresh() { if (!UI.pay) return; const t = trip(); const bk = t && t.id === UI.pay.tripId && deriveBookings(t).find(x => x.id === UI.pay.bkId); if (!bk) UI.pay = null; render(); }
+  const nIn = (k, v, extra = '') => `<input class="pf-in num" data-pf="${k}" inputmode="decimal" value="${v === '' || v == null ? '' : esc(fmtNum(+v))}" ${extra} autocomplete="off">`;
+  function payPanelHTML(t) {
+    const D = deriveBookings(t); const bk = D.find(x => x.id === UI.pay.bkId); if (!bk) return '';
+    const f = UI.pay.f; const m = bkMoney(t, bk); const T = payTotals(f);
+    const hist = allMovs().filter(x => x.tripId === t.id && x.bkId === bk.id).sort((a, b) => a.at.localeCompare(b.at));
+    const storn = new Set(hist.filter(x => x.storno).map(x => x.storno));
+    const canPay = ACC.can('cassa') && ACC.sess.ag;
+    const tkOn = f.lines.some(l => +l.tkt) || tripCat(t) === 'biglietteria' || tripCat(t) === 'evento';
+    const mainBtn = f.doc === 'fattura' ? 'Fattura' : f.doc === 'scontrino' ? 'Scontrino' : f.doc === 'caparra' ? 'Registra la caparra' : 'Registra senza documento';
+    return `<section class="panel paypanel" aria-label="Incasso e documento">
+      <div class="panel-h"><h3>${esc(bkName(bk))} x ${Math.max(bk.n || 0, bk.persone.length)}</h3><button class="btn sm ghost" data-act="pfclose" aria-label="Chiudi il riquadro">${ICON.close}</button></div>
+      <div class="pp-b">
+        <div class="pay-sum"><div><span>Totale</span><b>${m.due != null ? money(m.due) : '—'}</b></div><div><span>Già pagato</span><b>${money(m.paid)}</b></div><div class="hi"><span>Da pagare</span><b>${m.rest != null ? money(m.rest) : '—'}</b></div></div>
+        ${m.due == null ? '<div class="warnbox small">Mancano i prezzi del viaggio in testa alla lista: il totale si calcola dalle righe qui sotto.</div>' : ''}
+        <div class="pp-sec"><span class="pp-l">Documento</span><div class="seg wrap" role="radiogroup" aria-label="Documento">${DOCS.map(([k, l]) => `<button type="button" role="radio" data-act="pfdoc" data-k="${k}" aria-pressed="${f.doc === k}">${l}</button>`).join('')}</div></div>
+        <div class="pp-g2"><label>Categoria<select data-pf="cat">${CATS.map(c => `<option${c === f.cat ? ' selected' : ''}>${c}</option>`).join('')}</select></label>
+          <label>Cognome e nome<input data-pf="cliente" value="${esc(f.cliente)}" autocomplete="off"></label></div>
+        <label class="pp-1">Descrizione<input data-pf="desc" value="${esc(f.desc)}" autocomplete="off"></label>
+        ${f.doc === 'fattura' ? `<div class="pp-fatt"><span class="pp-l">Dati per la fattura</span><div class="pp-g2"><label>Codice fiscale o P. IVA<input data-pff="cf" value="${esc(f.fatt.cf)}" autocomplete="off"></label><label>Codice SDI o PEC<input data-pff="sdi" value="${esc(f.fatt.sdi || f.fatt.pec)}" autocomplete="off"></label></div><div class="pp-g3"><label>Indirizzo<input data-pff="ind" value="${esc(f.fatt.ind)}"></label><label>CAP<input data-pff="cap" value="${esc(f.fatt.cap)}" inputmode="numeric"></label><label>Città<input data-pff="citta" value="${esc(f.fatt.citta)}"></label></div></div>` : ''}
+        <table class="pp-lines"><thead><tr><th></th><th>Q</th><th>€ bus</th>${tkOn ? '<th>€ biglietto</th>' : ''}<th class="r">Totale</th></tr></thead><tbody>
+          ${f.lines.map((l, i) => `<tr><td><input class="pf-in lab" data-pl="${i}" data-k="l" value="${esc(l.l)}" aria-label="Riga ${i + 1}"></td><td><input class="pf-in num q" data-pl="${i}" data-k="q" inputmode="numeric" value="${l.q ? esc(String(l.q)) : ''}" aria-label="Quantità riga ${i + 1}"></td><td><input class="pf-in num" data-pl="${i}" data-k="bus" inputmode="decimal" value="${+l.bus ? esc(fmtNum(+l.bus)) : ''}" aria-label="Euro bus riga ${i + 1}"></td>${tkOn ? `<td><input class="pf-in num" data-pl="${i}" data-k="tkt" inputmode="decimal" value="${+l.tkt ? esc(fmtNum(+l.tkt)) : ''}" aria-label="Euro biglietto riga ${i + 1}"></td>` : ''}<td class="r" id="pl-t${i}">${l.q ? money((+l.q) * ((+l.bus || 0) + (+l.tkt || 0))) : ''}</td></tr>`).join('')}
+        </tbody></table>
+        <div class="pp-g3"><label>Suppl. fila €${nIn('suppl', f.suppl)}</label>${tkOn ? `<label>Diritti € (per biglietto)${nIn('dir', f.dir)}</label><label>Circuito<select data-pf="circuito"><option value="">—</option>${CIRCUITI.map(c => `<option${c === f.circuito ? ' selected' : ''}>${c}</option>`).join('')}</select></label>` : ''}</div>
+        ${tkOn ? `<div class="pp-g2"><label>Emissione biglietti<input type="date" data-pf="emis" value="${esc(f.emis)}"></label><label class="chk pp-chk"><input type="checkbox" data-pfc="ant"${f.ant ? ' checked' : ''}> Emissione anticipata</label></div>` : ''}
+        <div class="pp-tot" id="pp-tot">${payTotHTML(T)}</div>
+        <div class="pp-sec"><span class="pp-l">Incassato adesso</span><input id="pf-imp" class="pf-in num pay-imp" data-pf="imp" inputmode="decimal" value="${f.imp === '' ? '' : esc(fmtNum(+f.imp))}" placeholder="0,00" autocomplete="off"><span class="pay-warn" id="pp-warn" role="status">${payWarnTxt(f, m)}</span></div>
+        <div class="pay-met" role="radiogroup" aria-label="Metodo di pagamento">${[...METODI, ['misto', 'Misto']].map(([k, l]) => `<button type="button" role="radio" aria-checked="${f.met === k}" data-act="pfmet" data-k="${k}">${l}</button>`).join('')}</div>
+        ${f.met === 'misto' ? `<div class="pp-mix">${METODI.map(([k, l]) => `<div class="pay-row"><span>${l}</span><input data-pfm="${k}" inputmode="decimal" value="${f.mix[k] ? esc(fmtNum(f.mix[k])) : ''}" placeholder="0,00" aria-label="${l}" autocomplete="off"></div>`).join('')}</div>` : ''}
+        ${f.met !== 'contanti' && f.met !== 'pos' ? `<div class="pp-g3"><label>N. pratica<input data-pf="pratica" value="${esc(f.pratica)}"></label><label>Canale<select data-pf="canale">${CANALI.map(c => `<option${c === f.canale ? ' selected' : ''}>${c}</option>`).join('')}</select></label><label>Data pagamento<input type="date" data-pf="dataPag" value="${esc(f.dataPag)}"></label></div><label class="pp-1">Pagante (se diverso)<input data-pf="pagante" value="${esc(f.pagante)}"></label>` : ''}
+        <label class="pp-1">Note pratica<input data-pf="note" value="${esc(f.note)}" placeholder="es. buono n° 26001"></label>
+        <label class="pp-1">Pagato prima, fuori dall'app (come nella lista Word)<input data-pf="legacy" class="num" inputmode="decimal" value="${esc(f.legacy)}" placeholder="0"></label>
+        <div class="small">${canPay ? `Registrato da <b>${esc(ACC.me().name)}</b> · <b>${esc(agName(ACC.sess.ag))}</b> · ${esc(cassaName(ACC.sess.ag))}` : 'Per incassare scegli l\'agenzia in cui lavori (in alto).'}</div>
+        ${canPay ? `<div class="pp-act"><button class="btn primary big" data-act="pfsave">${f.doc === 'scontrino' ? ICON.print + ' ' : ''}${mainBtn}${+f.imp ? ' · ' + money(+f.imp) : ''}</button></div>` : ''}
+        ${hist.length ? `<div class="pp-sec"><span class="pp-l">Incassi registrati</span><div class="pay-hist">${hist.map(x => `<div class="${x.tipo === 'storno' ? 'neg' : ''}${storn.has(x.id) ? ' gone' : ''}"><span>${esc(fmtDate(x.day).slice(0, 5))} · ${esc(x.who)}<br>${docPill(x)}</span><span>${(x.parts || []).map(p => `<span class="mpill ${MET_C[p.m] || 'm-alt'}">${esc(MET_L[p.m] || p.m)}</span>`).join(' ')}</span><b>${money(x.tot)}</b>${x.tipo !== 'storno' && !storn.has(x.id) && ACC.can('cassa') && (ACC.can('cassaAll') || (x.uid === ACC.sess.uid && x.day === todayISO())) ? `<button class="btn sm ghost" data-act="storno" data-id="${x.id}">Storna</button>` : ''}</div>`).join('')}</div></div>` : ''}
+      </div></section>`;
+  }
+  function payTotHTML(T) {
+    return `<div><span>Bus</span><b>${money(T.bus)}</b></div>${T.tkt ? `<div><span>Biglietti (${T.nT})</span><b>${money(T.tkt)}</b></div>` : ''}${T.dirT ? `<div><span>Diritti</span><b>${money(T.dirT)}</b></div>` : ''}${T.sup ? `<div><span>Suppl. fila</span><b>${money(T.sup)}</b></div>` : ''}
+      <div class="tot"><span>Totale</span><b>${money(T.tot)}</b></div><div class="ag"><span>Nello scontrino (parte agenzia)</span><b>${money(T.agenzia)}</b></div>${T.tkt ? `<div><span>Biglietti del circuito, a parte</span><b>${money(T.tkt)}</b></div>` : ''}`;
+  }
+  function payWarnTxt(f, m) { const v = +f.imp; if (!v || m.rest == null) return ''; return v > m.rest + 0.009 ? (m.rest <= 0 ? 'Attenzione: risulta già pagato tutto.' : `Attenzione: è più del dovuto di ${money(v - m.rest)}.`) : v < m.rest - 0.009 ? `Acconto: restano ${money(m.rest - v)}.` : ''; }
+  // aggiorna i totali senza ridisegnare il riquadro (così non si perde il cursore)
+  function payRecalc() {
+    const f = UI.pay && UI.pay.f; if (!f) return; const T = payTotals(f); const el = $('#pp-tot'); if (el) el.innerHTML = payTotHTML(T);
+    f.lines.forEach((l, i) => { const c = $('#pl-t' + i); if (c) c.textContent = l.q ? money((+l.q) * ((+l.bus || 0) + (+l.tkt || 0))) : ''; });
+    const t = trip(); const bk = t && deriveBookings(t).find(x => x.id === UI.pay.bkId); const w = $('#pp-warn'); if (w && bk) w.textContent = payWarnTxt(f, bkMoney(t, bk));
+  }
+  function payInput(el) {
+    const f = UI.pay && UI.pay.f; if (!f) return false; const d = el.dataset;
+    if (d.pf) { const k = d.pf; f[k] = ['imp', 'suppl', 'dir'].includes(k) ? (parseEuro(el.value) ?? (el.value.trim() ? f[k] : '')) : el.value; if (k === 'legacy') { const t = trip(); const h = t && rowById(t, UI.pay.bkId); if (h) { h.pagato = el.value.trim(); save(); } } payRecalc(); return true; }
+    if (d.pl !== undefined) { const l = f.lines[+d.pl]; l[d.k] = d.k === 'l' ? el.value : d.k === 'q' ? (parseInt(el.value, 10) || 0) : (parseEuro(el.value) || 0); payRecalc(); return true; }
+    if (d.pff) { f.fatt[d.pff] = el.value; return true; }
+    if (d.pfm) { f.mix[d.pfm] = parseEuro(el.value) || 0; return true; }
+    if (d.pfc) { f[d.pfc] = el.checked; return true; }
+    return false;
+  }
+  // collegamento al registratore telematico: si attiva quando scegliete la stampante
+  function fiscalPrint(mv) { return { ok: false, msg: 'stampante non ancora collegata' }; }
+  function paySave() {
+    const t = trip(); const D = deriveBookings(t); const bk = D.find(x => x.id === UI.pay.bkId); if (!bk) return payClose();
+    if (!ACC.sess.ag) return toast('Scegli prima l\'agenzia in cui lavori (in alto)');
+    const f = UI.pay.f; const imp = r2(+f.imp);
+    if (!imp || imp <= 0) return toast('Scrivi l\'importo incassato adesso');
+    let parts;
+    if (f.met === 'misto') {
+      parts = METODI.map(([k]) => ({ m: k, a: r2(f.mix[k] || 0) })).filter(p => p.a > 0);
+      const s = r2(parts.reduce((a, p) => a + p.a, 0));
+      if (parts.length < 2) return toast('Nel pagamento misto scrivi almeno due metodi');
+      if (Math.abs(s - imp) > 0.009) return toast(`I metodi fanno ${money(s)}, l'importo è ${money(imp)}`);
+    } else parts = [{ m: f.met, a: imp }];
+    if (f.doc === 'fattura' && !String(f.fatt.cf || '').trim()) return toast('Per la fattura scrivi il codice fiscale o la partita IVA');
+    const T = payTotals(f); const m = bkMoney(t, bk);
+    const tipo = m.rest != null && imp >= m.rest - 0.009 ? 'saldo' : 'acconto';
+    const agz = T.tot > 0 ? r2(imp * T.agenzia / T.tot) : imp;
+    const mv = addMov({ tripId: t.id, tripN: t.nome, tripD: t.data, bkId: bk.id, cliente: f.cliente || `${bkName(bk)} x ${bk.persone.length}`, tel: (bk.persone.find(p => p.tel) || {}).tel || '', tipo, parts,
+      doc: f.doc, docStato: f.doc === 'scontrino' || f.doc === 'fattura' ? 'da_emettere' : '', cat: f.cat, desc: f.desc, circuito: T.tkt ? f.circuito : '', emis: T.tkt ? f.emis : '', ant: !!f.ant,
+      lines: f.lines.filter(l => +l.q).map(l => ({ l: l.l, q: +l.q, bus: +l.bus || 0, tkt: +l.tkt || 0 })), suppl: T.sup, dir: +f.dir || 0, nT: T.nT, docTot: T.tot, agenzia: agz, biglietti: r2(imp - agz),
+      pratica: f.pratica, canale: f.met === 'contanti' || f.met === 'pos' ? '' : f.canale, dataPag: f.met === 'contanti' || f.met === 'pos' ? '' : f.dataPag, pagante: f.pagante, note: f.note, fatt: f.doc === 'fattura' ? Object.assign({}, f.fatt) : null, sigla: sigla(ACC.sess.uid, ACC.me().name) });
+    if (f.doc === 'fattura' && bk.head.cid && S.clients.clienti[bk.head.cid]) { const c = S.clients.clienti[bk.head.cid]; Object.assign(c, { cf: f.fatt.cf, sdi: f.fatt.sdi, cap: f.fatt.cap, citta: f.fatt.citta }); if (f.fatt.ind) c.indirizzo = f.fatt.ind; save(); }
+    ACC.tlog('info', `Incasso ${money(mv.tot)} (${parts.map(p => MET_L[p.m]).join(' + ')}) · ${DOC_L[f.doc]} · ${mv.cliente} · ${t.nome}`);
+    let msg = `Incasso registrato: ${money(mv.tot)} · ${tipo}`;
+    if (f.doc === 'scontrino') { const r = fiscalPrint(mv); msg += r.ok ? ' · scontrino stampato' : ` · scontrino di ${money(agz)} da emettere (${r.msg})`; }
+    if (f.doc === 'fattura') msg += ' · fattura da emettere';
+    UI.pay.f = payDraft(t, deriveBookings(t).find(x => x.id === bk.id) || bk); commit(); toast(msg);
+  }
+
+  // ---------- prelievi e apporti di contanti ----------
+  function cashMovModal(kind) {
+    if (!ACC.sess.ag) return toast('Scegli prima l\'agenzia');
+    UI.modal = { kind: 'cashmov', k: kind };
+    openModal(`${kind === 'prelievo' ? 'Prelievo dalla cassa' : 'Apporto in cassa'} · ${esc(agName(ACC.sess.ag))}`, `
+      <div class="field"><label for="cm-imp">Importo in contanti</label><input id="cm-imp" class="pay-imp" inputmode="decimal" placeholder="0,00" autocomplete="off"></div>
+      <div class="field"><label for="cm-note">Motivo</label><input id="cm-note" placeholder="${kind === 'prelievo' ? 'es. versamento in banca' : 'es. fondo cassa'}"></div>`,
+      `<button class="btn" data-act="close">Annulla</button><button class="btn primary" data-act="cashsave">Registra</button>`);
+  }
+  function cashMovSave() {
+    const v = parseEuro($('#cm-imp').value); if (!v || v <= 0) return toast('Scrivi l\'importo');
+    const k = UI.modal.k; const note = ($('#cm-note').value || '').trim();
+    addMov({ tipo: k, doc: k, cliente: k === 'prelievo' ? 'Prelievo' : 'Apporto', note, parts: [{ m: 'contanti', a: k === 'prelievo' ? -v : v }], sigla: sigla(ACC.sess.uid, ACC.me().name) });
+    ACC.tlog('avviso', `${k === 'prelievo' ? 'Prelievo' : 'Apporto'} di ${money(v)} in ${agName(ACC.sess.ag)}${note ? ' · ' + note : ''}`);
+    closeModal(); render(); toast(`${k === 'prelievo' ? 'Prelievo' : 'Apporto'} registrato`);
+  }
+  // contanti in cassa: quelli all'inizio (impostazioni dell'agenzia) + tutti i movimenti in contanti fino a quel giorno
+  function cashSaldo(ag, day) {
+    const ags = !ag || ag === 'tutte' ? S.cfg.agenzie.map(a => a.id) : [ag];
+    let inizio = ags.reduce((a, id) => a + (parseEuro(String((S.cfg.agenzie.find(x => x.id === id) || {}).cassaIniziale || '')) || 0), 0), inc = 0, prel = 0, app = 0;
+    allMovs().filter(m => ags.includes(m.ag)).forEach(m => {
+      const c = (m.parts || []).filter(p => p.m === 'contanti').reduce((a, p) => a + p.a, 0); if (!c) return;
+      if (m.day < day) inizio += c; else if (m.day === day) { if (m.tipo === 'prelievo') prel += -c; else if (m.tipo === 'apporto') app += c; else inc += c; }
+    });
+    return { inizio: r2(inizio), inc: r2(inc), prel: r2(prel), app: r2(app), fine: r2(inizio + inc - prel + app) };
+  }
+
+  // ---------- Contabilità · resoconto giornaliero (come il foglio CASSA) ----------
+  const contaTabs = () => `<div class="ctabs seg" role="tablist" aria-label="Contabilità"><button role="tab" data-act="ctab" data-v="giorno" aria-pressed="${UI.ctab !== 'mese'}">Resoconto giornaliero</button><button role="tab" data-act="ctab" data-v="mese" aria-pressed="${UI.ctab === 'mese'}">Mese</button></div>`;
+  const XL_H = ['Data', 'Op.', 'Doc.', 'V.Banco', 'Fattura', 'Categoria', 'Cognome e Nome', 'Descrizione', 'Circuito', 'Emis. Cont.', 'Emis. Antic.', 'Note prat.', 'Q1', '€ 1 Bus', 'Tkt intero', 'Q2', '€ 2 Bus', 'Tkt ridotto2', 'Q3', '€ 3 Bus', 'Tkt ridotto3', 'Suppl. Fila', 'Diritti', 'Totale', 'CHECK', 'Cash', 'Pos', '€ altro', 'Modalità', 'Pratica', 'Data.Pag.', 'Pagante', 'Saldo', 'Danea', 'Check D.', '€ Tot.Tkt', 'N.Tot. Tkt', 'Check Tkt', 'Tot.Diritti', 'Tot. Bus', 'Note', 'Tkt+Diritti', 'Agenzia'];
+  function xlRow(m, saldo) {
+    const L = m.lines || []; const ln = i => L[i] || {}; const sumP = f => r2((m.parts || []).filter(f).reduce((a, p) => a + p.a, 0));
+    const cash = sumP(p => p.m === 'contanti'), pos = sumP(p => p.m === 'pos'), alt = sumP(p => p.m !== 'contanti' && p.m !== 'pos');
+    const altM = (m.parts || []).filter(p => p.m !== 'contanti' && p.m !== 'pos').map(p => MET_L[p.m] || p.m).join('+');
+    const totBus = r2(L.reduce((a, l) => a + l.q * l.bus, 0)), totTkt = r2(L.reduce((a, l) => a + l.q * l.tkt, 0)), nT = m.nT || L.reduce((a, l) => a + (l.tkt ? l.q : 0), 0), dirT = r2((m.dir || 0) * nT);
+    const tot = isInc(m) ? (m.docTot != null ? m.docTot : m.tot) : 0;
+    return [fmtDate(m.day), m.sigla || sigla(m.uid, m.who), DOC_X[m.doc] || (m.tipo === 'storno' ? 'NC V.Banco' : ''), '', '', m.cat || '', m.cliente || '', m.desc || m.tripN || '', m.circuito || 'NO', m.emis && !m.ant ? fmtDate(m.emis) : 'NO', m.emis && m.ant ? fmtDate(m.emis) : 'NO', m.note || '',
+      ln(0).q || 0, ln(0).bus || 0, ln(0).tkt || 0, ln(1).q || 0, ln(1).bus || 0, ln(1).tkt || 0, ln(2).q || 0, ln(2).bus || 0, ln(2).tkt || 0, m.suppl || 0, m.dir || 0, tot,
+      !isInc(m) ? 'CONTROLLA' : Math.abs(r2(cash + pos + alt) - tot) < 0.01 ? 'ok' : 'acconto', cash, pos, alt, altM, m.pratica || '', m.dataPag ? fmtDate(m.dataPag) : '', m.pagante || '', saldo, isInc(m) ? (m.agenzia != null ? m.agenzia : m.tot) : 0, '', totTkt, nT, '', dirT, totBus, m.tipo === 'acconto' ? 'acconto' : '', r2(totTkt + dirT), AGC[m.ag] || m.ag || ''];
+  }
+  function exportCassa(movs, name) {
+    movs = movs.slice().sort((a, b) => a.at.localeCompare(b.at));
+    const q = v => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`; const n = v => typeof v === 'number' ? String(r2(v)).replace('.', ',') : v;
+    const run = {}; const rows = [XL_H];
+    movs.forEach(m => { const c = (m.parts || []).filter(p => p.m === 'contanti').reduce((a, p) => a + p.a, 0); if (run[m.ag] == null) run[m.ag] = cashSaldo(m.ag, m.day).inizio; run[m.ag] = r2(run[m.ag] + c); rows.push(xlRow(m, run[m.ag]).map(n)); });
+    const csv = '﻿' + rows.map(r => r.map(q).join(';')).join('\r\n');
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' })); a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  }
+  function giornoData() {
+    const day = UI.gday || todayISO(); const ag = UI.gag || 'tutte';
+    const movs = allMovs().filter(m => m.day === day && (ag === 'tutte' || m.ag === ag)).sort((a, b) => a.at.localeCompare(b.at));
+    return { day, ag, movs, inc: movs.filter(isInc) };
+  }
+  function giornoView() {
+    const { day, ag, movs, inc } = giornoData();
+    const per = sumBy(inc, (m, p) => mg(p.m)); const tot = totOf(movs); const sal = cashSaldo(ag, day);
+    const altri = {}; inc.forEach(m => m.parts.forEach(p => { if (mg(p.m) === 'altro') altri[p.m] = (altri[p.m] || 0) + p.a; }));
+    const scon = inc.filter(m => m.doc === 'scontrino' || m.doc === 'ncscontrino'), fatt = inc.filter(m => m.doc === 'fattura' || m.doc === 'ncfattura');
+    const agTot = r2(inc.reduce((a, m) => a + (m.agenzia != null ? m.agenzia : m.tot), 0)), tkTot = r2(inc.reduce((a, m) => a + (m.biglietti || 0), 0));
+    const byCat = {}; inc.forEach(m => { const k = m.cat || '—'; const o = byCat[k] = byCat[k] || { n: 0, tot: 0, ag: 0, tk: 0 }; o.n++; o.tot += m.tot; o.ag += m.agenzia != null ? m.agenzia : m.tot; o.tk += m.biglietti || 0; });
+    const byCirc = {}; inc.filter(m => m.circuito).forEach(m => { const o = byCirc[m.circuito] = byCirc[m.circuito] || { n: 0, tk: 0 }; o.n += m.nT || 0; o.tk += m.biglietti || 0; });
+    const ch = ag !== 'tutte' ? chiusura(day, ag) : null;
+    const d = parseD(day); const prev = new Date(d); prev.setDate(d.getDate() - 1); const next = new Date(d); next.setDate(d.getDate() + 1);
+    let run = sal.inizio;
+    return `${contaTabs()}<div class="pagehead"><div><h1>Resoconto del ${esc(fmtDate(day))}</h1><div class="sub">${esc(fmtDate(day, true))} · ${inc.length} ${inc.length === 1 ? 'incasso' : 'incassi'}${ag !== 'tutte' ? ' · ' + esc(agName(ag)) : ' · tutte le agenzie'}</div></div>
+        <div class="hbtns"><div class="seg" role="group" aria-label="Agenzia">${[['tutte', 'Tutte'], ...S.cfg.agenzie.map(a => [a.id, a.nome])].map(([k, l]) => `<button data-act="gag" data-v="${k}" aria-pressed="${ag === k}">${esc(l)}</button>`).join('')}</div>
+          <button class="btn" data-act="gday" data-v="${dayISO(prev)}">‹</button><input type="date" class="btn" data-gdate="1" value="${esc(day)}" aria-label="Giorno"><button class="btn" data-act="gday" data-v="${dayISO(next)}">›</button>
+          <button class="btn" data-act="gexport">Scarica per Excel (foglio CASSA)</button></div></div>
+      <div class="tiles"><div class="tile dark"><span>Incassato</span><b>${money(tot)}</b><small>${inc.length} movimenti</small></div>${METG.map(([k, l]) => `<div class="tile"><span><i class="mdot ${MET_C[k]}"></i>${l}</span><b>${money(per[k] || 0)}</b>${k === 'altro' && Object.keys(altri).length ? `<small>${Object.entries(altri).map(([x, v]) => `${esc(MET_L[x] || x)} ${esc(fmtNum(v))}`).join(' · ')}</small>` : ''}</div>`).join('')}</div>
+      <div class="three">
+        <section class="box form"><h3>Cassa contanti</h3><div class="kv"><span>Inizio giornata</span><b>${money(sal.inizio)}</b></div><div class="kv"><span>Contanti incassati</span><b>${money(sal.inc)}</b></div>${sal.prel ? `<div class="kv"><span>Prelievi</span><b>− ${money(sal.prel)}</b></div>` : ''}${sal.app ? `<div class="kv"><span>Apporti</span><b>+ ${money(sal.app)}</b></div>` : ''}<div class="kv tot"><span>Fine giornata</span><b>${money(sal.fine)}</b></div>${ch && ch.contati && ch.contati.contanti != null ? `<div class="kv"><span>Contati alla chiusura</span><b>${money(ch.contati.contanti)} ${Math.abs(ch.contati.contanti - (per.contanti || 0)) < 0.01 ? '<span class="pill ok">quadra</span>' : ''}</b></div>` : ''}</section>
+        <section class="box form"><h3>Documenti</h3><div class="kv"><span>Scontrini (parte agenzia)</span><b>${scon.length} · ${money(scon.reduce((a, m) => a + (m.agenzia != null ? m.agenzia : m.tot), 0))}</b></div><div class="kv"><span>Da emettere</span><b>${inc.filter(m => m.docStato === 'da_emettere').length}</b></div><div class="kv"><span>Fatture</span><b>${fatt.length} · ${money(fatt.reduce((a, m) => a + m.tot, 0))}</b></div><div class="kv"><span>Caparre</span><b>${money(inc.filter(m => m.doc === 'caparra').reduce((a, m) => a + m.tot, 0))}</b></div><div class="kv tot"><span>Totale parte agenzia (Danea)</span><b>${money(agTot)}</b></div></section>
+        <section class="box form"><h3>Biglietti dei circuiti</h3>${Object.entries(byCirc).map(([c, o]) => `<div class="kv"><span>${esc(c)}</span><b>${o.n} tkt · ${money(o.tk)}</b></div>`).join('') || '<div class="small">Nessun biglietto venduto.</div>'}${tkTot ? `<div class="kv tot"><span>Da versare ai circuiti</span><b>${money(tkTot)}</b></div>` : ''}</section></div>
+      <section class="box tablecard"><h2 class="ch">Per categoria</h2><div class="tscroll"><table class="rt"><thead><tr><th>Categoria</th><th class="r">Incassi</th><th class="r">Totale</th><th class="r">Parte agenzia</th><th class="r">Biglietti</th></tr></thead><tbody>${Object.entries(byCat).map(([k, o]) => `<tr><td>${esc(k)}</td><td class="r">${o.n}</td><td class="r">${money(o.tot)}</td><td class="r">${money(o.ag)}</td><td class="r">${money(o.tk)}</td></tr>`).join('') || '<tr><td colspan="5" class="emptyrow">Nessun incasso.</td></tr>'}</tbody></table></div></section>
+      <section class="box tablecard"><h2 class="ch">Movimenti del giorno</h2><div class="tscroll"><table class="rt xl"><thead><tr><th>Ora</th><th>Op.</th><th>Doc.</th><th>Categoria</th><th>Cognome e nome</th><th>Descrizione</th><th>Circuito</th><th class="r">Q</th><th class="r">€ bus</th><th class="r">€ tkt</th><th class="r">Suppl.</th><th class="r">Diritti</th><th class="r">Totale</th><th class="r">Cash</th><th class="r">POS</th><th class="r">Altro</th><th class="r">Danea</th><th class="r">Saldo</th><th>Agenzia</th></tr></thead><tbody>
+        ${movs.map(m => { const c = (m.parts || []).filter(p => p.m === 'contanti').reduce((a, p) => a + p.a, 0); run = r2(run + c); const x = xlRow(m, run); const L = m.lines || [];
+          return `<tr class="${m.tipo === 'storno' || m.tipo === 'prelievo' ? 'neg' : ''}"><td>${esc(hm(m.at))}</td><td>${esc(x[1])}</td><td>${esc(x[2])}${m.docStato === 'da_emettere' ? '<br><small>da emettere</small>' : ''}</td><td>${esc(x[5])}</td><td>${esc(x[6])}</td><td>${esc(x[7])}</td><td>${esc(m.circuito || '')}</td><td class="r">${L.reduce((a, l) => a + l.q, 0) || ''}</td><td class="r">${L.length ? money(L.reduce((a, l) => a + l.q * l.bus, 0)) : ''}</td><td class="r">${L.some(l => l.tkt) ? money(L.reduce((a, l) => a + l.q * l.tkt, 0)) : ''}</td><td class="r">${m.suppl ? money(m.suppl) : ''}</td><td class="r">${x[38] ? money(x[38]) : ''}</td><td class="r"><b>${isInc(m) ? money(x[23]) : ''}</b></td><td class="r">${x[25] ? money(x[25]) : ''}</td><td class="r">${x[26] ? money(x[26]) : ''}</td><td class="r">${x[27] ? money(x[27]) + '<br><small>' + esc(x[28]) + '</small>' : ''}</td><td class="r">${isInc(m) ? money(x[33]) : ''}</td><td class="r">${money(run)}</td><td>${esc(x[42])}</td></tr>`; }).join('') || '<tr><td colspan="19" class="emptyrow">Nessun movimento.</td></tr>'}
+      </tbody></table></div></section>`;
   }
 
   // ---------- impostazioni a sezioni ----------
@@ -2716,8 +2928,8 @@
     else if (sec === 'utenti') {
       const list = Object.entries(ACC.users()).filter(([, u]) => u.role !== 'super' || ACC.role() === 'super').sort((a, b) => (a[1].active === false) - (b[1].active === false) || a[1].name.localeCompare(b[1].name));
       body = `<div class="sh"><div><h2>Operatori e permessi</h2><p class="sub">Chi può entrare, con quale ruolo e in quali agenzie. Senza agenzie spuntate, l'account può entrare in tutte.</p></div><button class="btn primary" data-act="unew">${ICON.plus} Nuovo account</button></div>
-        <div class="box tablecard"><div class="tscroll"><table class="rt users"><thead><tr><th>Account</th><th>Ruolo</th>${S.cfg.agenzie.map(a => `<th class="ctr">${esc(a.nome)}</th>`).join('')}<th>Attivo</th><th></th></tr></thead><tbody>
-        ${list.map(([id, u]) => { const self = id === ACC.sess.uid; const lockRole = self || (u.role === 'master' && ACC.role() !== 'super' && false); return `<tr class="${u.active === false ? 'off' : ''}"><td><span class="av">${esc((u.name || '?')[0].toUpperCase())}</span> <b>${esc(u.name)}</b>${self ? ' <small>(tu)</small>' : ''}${u.mustChange ? '<br><small>deve cambiare la password</small>' : ''}</td>
+        <div class="box tablecard"><div class="tscroll"><table class="rt users"><thead><tr><th>Account</th><th>Sigla</th><th>Ruolo</th>${S.cfg.agenzie.map(a => `<th class="ctr">${esc(a.nome)}</th>`).join('')}<th>Attivo</th><th></th></tr></thead><tbody>
+        ${list.map(([id, u]) => { const self = id === ACC.sess.uid; const lockRole = self || (u.role === 'master' && ACC.role() !== 'super' && false); return `<tr class="${u.active === false ? 'off' : ''}"><td><span class="av">${esc((u.name || '?')[0].toUpperCase())}</span> <b>${esc(u.name)}</b>${self ? ' <small>(tu)</small>' : ''}${u.mustChange ? '<br><small>deve cambiare la password</small>' : ''}</td><td><input class="code-in" data-usig="${id}" value="${esc(u.sigla || '')}" maxlength="3" placeholder="${esc(String(u.name || '').slice(0, 2).toUpperCase())}" aria-label="Sigla di ${esc(u.name)} nel resoconto (colonna Op.)"></td>
           <td>${u.role === 'super' ? 'Super Master' : `<select data-urole="${id}" aria-label="Ruolo di ${esc(u.name)}"${lockRole ? ' disabled' : ''}>${['operatore', 'master', 'contabilita'].map(r => `<option value="${r}"${u.role === r ? ' selected' : ''}>${ROLE_L[r]}</option>`).join('')}</select>`}</td>
           ${S.cfg.agenzie.map(a => `<td class="ctr"><input type="checkbox" class="sw" data-uag="${id}" data-ag="${a.id}"${(u.agencies || []).includes(a.id) ? ' checked' : ''} aria-label="${esc(u.name)} in ${esc(a.nome)}"${u.role === 'super' || u.role === 'contabilita' ? ' disabled' : ''}></td>`).join('')}
           <td class="ctr"><input type="checkbox" class="sw" data-uact="${id}"${u.active !== false ? ' checked' : ''}${self || u.role === 'super' ? ' disabled' : ''} aria-label="${esc(u.name)} attivo"></td>
@@ -2726,7 +2938,7 @@
         <div class="two"><div class="box form"><h3>Cosa può fare ogni ruolo</h3><ul class="small ul"><li><b>Operatore</b>: liste, posti sul bus, anagrafica, incassi e resoconto della sua agenzia, messaggi ai clienti.</li><li><b>Master</b>: tutto quello dell'operatore, più contabilità, impostazioni e account.</li><li><b>Contabilità</b>: vede cassa e contabilità di tutte le agenzie, senza modificare.</li></ul></div>
         <div class="box form"><h3>Password dimenticata</h3><div class="small">Premi «Reimposta password»: scegli una password provvisoria e dilla alla persona. Al primo accesso l'app le chiede di sceglierne una nuova.</div></div></div>`;
     } else if (sec === 'agenzie') body = `<h2>Agenzie e casse</h2><p class="sub">Ogni agenzia ha la sua cassa: gli incassi vanno nella cassa dell'agenzia scelta all'accesso.</p>
-      ${S.cfg.agenzie.map((a, i) => `<div class="box form agf"><div class="grid3"><label>Agenzia<input data-cfgag="${i}" data-k="nome" value="${esc(a.nome)}"></label><label>Nome della cassa<input data-cfgag="${i}" data-k="cassa" value="${esc(a.cassa || '')}"></label><label>Indirizzo<input data-cfgag="${i}" data-k="indirizzo" value="${esc(a.indirizzo || '')}" placeholder="via, numero, città"></label></div></div>`).join('')}`;
+      ${S.cfg.agenzie.map((a, i) => `<div class="box form agf"><div class="grid3"><label>Agenzia<input data-cfgag="${i}" data-k="nome" value="${esc(a.nome)}"></label><label>Nome della cassa<input data-cfgag="${i}" data-k="cassa" value="${esc(a.cassa || '')}"></label><label>Indirizzo<input data-cfgag="${i}" data-k="indirizzo" value="${esc(a.indirizzo || '')}" placeholder="via, numero, città"></label></div><div class="grid3"><label>Contanti in cassa all'inizio (riporto) €<input data-cfgag="${i}" data-k="cassaIniziale" inputmode="decimal" value="${esc(a.cassaIniziale || '')}" placeholder="0"></label><span class="small" style="grid-column:span 2;align-self:end">Il fondo cassa da cui parte il conto dei contanti nel resoconto giornaliero (colonna «Saldo» del foglio CASSA).</span></div></div>`).join('')}`;
     else if (sec === 'luoghi') body = `<div class="sh"><div><h2>Luoghi di partenza e mappe</h2><p class="sub">Per ogni punto di salita incolla il link di Google Maps: nel messaggio WhatsApp il cliente lo tocca e trova il punto preciso. Il codice è quello della colonna «part» della lista (es. RG, MD).</p></div><button class="btn primary" data-act="lnew">${ICON.plus} Aggiungi luogo</button></div>
       <div class="box tablecard"><div class="tscroll"><table class="rt luoghi"><thead><tr><th>Codice</th><th>Città</th><th>Punto di salita</th><th>Link Google Maps</th><th></th></tr></thead><tbody>
       ${(S.cfg.luoghi || []).map((l, i) => `<tr><td><input data-cfgl="${i}" data-k="code" value="${esc(l.code || '')}" placeholder="RG" aria-label="Codice" class="code-in"></td><td><input data-cfgl="${i}" data-k="citta" value="${esc(l.citta || '')}" placeholder="Ragusa" aria-label="Città"></td><td><input data-cfgl="${i}" data-k="luogo" value="${esc(l.luogo || '')}" placeholder="es. Palazama" aria-label="Punto di salita"></td><td><input data-cfgl="${i}" data-k="maps" value="${esc(l.maps || '')}" placeholder="https://maps.app.goo.gl/…" aria-label="Link Google Maps"></td>
@@ -2783,7 +2995,7 @@
     const c = waCfg(); const st = STORE.status();
     return `<div class="sup"><div class="pagehead"><div><h1>Super Master</h1><div class="sub">Invisibile agli altri account · ${st.linked ? 'Dropbox collegato' : 'solo su questo computer'} · versione ${esc(VERSION)}</div></div><div class="hbtns"><button class="btn" data-act="lexport">Scarica il registro</button><button class="btn" data-act="logout">Esci</button></div></div>
       <div class="two"><section class="box sup-log" aria-label="Log tecnico"><div class="sh"><h2>Log tecnico · ultimi 7 giorni</h2><div class="seg"><button data-act="lgf" data-v="all" aria-pressed="${UI.lgf !== 'err'}">Tutto</button><button data-act="lgf" data-v="err" aria-pressed="${UI.lgf === 'err'}">Errori e avvisi</button></div></div>
-        <div class="logl">${ev.map(e => `<div class="lg ${e.lv}"><span>${esc(e.at.slice(5, 10).split('-').reverse().join('/'))} ${esc(e.at.slice(11, 16))}</span><span class="lv">${esc(e.lv.toUpperCase())}</span><span>${esc(e.who ? e.who + ' · ' : '')}${esc(e.ag ? agName(e.ag) + ' · ' : '')}${esc(e.m)}<small> · ${esc(e.dev)}</small></span></div>`).join('') || '<div class="small">Niente nel registro.</div>'}</div></section>
+        <div class="logl">${ev.map(e => `<div class="lg ${e.lv}"><span>${esc(dayISO(new Date(e.at)).slice(5).split('-').reverse().join('/'))} ${esc(hm(e.at))}</span><span class="lv">${esc(e.lv.toUpperCase())}</span><span>${esc(e.who ? e.who + ' · ' : '')}${esc(e.ag ? agName(e.ag) + ' · ' : '')}${esc(e.m)}<small> · ${esc(e.dev)}</small></span></div>`).join('') || '<div class="small">Niente nel registro.</div>'}</div></section>
         <div class="sup-col"><section class="box form"><h2>Password e account</h2>
           ${Object.entries(ACC.users()).filter(([id]) => id !== ACC.sess.uid).map(([id, u]) => `<div class="kv"><span><b>${esc(u.name)}</b> · ${esc(ROLE_L[u.role])}${u.active === false ? ' · disattivato' : ''}</span><button class="btn sm" data-act="ureset" data-id="${id}">Reimposta</button></div>`).join('') || '<div class="small">Nessun altro account.</div>'}
           <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn danger" data-act="resetall">Reimposta tutte le password, Master compresi</button><button class="btn" data-act="unewm">+ Nuovo Master</button></div></section>
@@ -2812,8 +3024,8 @@
   }
 
   // ---------- render ----------
-  const FOCUS_KEYS = ['hq', 'aq', 'r', 'ar', 'nr', 'f', 'q', 'qs', 'qt', 'tf', 'dep2', 'dep', 'k', 'bind', 'cl', 'cfgag', 'cfgl'];
-  const ACT_PERM = { unew: 'users', unewm: 'tech', ureset: 'users', usave: 'users', resetall: 'tech', doresetall: 'tech', savekeys: 'tech', wipelocal: 'tech', lgf: 'tech', lexport: 'tech', lnew: 'settings', ldel: 'settings', savewa: 'settings', savetel: 'settings', export: 'settings', pay: 'cassa', paysave: 'cassa', storno: 'cassa', cclose: 'cassa', ccsave: 'cassa', clnew: 'anag', cldel: 'anag', newtrip: 'viaggi', deltrip: 'viaggi' };
+  const FOCUS_KEYS = ['hq', 'aq', 'r', 'ar', 'nr', 'f', 'q', 'qs', 'qt', 'tf', 'dep2', 'dep', 'k', 'bind', 'cl', 'cfgag', 'cfgl', 'pf', 'pl', 'pff', 'pfm', 'usig'];
+  const ACT_PERM = { unew: 'users', unewm: 'tech', ureset: 'users', usave: 'users', resetall: 'tech', doresetall: 'tech', savekeys: 'tech', wipelocal: 'tech', lgf: 'tech', lexport: 'tech', lnew: 'settings', ldel: 'settings', savewa: 'settings', savetel: 'settings', export: 'settings', pay: 'cassa', paypanel: 'viaggi', pfsave: 'cassa', cashmov: 'cassa', cashsave: 'cassa', storno: 'cassa', cclose: 'cassa', ccsave: 'cassa', clnew: 'anag', cldel: 'anag', newtrip: 'viaggi', deltrip: 'viaggi' };
   const VIEW_PERM = { home: 'viaggi', models: 'viaggi', trip: 'viaggi', anag: 'anag', conta: 'conta', super: 'tech' };
   function render() {
     acClose();
@@ -2833,7 +3045,7 @@
       fsel = FOCUS_KEYS.filter(k => ae.dataset[k] !== undefined).map(k => `[data-${k.replace(/[A-Z]/g, m => '-' + m.toLowerCase())}="${CSS.escape(ae.dataset[k])}"]`).join('');
       try { fpos = ae.selectionStart; } catch (e) { fpos = null; }
     }
-    const keep = ['#bklist', '.mapwrap', '.wtw', '.ldock .mapwrap'].map(s => { const el = $(s); return el ? [s, el.scrollTop, el.scrollLeft] : null; }).filter(Boolean);
+    const keep = ['#bklist', '.mapwrap', '.wtw', '.ldock .mapwrap', '.pp-b'].map(s => { const el = $(s); return el ? [s, el.scrollTop, el.scrollLeft] : null; }).filter(Boolean);
     const y = window.scrollY;
     const V = { home: homeView, models: modelsView, trip: tripView, anag: anagView, cassa: cassaView, conta: contaView, settings: settingsView, super: superView };
     const view = (V[UI.view] || homeView)();
@@ -2855,7 +3067,7 @@
       <button data-act="rowins" data-id="${id}" data-d="0">Inserisci una riga sopra</button>
       <button data-act="rowins" data-id="${id}" data-d="1">Inserisci una riga sotto</button>
       ${bk ? `<button data-act="selbk" data-id="${bk.id}">Mostra sulla piantina</button>
-      ${head && ACC.can('cassa') ? `<button data-act="pay" data-id="${bk.id}">${ICON.euro} Registra un incasso (POS, contanti…)</button>` : ''}
+      ${head && ACC.can('cassa') ? `<button data-act="pay" data-id="${bk.id}">${ICON.euro} Incasso e documento (scontrino, fattura…)</button>` : ''}
       ${head ? `<button data-act="abituale" data-id="${bk.id}">${bk.head.abituale ? '✓ ' : ''}Cliente abituale (precedenza nelle prime file)</button>
       <button data-act="saldato" data-id="${bk.id}">${bk.head.saldato ? '✓ ' : ''}Segna come saldato (anche se il prezzo è diverso)</button>` : ''}
       <button data-act="toatt" data-id="${bk.id}">Sposta tutta la prenotazione in lista d'attesa</button>
@@ -3001,7 +3213,7 @@
     const act = el.dataset.act; const t = trip(); const b = bus();
     if (ACT_PERM[act] && !ACC.can(ACT_PERM[act])) { closeModal(); toast('Questa funzione non è disponibile per il tuo account'); render(); return; }
     switch (act) {
-      case 'nav': UI.view = el.dataset.v; if (el.dataset.ssec) UI.ssec = el.dataset.ssec; UI.sel = UI.selP = null; UI.move = null; closePop(); render(); window.scrollTo(0, 0); break;
+      case 'nav': UI.pay = null; UI.view = el.dataset.v; if (el.dataset.ssec) UI.ssec = el.dataset.ssec; UI.sel = UI.selP = null; UI.move = null; closePop(); render(); window.scrollTo(0, 0); break;
       // accesso
       case 'gtap': GATE.taps++; if (GATE.taps >= 10) { GATE.taps = 0; GATE.step = 'tech'; GATE.msg = ''; render(); } break;
       case 'gback': GATE.step = null; GATE.msg = ''; GATE.taps = 0; render(); break;
@@ -3034,9 +3246,17 @@
       case 'cldel': { const id = el.dataset.id; const x = S.clients.clienti[id]; confirmBox('Elimina cliente', `Tolgo ${esc(x.cognome)} ${esc(x.nome)} dall'anagrafica? Le liste dei viaggi non cambiano.`, 'Elimina', () => { delete S.clients.clienti[id]; UI.cl = null; save(); render(); }); break; }
       case 'acpick': acPick(el.dataset.id); break;
       // incassi e cassa
-      case 'pay': closePop(); payModal(el.dataset.id); break;
-      case 'paymet': UI.modal.met = el.dataset.k; $$('.pay-met button').forEach(x => x.setAttribute('aria-checked', x.dataset.k === el.dataset.k)); $('#pay-mix').hidden = el.dataset.k !== 'misto'; break;
-      case 'paysave': paySave(); break;
+      case 'pay': case 'paypanel': closePop(); if (UI.pay && UI.pay.bkId === el.dataset.id && el.dataset.act === 'paypanel') payClose(); else payOpen(el.dataset.id); break;
+      case 'pfclose': payClose(); break;
+      case 'pfdoc': if (UI.pay) { UI.pay.f.doc = el.dataset.k; render(); } break;
+      case 'pfmet': if (UI.pay) { UI.pay.f.met = el.dataset.k; if (el.dataset.k === 'misto' && !Object.keys(UI.pay.f.mix).length) UI.pay.f.mix = {}; render(); } break;
+      case 'pfsave': if (UI.pay) paySave(); break;
+      case 'cashmov': cashMovModal(el.dataset.k); break;
+      case 'cashsave': cashMovSave(); break;
+      case 'ctab': UI.ctab = el.dataset.v; render(); break;
+      case 'gag': UI.gag = el.dataset.v; render(); break;
+      case 'gday': UI.gday = el.dataset.v; render(); break;
+      case 'gexport': { const g = giornoData(); exportCassa(g.movs, `cassa-${g.day}${g.ag !== 'tutte' ? '-' + (AGC[g.ag] || g.ag) : ''}.csv`); ACC.tlog('info', `Esportato il resoconto del ${fmtDate(g.day)}`); break; }
       case 'storno': storno(el.dataset.id); break;
       case 'cday': UI.cday = el.dataset.v; render(); break;
       case 'cag': UI.cag = el.dataset.v; render(); break;
@@ -3051,11 +3271,11 @@
       case 'year': UI.year = el.dataset.v; render(); window.scrollTo(0, 0); break;
       case 'hcat': UI.cat = el.dataset.v; render(); break;
       case 'hidepast': UI.hidePast = el.checked; render(); break;
-      case 'opentrip': { UI.view = 'trip'; UI.tripId = el.dataset.id; const tt = trip(); UI.busId = tt && tt.buses[0] ? tt.buses[0].id : null; UI.sel = UI.selP = null; UI.sec = el.dataset.sec || 'lista'; render(); window.scrollTo(0, 0); break; }
+      case 'opentrip': { UI.pay = null; UI.view = 'trip'; UI.tripId = el.dataset.id; const tt = trip(); UI.busId = tt && tt.buses[0] ? tt.buses[0].id : null; UI.sel = UI.selP = null; UI.sec = el.dataset.sec || 'lista'; render(); window.scrollTo(0, 0); break; }
       case 'openbus': UI.view = 'trip'; UI.tripId = el.dataset.trip; UI.busId = el.dataset.bus; UI.sel = UI.selP = null; UI.sec = 'posti'; render(); window.scrollTo(0, 0); break;
       case 'sec': UI.sec = el.dataset.v; UI.sel = UI.selP = null; UI.move = null; render(); window.scrollTo(0, 0); break;
       case 'tab': UI.busId = el.dataset.id; UI.move = null; render(); break;
-      case 'dock': UI.dock = !UI.dock; render(); break;
+      case 'dock': if (UI.pay) { UI.pay = null; UI.dock = true; } else UI.dock = !UI.dock; render(); break;
       case 'onlyfree': UI.onlyFree = el.checked; render(); break;
       case 'newtrip': tripModal(null); break;
       case 'edittrip': tripModal(t); break;
@@ -3064,7 +3284,7 @@
         if (!v.nome) { toast('Scrivi il nome della gita'); $('#t-nome').focus(); break; }
         if (!v.data) { toast('Scegli la data di partenza'); break; }
         if (UI.modal.id) { Object.assign(S.trips.find(x => x.id === UI.modal.id), v); closeModal(); commit(); }
-        else { const nt = tripInit({ id: uid(), ...v, buses: [] }); S.trips.push(nt); UI.tripId = nt.id; UI.view = 'trip'; UI.sec = 'lista'; UI.busId = null; closeModal(); commit(); toast('Gita creata: scrivi la lista o importa il file Word, poi aggiungi il bus'); }
+        else { const nt = tripInit({ id: uid(), ...v, buses: [] }); S.trips.push(nt); UI.tripId = nt.id; UI.view = 'trip'; UI.sec = 'lista'; UI.busId = null; closeModal(); commit(); toast(v.cat === 'biglietteria' ? 'Creata: scrivi i prezzi del biglietto e i clienti; il pulsante «€» registra l\'incasso' : 'Gita creata: scrivi la lista o importa il file Word, poi aggiungi il bus'); }
         break;
       }
       case 'deltrip': { const id = UI.modal.id; const tr = S.trips.find(x => x.id === id); confirmBox('Elimina viaggio', `Elimino «${esc(tr.nome)}» con la lista e i bus, su tutti i computer? Non si può annullare.`, 'Elimina', () => { ACC.tlog('avviso', `Eliminato il viaggio «${tr.nome}» (${fmtDate(tr.data)})`); deleteTrip(id); UI.view = 'home'; UI.tripId = null; commit(); }); break; }
@@ -3161,7 +3381,8 @@
     if (d.cfgag !== undefined) { S.cfg.agenzie[+d.cfgag][d.k] = el.value; save(); return; }
     if (d.cfgl !== undefined) { S.cfg.luoghi[+d.cfgl][d.k] = d.k === 'code' ? el.value.toUpperCase() : el.value; save(); return; }
     if (d.cc) { ccDiff(); return; }
-    if (d.payimp) { payWarn(); return; }
+    if (d.usig) { if (!ACC.can('users')) return; const u = ACC.users()[d.usig]; if (u) { u.sigla = el.value.toUpperCase().trim(); save(); } return; }
+    if (UI.pay && (d.pf || d.pl !== undefined || d.pff || d.pfm || d.pfc)) { payInput(el); return; }
     if (d.r && t) { const r = rowById(t, d.r); if (r) { r[d.f] = el.value; if (d.f === 'cognome' || d.f === 'nome') { if (r.cid && S.clients.clienti[r.cid]) { const x = S.clients.clienti[r.cid]; if (nk(baseCognome(r.cognome)) !== nk(x.cognome) || nk(r.nome) !== nk(x.nome)) delete r.cid; } acOpen(el); } save(); } return; }
     if (d.ar && t) { const r = t.attesa.find(x => x.id === d.ar); if (r) { r[d.f] = el.value; save(); } return; }
     if (d.nr && t) { const r = t.annullati.find(x => x.id === d.nr); if (r) { r[d.f] = el.value; save(); } return; }
@@ -3188,6 +3409,7 @@
     if (d.maint) { S.cfg.maint = el.checked; ACC.tlog('avviso', el.checked ? 'Modalità manutenzione attivata' : 'Modalità manutenzione tolta'); save(); render(); return; }
     if (d.cdate) { if (el.value) { UI.cday = el.value; render(); } return; }
     if (d.cmon) { if (el.value) { UI.cmon = el.value; render(); } return; }
+    if (d.gdate) { if (el.value) { UI.gday = el.value; render(); } return; }
     if (d.bind === 'label' || d.bind === 'accompagnatore') { later(); return; }
     if (d.tchk && t) { t[d.tchk] = el.checked; t.buses.forEach(x => { x.guida = el.checked; if (!el.checked) Object.keys(x.seats).forEach(k => { if (x.seats[k].res) delete x.seats[k]; }); else { syncAll(t); reserveGuide(x); } }); commit(); return; }
     if (d.bindchk && b) { b[d.bindchk] = el.checked; if (!el.checked) Object.keys(b.seats).forEach(k => { if (b.seats[k].res) delete b.seats[k]; }); else reserveGuide(b); commit(); return; }
@@ -3201,7 +3423,7 @@
   window.addEventListener('scroll', () => { if (AC.el) acClose(); }, { passive: true });
   document.addEventListener('keydown', e => {
     if (e.key === 'Escape' && AC.el && !(e.target.classList && e.target.classList.contains('wc'))) { acClose(); return; }
-    if (e.key === 'Escape') { if ($('#pop')) return closePop(); if (!$('#print-root').hidden) return closePrint(); if ($('#modal-root').innerHTML) return closeModal(); if (UI.sel || UI.selP || UI.move != null) { UI.sel = UI.selP = null; UI.move = null; render(); } return; }
+    if (e.key === 'Escape') { if ($('#pop')) return closePop(); if (!$('#print-root').hidden) return closePrint(); if ($('#modal-root').innerHTML) return closeModal(); if (UI.pay) return payClose(); if (UI.sel || UI.selP || UI.move != null) { UI.sel = UI.selP = null; UI.move = null; render(); } return; }
     const el = e.target;
     if (el.classList && el.classList.contains('wc') && acKey(e)) { e.preventDefault(); return; }
     if (el.classList && el.classList.contains('wc') && (e.key === 'Enter' || e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
@@ -3319,7 +3541,7 @@
   }
 
   // test interni (usati solo in fase di verifica)
-  window.__posti = { get S() { return S; }, UI, render, deriveBookings, syncAll, seatIndex, officeLabels, parseTripDocx, autoAssign, prefStatus, bkMoney, summaryOf, LMAP, dropFamily, dropPerson, STORE, ACC, flush, allMovs,
+  window.__posti = { get S() { return S; }, UI, render, deriveBookings, syncAll, seatIndex, officeLabels, parseTripDocx, autoAssign, prefStatus, bkMoney, summaryOf, LMAP, dropFamily, dropPerson, STORE, ACC, flush, allMovs, payTotals, cashSaldo, giornoData, xlRow,
     demo() { const d = demoState(); d.trips.forEach(t => { delete t.demo; S.trips.push(t); t.rows.forEach(r => upsertFromRow(r)); }); flush(); render(); return d.trips.map(t => t.id); } };
 
   // ---------- avvio ----------

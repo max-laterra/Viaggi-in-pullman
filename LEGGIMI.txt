@@ -113,9 +113,19 @@ DA SAPERE
 - Super Master: nella schermata di accesso tocca 10 volte il logo La Terra. Da lì il tecnico
   vede il log tecnico, reimposta tutte le password (Master compresi), mette l'app in
   manutenzione e inserisce le chiavi dell'invio automatico WhatsApp.
-- Incassi: dal numero a sinistra della prima riga di una prenotazione → "Registra un incasso".
-  Ogni incasso porta operatore, agenzia, cassa e metodo (POS, bonifico, contanti, PostePay o
-  misto). Un incasso sbagliato non si cancella: si «storna» dalla pagina Cassa.
+- Incassi: nella lista premi il pulsante «€» sulla prima riga di una prenotazione: a destra si
+  apre il riquadro «Incasso e documento» con i dati del foglio CASSA (categoria, righe con
+  quantità, € bus e € biglietto, supplemento fila, diritti, circuito, metodo anche misto, pratica).
+  Gite, eventi e biglietteria → pulsante «Scontrino»; tour → «Fattura». Nello scontrino va solo
+  la parte agenzia (bus + supplementi + diritti); i biglietti del circuito restano a parte.
+  La stampante fiscale non è ancora collegata: per ora l'incasso si registra e il documento
+  resta segnato «da emettere». Un incasso sbagliato non si cancella: si «storna».
+- Biglietteria eventi: nuovo tipo di viaggio (Nuovo viaggio → Tipo «Biglietteria») per i soli
+  biglietti, senza pullman. In testa alla lista si scrivono intero, ridotto, diritti e circuito.
+- Contabilità › «Resoconto giornaliero»: come il foglio CASSA, per agenzia, con cassa contanti,
+  documenti, biglietti dei circuiti e «Scarica per Excel» con le stesse colonne del foglio.
+  Per la colonna «Op.» scrivi la sigla di ognuno in Impostazioni › Operatori; il fondo cassa
+  iniziale di ogni agenzia in Impostazioni › Agenzie. Prelievi e apporti di contanti: pagina Cassa.
 - Chiusura di cassa: pagina Cassa → "Chiudi la cassa": resoconto completo di contanti, POS,
   bonifici e PostePay, con la colonna «Controllato» per i conti fatti a mano.
 - Prova su un solo computer: se all'inizio hai premuto «Prova l'app solo su questo computer», quando
