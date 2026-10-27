@@ -1,6 +1,6 @@
 (function () {
   'use strict';
-  const VERSION = '1.2.1';
+  const VERSION = '1.3';
   const LOGO = './logo.jpg';
   const KEY = 'laterra.prenotazioniPosti.v1';
   const $ = (s, r = document) => r.querySelector(s);
@@ -2606,7 +2606,7 @@
   // ---------- anagrafica clienti ----------
   // Si riempie da sola con le persone scritte nelle liste dei viaggi; si può anche modificare a mano.
   // Mentre scrivi il cognome nella lista, i clienti già conosciuti compaiono tra i suggeriti: Invio compila la riga.
-  const CLF = [['cognome', 'Cognome'], ['nome', 'Nome'], ['nascita', 'Data di nascita'], ['natoA', 'Nato/a a'], ['tel', 'Cellulare'], ['tel2', 'Altro telefono'], ['email', 'Email'], ['indirizzo', 'Indirizzo'], ['part', 'Partenza abituale (codice)'], ['pref', 'Preferenze (es. posto davanti)'], ['note', 'Note']];
+  const CLF = [['cognome', 'Cognome'], ['nome', 'Nome'], ['nascita', 'Data di nascita'], ['natoA', 'Nato/a a'], ['tel', 'Cellulare'], ['tel2', 'Altro telefono'], ['email', 'Email'], ['indirizzo', 'Indirizzo'], ['cap', 'CAP'], ['citta', 'Città'], ['cf', 'Codice fiscale / P. IVA'], ['sdi', 'Codice SDI o PEC (fattura)'], ['part', 'Partenza abituale (codice)'], ['pref', 'Preferenze (es. posto davanti)'], ['note', 'Note']];
   const clients = () => S.clients.clienti;
   const nk = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
   const baseCognome = cg => { const m = RX.exec(String(cg || '').trim()); return (m ? m[1] : String(cg || '')).trim(); };
@@ -2705,10 +2705,197 @@
       <div class="cl-grid"><div class="box cl-f">${CLF.map(([f, l]) => `<label class="cl-r"><span>${esc(l)}</span><input data-cl="${f}" value="${esc(sel[f] || '')}"${ro ? ' readonly' : ''} autocomplete="off"></label>`).join('')}
           ${ro ? '' : `<div class="cl-act"><button class="btn sm danger" data-act="cldel" data-id="${UI.cl}">${ICON.trash} Elimina dall'anagrafica</button></div>`}</div>
         <div class="box cl-h"><h3>Viaggi fatti e prenotati</h3>${hist.map(h => { const m = paidOf(h); const fut = (h.t.fine || h.t.data) >= todayISO(); return `<button class="cl-trip" data-act="opentrip" data-id="${h.t.id}"><span><b>${esc(h.t.nome)}</b><span>${esc(fmtTripDate(h.t))}${h.bk.persone.length > 1 ? ` · ${esc(bkName(h.bk))} x ${h.bk.persone.length}` : ''}</span></span><span class="pill ${m.saldato ? 'ok' : fut ? 'neutral' : 'tbd'}">${m.saldato ? 'Saldato' : fut ? 'Prenotato' : 'Da saldare'}</span></button>`; }).join('') || '<div class="small">Ancora nessun viaggio collegato.</div>'}</div></div>` : '<div class="empty">Nessun cliente. Si aggiungono da soli quando scrivi le liste dei viaggi.</div>';
-    return `<div class="pagehead"><div><h1>Anagrafica</h1><div class="sub">${tot} clienti · si aggiorna da sola con le liste dei viaggi</div></div>${ro ? '' : `<button class="btn primary" data-act="clnew">${ICON.plus} Nuovo cliente</button>`}</div>
+    return `<div class="pagehead"><div><h1>Anagrafica</h1><div class="sub">${tot} clienti · si aggiorna da sola con le liste dei viaggi</div></div>${ro ? '' : `<div class="hbtns"><label class="btn" for="imp-cl">${ICON.upload} Importa da Word o Excel<input id="imp-cl" type="file" accept=".xlsx,.xlsm,.csv,.txt,.docx,.xls,.doc" hidden data-impfile="1"></label><button class="btn primary" data-act="clnew">${ICON.plus} Nuovo cliente</button></div>`}</div>
       <div class="anag"><section class="box cl-list" aria-label="Elenco clienti"><input class="search" type="search" data-aq="1" placeholder="Cerca per nome, telefono, città" value="${esc(UI.aq || '')}" aria-label="Cerca cliente">
         <div class="cl-scroll">${groups.map(g => `<div class="cl-g">${esc(g.l)}</div>${g.items.map(([id, x]) => `<button class="cl-i${id === UI.cl ? ' on' : ''}" data-act="clsel" data-id="${id}"><span class="av">${esc(((x.nome || '')[0] || '') + ((x.cognome || '')[0] || ''))}</span><span><b>${esc(x.cognome)} ${esc(x.nome)}</b><span>${esc([x.part, ix[id] ? `${ix[id].length} viaggi` : ''].filter(Boolean).join(' · '))}</span></span></button>`).join('')}`).join('') || '<div class="small" style="padding:12px">Nessun cliente trovato.</div>'}${list.length > 400 ? `<div class="small" style="padding:12px">Ne mostro 400 su ${list.length}: affina la ricerca.</div>` : ''}</div></section>
         <section class="cl-det" aria-label="Scheda cliente">${detail}</section></div>`;
+  }
+
+  // ---------- anagrafica: importazione da Word o Excel ----------
+  // Legge .xlsx (Excel), .csv e .docx (Word, tabelle). Riconosce da solo le colonne dall'intestazione
+  // (cognome, nome, data di nascita, cellulare, email…) o dal contenuto; prima di importare si vede l'anteprima
+  // e si può correggere a mano ogni colonna. I clienti già presenti si completano: nessun dato esistente viene sovrascritto.
+  const IMPF = [['', '— non importare —'], ['cognome', 'Cognome'], ['nome', 'Nome'], ['cn', 'Cognome e nome insieme'], ['nascita', 'Data di nascita'], ['natoA', 'Nato/a a'], ['tel', 'Cellulare'], ['tel2', 'Altro telefono'], ['email', 'Email'], ['indirizzo', 'Indirizzo'], ['cap', 'CAP'], ['citta', 'Città'], ['cf', 'Codice fiscale / P. IVA'], ['part', 'Partenza abituale'], ['note', 'Note']];
+  const IMPF_L = Object.fromEntries(IMPF);
+  const HDR = [
+    ['cn', /^(cognome\s*(e|\/|&)\s*nome|nome\s*(e|\/)\s*cognome|nominativo|cliente|partecipante|intestatario)$/],
+    ['cognome', /^cognome|^surname$/], ['nome', /^nome$|^nome\s*(di\s*battesimo)?$|^first\s*name$/],
+    ['nascita', /nascita|nato\s*il|^data\s*n|^data$|^d\.?\s*n\.?$|birth/], ['natoA', /nato\/?a?\s*a|luogo\s*(di\s*)?nascita|^nato a/],
+    ['tel', /^(cell|cellulare|telefono|tel\.?|contatto|recapito|mobile|whatsapp)/], ['tel2', /(altro|secondo)\s*tel|tel\.?\s*2|fisso/],
+    ['email', /mail|posta/], ['indirizzo', /indirizzo|via|residenza/], ['cap', /^c\.?a\.?p\.?$/], ['citta', /citt[aà]|comune|paese|localit/],
+    ['cf', /codice\s*fiscale|^c\.?\s*f\.?$|partita\s*iva|p\.?\s*iva/], ['part', /^part(enza)?$|^p$|salita/], ['note', /^note|osserv/]
+  ];
+  // ---- lettura dei file ----
+  async function xlsxTables(file) {
+    const zip = await window.JSZip.loadAsync(file);
+    const rd = async p => { const f = zip.file(p); return f ? new DOMParser().parseFromString(await f.async('string'), 'application/xml') : null; };
+    const wb = await rd('xl/workbook.xml'); if (!wb) throw new Error('Il file non sembra un Excel .xlsx.');
+    const rels = await rd('xl/_rels/workbook.xml.rels'); const relMap = {};
+    if (rels) Array.from(rels.getElementsByTagName('Relationship')).forEach(r => { relMap[r.getAttribute('Id')] = r.getAttribute('Target'); });
+    const ssx = await rd('xl/sharedStrings.xml');
+    const ss = ssx ? Array.from(ssx.getElementsByTagName('si')).map(si => Array.from(si.getElementsByTagName('t')).map(t => t.textContent).join('')) : [];
+    const colN = ref => { const m = /^([A-Z]+)/.exec(ref || ''); let n = 0; if (m) for (const ch of m[1]) n = n * 26 + ch.charCodeAt(0) - 64; return n - 1; };
+    const out = [];
+    for (const sh of Array.from(wb.getElementsByTagName('sheet'))) {
+      const rid = sh.getAttribute('r:id') || sh.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships', 'id');
+      let target = relMap[rid] || ''; target = target.replace(/^\/?xl\//, '').replace(/^\//, '');
+      const x = await rd('xl/' + target); if (!x) continue;
+      const rows = [];
+      Array.from(x.getElementsByTagName('row')).forEach(r => {
+        const arr = [];
+        Array.from(r.getElementsByTagName('c')).forEach(c => {
+          const t = c.getAttribute('t'); const v = c.getElementsByTagName('v')[0]; let val = '';
+          if (t === 's') val = ss[+((v && v.textContent) || 0)] || '';
+          else if (t === 'inlineStr') val = Array.from(c.getElementsByTagName('t')).map(z => z.textContent).join('');
+          else if (t === 'b') val = v && v.textContent === '1' ? 'VERO' : 'FALSO';
+          else val = v ? v.textContent : '';
+          arr[colN(c.getAttribute('r'))] = String(val).trim();
+        });
+        rows.push(Array.from(arr, z => z || ''));
+      });
+      out.push({ name: sh.getAttribute('name') || 'Foglio', rows });
+    }
+    return out;
+  }
+  function csvTable(text) {
+    const first = text.split(/\r?\n/).find(l => l.trim()) || '';
+    const sep = [';', '\t', ','].sort((a, b) => first.split(b).length - first.split(a).length)[0];
+    const rows = []; let row = [], cur = '', q = false;
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (q) { if (ch === '"' && text[i + 1] === '"') { cur += '"'; i++; } else if (ch === '"') q = false; else cur += ch; continue; }
+      if (ch === '"') q = true; else if (ch === sep) { row.push(cur.trim()); cur = ''; } else if (ch === '\n') { row.push(cur.trim()); rows.push(row); row = []; cur = ''; } else if (ch !== '\r') cur += ch;
+    }
+    if (cur || row.length) { row.push(cur.trim()); rows.push(row); }
+    return [{ name: 'File', rows }];
+  }
+  async function readClientFile(file) {
+    const n = file.name.toLowerCase();
+    if (/\.(xls|doc)$/.test(n)) throw new Error(`I file ${n.endsWith('.xls') ? '.xls' : '.doc'} vecchi non si possono leggere: aprilo con ${n.endsWith('.xls') ? 'Excel' : 'Word'} e scegli File › Salva con nome › ${n.endsWith('.xls') ? 'Cartella di lavoro di Excel (.xlsx)' : 'Documento di Word (.docx)'}, poi riprova.`);
+    if (/\.(xlsx|xlsm)$/.test(n)) return xlsxTables(file);
+    if (/\.(csv|txt)$/.test(n)) return csvTable(await file.text());
+    if (/\.docx$/.test(n)) {
+      const tabs = (await docxTables(file)).map((rows, i) => ({ name: `Tabella ${i + 1}`, rows: rows.map(r => r.map(c => String(c || '').replace(/\s+/g, ' ').trim())) })).filter(t => t.rows.length);
+      if (tabs.length) return tabs;
+      throw new Error('Nel documento Word non ho trovato tabelle: i clienti devono essere in una tabella (una riga per cliente).');
+    }
+    throw new Error('Formato non riconosciuto: usa un file Excel (.xlsx), Word (.docx) o .csv.');
+  }
+  // ---- riconoscimento delle colonne ----
+  const RXD = /^\d{1,2}[\/.\-]\d{1,2}[\/.\-]\d{2,4}$/, RXT = /^\+?[\d\s\/.\-]{8,16}$/, RXM = /@/, RXCF = /^[A-Z]{6}\d{2}[A-Z]\d{2}[A-Z]\d{3}[A-Z]$|^\d{11}$/i;
+  function guessTable(tab) {
+    const rows = tab.rows.filter(r => r.some(c => String(c).trim()));
+    let best = { score: 0, i: -1, map: [] };
+    rows.slice(0, 12).forEach((r, i) => {
+      const used = new Set(); const map = r.map(c => { const h = nk(c); if (!h || h.length > 40) return ''; const f = (HDR.find(([k, rx]) => !used.has(k) && rx.test(h)) || [])[0] || ''; if (f) used.add(f); return f; });
+      const score = map.filter(Boolean).length + (map.includes('cognome') || map.includes('cn') ? 2 : 0);
+      if (score > best.score) best = { score, i, map };
+    });
+    const width = Math.max(0, ...rows.map(r => r.length));
+    let head = best.score >= 2 ? best.i : -1, map = head >= 0 ? best.map : [];
+    const body = rows.slice(head + 1);
+    map = Array.from({ length: width }, (_, c) => map[c] || '');
+    // colonne senza intestazione riconosciuta: si guarda il contenuto
+    const used = new Set(map.filter(Boolean));
+    for (let c = 0; c < width; c++) {
+      if (map[c]) continue;
+      const vals = body.map(r => String(r[c] || '').trim()).filter(Boolean).slice(0, 40); if (!vals.length) continue;
+      const share = rx => vals.filter(v => rx.test(v)).length / vals.length;
+      const isNum = vals.every(v => /^\d+(\.\d+)?$/.test(v));
+      let f = '';
+      if (share(RXM) > .6) f = 'email'; else if (share(RXCF) > .6) f = 'cf'; else if (share(RXD) > .6 || (isNum && vals.every(v => +v > 3000 && +v < 50000))) f = 'nascita';
+      else if (share(RXT) > .6 && vals.some(v => v.replace(/\D/g, '').length >= 9)) f = used.has('tel') ? 'tel2' : 'tel';
+      else if (!isNum && share(/^[A-Za-zÀ-ÿ'`’ .\-]+(\s*x\s*\d+)?$/) > .8) f = !used.has('cognome') && !used.has('cn') ? 'cognome' : !used.has('nome') ? 'nome' : '';
+      if (f && !used.has(f)) { map[c] = f; used.add(f); }
+    }
+    // numero di riga (1, 2, 3…) nella prima colonna: non si importa
+    if (map[0] === '' || map[0] === 'nascita') { const v = body.map(r => String(r[0] || '').trim()).filter(Boolean); if (v.length && v.every((x, i) => /^\d{1,4}$/.test(x))) map[0] = ''; }
+    // «Cognome» con il nome dentro (Rossi Maria) e nessuna colonna «nome»: diventa «cognome e nome»
+    if (map.includes('cognome') && !map.includes('nome')) { const c = map.indexOf('cognome'); const v = body.map(r => String(r[c] || '').trim()).filter(Boolean); if (v.length && v.filter(x => /\S\s+\S/.test(baseCognome(x))).length / v.length > .7) map[c] = 'cn'; }
+    return { head, map, rows };
+  }
+  // ---- normalizzazione dei valori ----
+  function impDate(v) {
+    v = String(v || '').trim(); if (!v) return '';
+    if (/^\d+(\.\d+)?$/.test(v) && +v > 1000 && +v < 60000) { const d = new Date(Date.UTC(1899, 11, 30) + Math.round(+v) * 864e5); return `${String(d.getUTCDate()).padStart(2, '0')}/${String(d.getUTCMonth() + 1).padStart(2, '0')}/${String(d.getUTCFullYear()).slice(2)}`; }
+    let m = /^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2,4})/.exec(v); if (m) return `${m[1].padStart(2, '0')}/${m[2].padStart(2, '0')}/${m[3].slice(-2)}`;
+    m = /^(\d{4})-(\d{2})-(\d{2})/.exec(v); if (m) return `${m[3]}/${m[2]}/${m[1].slice(2)}`;
+    return v;
+  }
+  const impTel = v => { v = String(v || '').trim(); if (/^\d+\.\d+E\+\d+$/i.test(v)) v = String(Math.round(+v)); return v.replace(/[^\d+]/g, ''); };
+  const cap1 = s => String(s || '').trim().replace(/\s+/g, ' ').toLowerCase().replace(/(^|[\s'’\-])(\p{L})/gu, (a, b, c) => b + c.toUpperCase());
+  // «Cognome Nome» scritti insieme: il cognome è la prima parola, oppure le prime due se inizia con
+  // De, Di, Lo, La, Li, Del, Della, Dal, D', San, Santa… (es. «Lo Presti Carlo», «Russo Maria Grazia»)
+  const PART = /^(de|di|da|del|dei|degli|della|dello|delle|dal|dalla|dell|lo|la|li|le|san|santa|santo|mc|mac|van|von|d['’]?)$/i;
+  function splitCN(v) {
+    const w = baseCognome(v).replace(/[,;]/g, ' ').split(/\s+/).filter(Boolean); if (w.length < 2) return [w[0] || '', ''];
+    let k = 1; while (k < w.length - 1 && PART.test(w[k - 1])) k++;
+    if (/^d['’]\S/i.test(w[0])) k = 1;
+    return [w.slice(0, k).join(' '), w.slice(k).join(' ')];
+  }
+  function impRecord(r, map) {
+    const o = {}; map.forEach((f, c) => { if (!f) return; const v = String(r[c] == null ? '' : r[c]).trim(); if (!v) return; o[f] = o[f] ? o[f] + ' ' + v : v; });
+    if (o.cn) { const sp = splitCN(o.cn); if (!o.cognome && !o.nome) { o.cognome = sp[0]; o.nome = sp[1]; } else if (!o.cognome) o.cognome = baseCognome(o.cn); delete o.cn; }
+    if (o.cognome) o.cognome = cap1(baseCognome(o.cognome)); if (o.nome) o.nome = cap1(o.nome.replace(/[-–]\s*$/, ''));
+    if (o.nascita) o.nascita = impDate(o.nascita); if (o.tel) o.tel = impTel(o.tel); if (o.tel2) o.tel2 = impTel(o.tel2);
+    if (o.part) o.part = o.part.toUpperCase(); if (o.cf) o.cf = o.cf.toUpperCase().replace(/\s/g, ''); if (o.natoA) o.natoA = cap1(o.natoA); if (o.citta) o.citta = cap1(o.citta);
+    if (o.email) { const m = /[\w.+-]+@[\w-]+\.[\w.]+/.exec(o.email); o.email = m ? m[0].toLowerCase() : o.email; }
+    return o;
+  }
+  function impPlan() {
+    const I = UI.imp; const tab = I.tabs[I.ti]; const body = tab.rows.slice(I.head + 1);
+    const recs = body.map(r => impRecord(r, I.map)).filter(o => o.cognome && o.nome && !/^(cognome|nome|totale|accompagnat|autist)/i.test(o.cognome));
+    let nuovi = 0, agg = 0, uguali = 0; const seen = new Set(); let dup = 0;
+    recs.forEach(o => { const k = nk(o.cognome + ' ' + o.nome + ' ' + (o.nascita || o.tel || '')); if (seen.has(k)) { o._dup = true; dup++; return; } seen.add(k); const id = findClient(o.cognome, o.nome, o.nascita, o.tel); o._id = id; if (!id) nuovi++; else { const x = clients()[id]; Object.keys(o).some(f => !f.startsWith('_') && o[f] && !x[f]) ? agg++ : uguali++; } });
+    return { recs, nuovi, agg, uguali, dup, scarti: body.filter(r => r.some(c => String(c).trim())).length - recs.length - dup };
+  }
+  // ---- finestra di importazione ----
+  async function impOpenFile(file) {
+    try {
+      const tabs = await readClientFile(file);
+      const guesses = tabs.map(guessTable); let ti = 0, bs = -1;
+      guesses.forEach((g, i) => { const s = g.map.filter(Boolean).length * 10 + Math.min(g.rows.length, 500) / 100 + (g.map.includes('cognome') || g.map.includes('cn') ? 50 : 0); if (s > bs) { bs = s; ti = i; } });
+      UI.imp = { file: file.name, tabs: guesses.map((g, i) => ({ name: tabs[i].name, rows: g.rows })), guesses, ti, head: guesses[ti].head, map: guesses[ti].map.slice() };
+      DIAG.ev('import', `Anagrafica: letto il file ${file.name}`, { tabelle: tabs.length, righe: guesses[ti].rows.length, colonne: guesses[ti].map });
+      impModal();
+    } catch (e) { toast(e.message || 'Non riesco a leggere il file'); DIAG.ev('import', 'Anagrafica: file non letto ' + file.name + ' · ' + (e.message || e), { stack: e.stack }); }
+  }
+  function impModal() {
+    const I = UI.imp; const tab = I.tabs[I.ti]; const P = impPlan(); const width = I.map.length;
+    const prev = tab.rows.slice(I.head + 1, I.head + 9);
+    UI.modal = { kind: 'imp' };
+    openModal(`Importa clienti · ${esc(I.file)}`, `
+      ${I.tabs.length > 1 ? `<div class="field"><label for="imp-tab">Foglio o tabella</label><select id="imp-tab" data-impt="1">${I.tabs.map((t, i) => `<option value="${i}"${i === I.ti ? ' selected' : ''}>${esc(t.name)} · ${t.rows.length} righe</option>`).join('')}</select></div>` : ''}
+      <div class="infobox">Controlla la riga grigia: sopra ogni colonna c'è cosa contiene. Se è sbagliato, cambialo dal menu. Le colonne «— non importare —» si saltano.</div>
+      <label class="chk"><input type="checkbox" data-imph="1"${I.head >= 0 ? ' checked' : ''}> La prima riga è l'intestazione (non è un cliente)${I.head >= 0 ? `: «${esc(tab.rows[I.head].filter(Boolean).slice(0, 5).join(' · '))}»` : ''}</label>
+      <div class="imp-w"><table class="imp-t"><thead><tr><th class="res">Risultato</th>${Array.from({ length: width }, (_, c) => `<th><select data-impc="${c}" aria-label="Colonna ${c + 1}">${IMPF.map(([k, l]) => `<option value="${k}"${I.map[c] === k ? ' selected' : ''}>${l}</option>`).join('')}</select></th>`).join('')}</tr></thead>
+        <tbody>${prev.map(r => { const o = impRecord(r, I.map); return `<tr><td class="res">${o.cognome && o.nome ? `<b>${esc(o.cognome)}</b> ${esc(o.nome)}${o.nascita ? '<br><small>' + esc(o.nascita) + '</small>' : ''}` : '<small>saltata</small>'}</td>${Array.from({ length: width }, (_, c) => `<td class="${I.map[c] ? '' : 'off'}">${esc(String(r[c] || '').slice(0, 40))}</td>`).join('')}</tr>`; }).join('')}</tbody></table></div>
+      <div class="imp-sum"><div><b>${P.recs.length - P.dup}</b><span>clienti nel file</span></div><div><b>${P.nuovi}</b><span>nuovi</span></div><div><b>${P.agg}</b><span>già presenti, si completano</span></div><div><b>${P.uguali}</b><span>già presenti, uguali</span></div></div>
+      ${P.scarti > 0 || P.dup ? `<div class="small">${P.scarti > 0 ? `${P.scarti} righe senza cognome o nome saltate. ` : ''}${P.dup ? `${P.dup} righe ripetute nel file contate una volta sola.` : ''}</div>` : ''}
+      ${!I.map.includes('cognome') && !I.map.includes('cn') ? '<div class="warnbox">Scegli quale colonna contiene il cognome (o «Cognome e nome insieme»).</div>' : ''}
+      <div class="small">Per i clienti già presenti si riempiono solo i dati mancanti: niente di quello che c'è già viene cambiato.</div>`,
+      `<button class="btn" data-act="close">Annulla</button><button class="btn primary" data-act="impgo"${P.nuovi + P.agg ? '' : ' disabled'}>Importa ${P.nuovi + P.agg} clienti</button>`, true);
+  }
+  function impInput(el) {
+    const I = UI.imp; if (!I) return false; const d = el.dataset;
+    if (d.impc !== undefined) { const f = el.value; if (f) I.map = I.map.map((x, i) => (x === f && i !== +d.impc && f !== 'note' ? '' : x)); I.map[+d.impc] = f; impModal(); return true; }
+    if (d.imph) { I.head = el.checked ? Math.max(0, I.guesses[I.ti].head) : -1; impModal(); return true; }
+    if (d.impt) { I.ti = +el.value; I.head = I.guesses[I.ti].head; I.map = I.guesses[I.ti].map.slice(); impModal(); return true; }
+    return false;
+  }
+  function impGo() {
+    if (ACC.can('readonly')) return;
+    const P = impPlan(); let nuovi = 0, agg = 0;
+    P.recs.forEach(o => {
+      if (o._dup) return; let id = findClient(o.cognome, o.nome, o.nascita, o.tel);
+      if (!id) { id = 'c' + uid(); clients()[id] = { cognome: o.cognome, nome: o.nome, nascita: '', natoA: '', tel: '', email: '', indirizzo: '', part: '', pref: '', note: '', since: todayISO(), src: 'import' }; nuovi++; }
+      else { const x = clients()[id]; if (Object.keys(o).some(f => !f.startsWith('_') && o[f] && !x[f])) agg++; }
+      const x = clients()[id];
+      if (o.tel && x.tel && telK(o.tel) !== telK(x.tel) && !x.tel2 && !o.tel2) o.tel2 = o.tel;
+      Object.keys(o).forEach(f => { if (f.startsWith('_') || !o[f]) return; if (!x[f]) x[f] = o[f]; else if (f === 'note' && !String(x.note).includes(o.note)) x.note = (x.note + ' · ' + o.note).slice(0, 500); });
+    });
+    ACC.tlog('info', `Anagrafica: importati da «${UI.imp.file}» ${nuovi} clienti nuovi, ${agg} completati`);
+    UI.imp = null; closeModal(); save(); render(); toast(`Importazione fatta: ${nuovi} clienti nuovi, ${agg} completati`);
   }
 
   // ---------- incassi, cassa del giorno, chiusura e contabilità ----------
@@ -2906,6 +3093,7 @@
     const h = bk.head; const cl = h.cid && S.clients.clienti[h.cid];
     const circ = Q.circuito || (tkOn ? (ACC.sess.ag === 'md' ? 'T.OneMD' : 'T.OneRG') : '');
     return {
+      bigl: cat === 'biglietteria', tour: cat === 'tour',
       doc: cat === 'tour' ? 'fattura' : 'scontrino', cat: autoCat, cliente: `${bkName(bk)} ${bk.persone[0] ? bk.persone[0].nome : ''}`.trim().toUpperCase(),
       desc: `${yy2(t.data)} ${t.nome}`.toLowerCase(), lines: groups, suppl: r2(suppl), dir, circuito: circ, emis: todayISO(), ant: false,
       imp: m.rest != null && m.rest > 0 ? r2(m.rest) : '', met: 'contanti', mix: {}, pratica: '', canale: 'In agenzia', dataPag: todayISO(), pagante: '', note: '',
@@ -2941,17 +3129,17 @@
       <div class="pp-b">
         <div class="pay-sum"><div><span>Totale</span><b>${m.due != null ? money(m.due) : '—'}</b></div><div><span>Già pagato</span><b>${money(m.paid)}</b></div><div class="hi"><span>Da pagare</span><b>${m.rest != null ? money(m.rest) : '—'}</b></div></div>
         ${m.due == null ? '<div class="warnbox small">Mancano i prezzi del viaggio in testa alla lista: il totale si calcola dalle righe qui sotto.</div>' : ''}
-        <div class="pp-sec"><span class="pp-l">Documento</span><div class="seg wrap" role="radiogroup" aria-label="Documento">${DOCS.map(([k, l]) => `<button type="button" role="radio" data-act="pfdoc" data-k="${k}" aria-pressed="${f.doc === k}">${l}</button>`).join('')}</div></div>
+        <div class="pp-sec"><span class="pp-l">Documento</span><div class="seg wrap" role="radiogroup" aria-label="Documento">${DOCS.filter(([k]) => k !== 'fattura' || f.tour || f.doc === 'fattura').map(([k, l]) => `<button type="button" role="radio" data-act="pfdoc" data-k="${k}" aria-pressed="${f.doc === k}">${l}</button>`).join('')}</div></div>
         <div class="pp-g2"><label>Categoria<select data-pf="cat">${CATS.map(c => `<option${c === f.cat ? ' selected' : ''}>${c}</option>`).join('')}</select></label>
           <label>Cognome e nome<input data-pf="cliente" value="${esc(f.cliente)}" autocomplete="off"></label></div>
         <label class="pp-1">Descrizione<input data-pf="desc" value="${esc(f.desc)}" autocomplete="off"></label>
         ${f.doc === 'fattura' ? `<div class="pp-fatt"><span class="pp-l">Dati per la fattura</span><div class="pp-g2"><label>Codice fiscale o P. IVA<input data-pff="cf" value="${esc(f.fatt.cf)}" autocomplete="off"></label><label>Codice SDI o PEC<input data-pff="sdi" value="${esc(f.fatt.sdi || f.fatt.pec)}" autocomplete="off"></label></div><div class="pp-g3"><label>Indirizzo<input data-pff="ind" value="${esc(f.fatt.ind)}"></label><label>CAP<input data-pff="cap" value="${esc(f.fatt.cap)}" inputmode="numeric"></label><label>Città<input data-pff="citta" value="${esc(f.fatt.citta)}"></label></div></div>` : ''}
-        <table class="pp-lines"><thead><tr><th></th><th>Q</th><th>€ bus</th>${tkOn ? '<th>€ biglietto</th>' : ''}<th class="r">Totale</th></tr></thead><tbody>
-          ${f.lines.map((l, i) => `<tr><td><input class="pf-in lab" data-pl="${i}" data-k="l" value="${esc(l.l)}" aria-label="Riga ${i + 1}"></td><td><input class="pf-in num q" data-pl="${i}" data-k="q" inputmode="numeric" value="${l.q ? esc(String(l.q)) : ''}" aria-label="Quantità riga ${i + 1}"></td><td><input class="pf-in num" data-pl="${i}" data-k="bus" inputmode="decimal" value="${+l.bus ? esc(fmtNum(+l.bus)) : ''}" aria-label="Euro bus riga ${i + 1}"></td>${tkOn ? `<td><input class="pf-in num" data-pl="${i}" data-k="tkt" inputmode="decimal" value="${+l.tkt ? esc(fmtNum(+l.tkt)) : ''}" aria-label="Euro biglietto riga ${i + 1}"></td>` : ''}<td class="r" id="pl-t${i}">${l.q ? money((+l.q) * ((+l.bus || 0) + (+l.tkt || 0))) : ''}</td></tr>`).join('')}
+        <table class="pp-lines"><thead><tr><th></th><th>Q</th>${f.bigl ? '' : '<th>€ bus</th>'}${tkOn ? '<th>€ biglietto</th>' : ''}<th class="r">Totale</th></tr></thead><tbody>
+          ${f.lines.map((l, i) => `<tr><td><input class="pf-in lab" data-pl="${i}" data-k="l" value="${esc(l.l)}" aria-label="Riga ${i + 1}"></td><td><input class="pf-in num q" data-pl="${i}" data-k="q" inputmode="numeric" value="${l.q ? esc(String(l.q)) : ''}" aria-label="Quantità riga ${i + 1}"></td>${f.bigl ? '' : `<td><input class="pf-in num" data-pl="${i}" data-k="bus" inputmode="decimal" value="${+l.bus ? esc(fmtNum(+l.bus)) : ''}" aria-label="Euro bus riga ${i + 1}"></td>`}${tkOn ? `<td><input class="pf-in num" data-pl="${i}" data-k="tkt" inputmode="decimal" value="${+l.tkt ? esc(fmtNum(+l.tkt)) : ''}" aria-label="Euro biglietto riga ${i + 1}"></td>` : ''}<td class="r" id="pl-t${i}">${l.q ? money((+l.q) * ((+l.bus || 0) + (+l.tkt || 0))) : ''}</td></tr>`).join('')}
         </tbody></table>
-        <div class="pp-g3"><label>Suppl. fila €${nIn('suppl', f.suppl)}</label>${tkOn ? `<label>Diritti € (per biglietto)${nIn('dir', f.dir)}</label><label>Circuito<select data-pf="circuito"><option value="">—</option>${CIRCUITI.map(c => `<option${c === f.circuito ? ' selected' : ''}>${c}</option>`).join('')}</select></label>` : ''}</div>
+        <div class="pp-g3">${f.bigl ? '' : `<label>Suppl. fila €${nIn('suppl', f.suppl)}</label>`}${tkOn ? `<label>Diritti € (per biglietto)${nIn('dir', f.dir)}</label><label>Circuito<select data-pf="circuito"><option value="">—</option>${CIRCUITI.map(c => `<option${c === f.circuito ? ' selected' : ''}>${c}</option>`).join('')}</select></label>` : ''}</div>
         ${tkOn ? `<div class="pp-g2"><label>Emissione biglietti<input type="date" data-pf="emis" value="${esc(f.emis)}"></label><label class="chk pp-chk"><input type="checkbox" data-pfc="ant"${f.ant ? ' checked' : ''}> Emissione anticipata</label></div>` : ''}
-        <div class="pp-tot" id="pp-tot">${payTotHTML(T)}</div>
+        <div class="pp-tot" id="pp-tot">${payTotHTML(T, f.bigl)}</div>
         <div class="pp-sec"><span class="pp-l">Incassato adesso</span><input id="pf-imp" class="pf-in num pay-imp" data-pf="imp" inputmode="decimal" value="${f.imp === '' ? '' : esc(fmtNum(+f.imp))}" placeholder="0,00" autocomplete="off"><span class="pay-warn" id="pp-warn" role="status">${payWarnTxt(f, m)}</span></div>
         <div class="pay-met" role="radiogroup" aria-label="Metodo di pagamento">${[...METODI, ['misto', 'Misto']].map(([k, l]) => `<button type="button" role="radio" aria-checked="${f.met === k}" data-act="pfmet" data-k="${k}">${l}</button>`).join('')}</div>
         ${f.met === 'misto' ? `<div class="pp-mix">${METODI.map(([k, l]) => `<div class="pay-row"><span>${l}</span><input data-pfm="${k}" inputmode="decimal" value="${f.mix[k] ? esc(fmtNum(f.mix[k])) : ''}" placeholder="0,00" aria-label="${l}" autocomplete="off"></div>`).join('')}</div>` : ''}
@@ -2963,14 +3151,14 @@
         ${hist.length ? `<div class="pp-sec"><span class="pp-l">Incassi registrati</span><div class="pay-hist">${hist.map(x => `<div class="${x.tipo === 'storno' ? 'neg' : ''}${storn.has(x.id) ? ' gone' : ''}"><span>${esc(fmtDate(x.day).slice(0, 5))} · ${esc(x.who)}<br>${docPill(x)}</span><span>${(x.parts || []).map(p => `<span class="mpill ${MET_C[p.m] || 'm-alt'}">${esc(MET_L[p.m] || p.m)}</span>`).join(' ')}</span><b>${money(x.tot)}</b>${x.tipo !== 'storno' && !storn.has(x.id) && ACC.can('cassa') && (ACC.can('cassaAll') || (x.uid === ACC.sess.uid && x.day === todayISO())) ? `<button class="btn sm ghost" data-act="storno" data-id="${x.id}">Storna</button>` : ''}</div>`).join('')}</div></div>` : ''}
       </div></section>`;
   }
-  function payTotHTML(T) {
-    return `<div><span>Bus</span><b>${money(T.bus)}</b></div>${T.tkt ? `<div><span>Biglietti (${T.nT})</span><b>${money(T.tkt)}</b></div>` : ''}${T.dirT ? `<div><span>Diritti</span><b>${money(T.dirT)}</b></div>` : ''}${T.sup ? `<div><span>Suppl. fila</span><b>${money(T.sup)}</b></div>` : ''}
+  function payTotHTML(T, bigl) {
+    return `${bigl ? '' : `<div><span>Bus</span><b>${money(T.bus)}</b></div>`}${T.tkt ? `<div><span>Biglietti (${T.nT})</span><b>${money(T.tkt)}</b></div>` : ''}${T.dirT ? `<div><span>Diritti</span><b>${money(T.dirT)}</b></div>` : ''}${T.sup ? `<div><span>Suppl. fila</span><b>${money(T.sup)}</b></div>` : ''}
       <div class="tot"><span>Totale</span><b>${money(T.tot)}</b></div><div class="ag"><span>Nello scontrino (parte agenzia)</span><b>${money(T.agenzia)}</b></div>${T.tkt ? `<div><span>Biglietti del circuito, a parte</span><b>${money(T.tkt)}</b></div>` : ''}`;
   }
   function payWarnTxt(f, m) { const v = +f.imp; if (!v || m.rest == null) return ''; return v > m.rest + 0.009 ? (m.rest <= 0 ? 'Attenzione: risulta già pagato tutto.' : `Attenzione: è più del dovuto di ${money(v - m.rest)}.`) : v < m.rest - 0.009 ? `Acconto: restano ${money(m.rest - v)}.` : ''; }
   // aggiorna i totali senza ridisegnare il riquadro (così non si perde il cursore)
   function payRecalc() {
-    const f = UI.pay && UI.pay.f; if (!f) return; const T = payTotals(f); const el = $('#pp-tot'); if (el) el.innerHTML = payTotHTML(T);
+    const f = UI.pay && UI.pay.f; if (!f) return; const T = payTotals(f); const el = $('#pp-tot'); if (el) el.innerHTML = payTotHTML(T, f.bigl);
     f.lines.forEach((l, i) => { const c = $('#pl-t' + i); if (c) c.textContent = l.q ? money((+l.q) * ((+l.bus || 0) + (+l.tkt || 0))) : ''; });
     const t = trip(); const bk = t && deriveBookings(t).find(x => x.id === UI.pay.bkId); const w = $('#pp-warn'); if (w && bk) w.textContent = payWarnTxt(f, bkMoney(t, bk));
   }
@@ -3289,7 +3477,7 @@
 
   // ---------- render ----------
   const FOCUS_KEYS = ['hq', 'aq', 'r', 'ar', 'nr', 'f', 'q', 'qs', 'qt', 'tf', 'dep2', 'dep', 'k', 'bind', 'cl', 'cfgag', 'cfgl', 'pf', 'pl', 'pff', 'pfm', 'usig'];
-  const ACT_PERM = { unew: 'users', unewm: 'tech', ureset: 'users', usave: 'users', resetall: 'tech', doresetall: 'tech', savekeys: 'tech', wipelocal: 'tech', lgf: 'tech', lexport: 'tech', diagexport: 'tech', lnew: 'settings', ldel: 'settings', savewa: 'settings', savetel: 'settings', export: 'settings', pay: 'cassa', paypanel: 'viaggi', pfsave: 'cassa', cashmov: 'cassa', cashsave: 'cassa', storno: 'cassa', cclose: 'cassa', ccsave: 'cassa', clnew: 'anag', cldel: 'anag', newtrip: 'viaggi', deltrip: 'viaggi' };
+  const ACT_PERM = { unew: 'users', unewm: 'tech', ureset: 'users', usave: 'users', resetall: 'tech', doresetall: 'tech', savekeys: 'tech', wipelocal: 'tech', lgf: 'tech', lexport: 'tech', diagexport: 'tech', lnew: 'settings', ldel: 'settings', savewa: 'settings', savetel: 'settings', export: 'settings', pay: 'cassa', paypanel: 'viaggi', pfsave: 'cassa', cashmov: 'cassa', cashsave: 'cassa', storno: 'cassa', cclose: 'cassa', ccsave: 'cassa', clnew: 'anag', cldel: 'anag', impgo: 'anag', newtrip: 'viaggi', deltrip: 'viaggi' };
   const VIEW_PERM = { home: 'viaggi', models: 'viaggi', trip: 'viaggi', anag: 'anag', conta: 'conta', super: 'tech' };
   let lastNav = '', lastSess = '';
   function render() {
@@ -3519,6 +3707,7 @@
       // anagrafica
       case 'clsel': UI.cl = el.dataset.id; render(); break;
       case 'clnew': { const id = 'c' + uid(); S.clients.clienti[id] = { cognome: '', nome: '', nascita: '', natoA: '', tel: '', email: '', indirizzo: '', part: '', pref: '', note: '', since: todayISO() }; UI.cl = id; UI.aq = ''; save(); render(); const f = $('[data-cl="cognome"]'); if (f) f.focus(); break; }
+      case 'impgo': impGo(); break;
       case 'cldel': { const id = el.dataset.id; const x = S.clients.clienti[id]; confirmBox('Elimina cliente', `Tolgo ${esc(x.cognome)} ${esc(x.nome)} dall'anagrafica? Le liste dei viaggi non cambiano.`, 'Elimina', () => { delete S.clients.clienti[id]; UI.cl = null; save(); render(); }); break; }
       case 'acpick': acPick(el.dataset.id); break;
       // incassi e cassa
@@ -3673,6 +3862,8 @@
   });
   document.addEventListener('change', e => {
     const el = e.target; const t = trip(); const b = bus(); const d = el.dataset;
+    if (d.impfile) { if (!ACC.can('anag') || ACC.can('readonly')) return; const f = el.files && el.files[0]; el.value = ''; if (f) impOpenFile(f); return; }
+    if ((d.impc !== undefined || d.imph || d.impt) && UI.imp) { impInput(el); return; }
     if (d.r && t) { const r = rowById(t, d.r); if (r && !AC.el) upsertFromRow(r); save(); later(); return; }
     if ((d.ar || d.nr || d.q || d.qs || d.qt || d.tf) && t) { later(); return; }
     if (d.cl) { later(); return; }

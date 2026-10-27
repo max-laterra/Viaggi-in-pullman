@@ -1048,3 +1048,17 @@ input.btn[type=date],input.btn[type=month]{font:600 14px var(--sans);color:var(-
 .diag .dg-row{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:end}
 .diag .dg-row label{display:flex;flex-direction:column;gap:4px;font-size:13px;font-weight:600}
 .diag .dg-row label.chk{flex-direction:row;align-items:center;font-weight:500}
+/* importazione anagrafica */
+.imp-w{overflow:auto;max-height:340px;border:1px solid var(--line);border-radius:10px;margin:8px 0}
+.imp-t{border-collapse:collapse;font-size:12.5px;min-width:100%}
+.imp-t th{position:sticky;top:0;background:var(--surface-2);padding:6px 4px;border-bottom:1px solid var(--line)}
+.imp-t th select{font:inherit;font-size:12px;padding:4px 6px;border-radius:7px;border:1px solid var(--line);background:var(--surface);min-width:120px}
+.imp-t td{padding:5px 8px;border-bottom:1px solid var(--line);white-space:nowrap;max-width:220px;overflow:hidden;text-overflow:ellipsis}
+.imp-t td.off{color:var(--ink-3);opacity:.55}
+.imp-sum{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:10px 0}
+.imp-sum div{background:var(--surface-2);border-radius:12px;padding:8px 10px;display:flex;flex-direction:column}
+.imp-sum b{font-size:20px}.imp-sum span{font-size:12px;color:var(--ink-3)}
+@media (max-width:600px){.imp-sum{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+.imp-t .res{background:#F2F8F3;min-width:150px;white-space:normal;text-align:left}
+.imp-t th.res{font-size:12px;color:var(--ink-3)}

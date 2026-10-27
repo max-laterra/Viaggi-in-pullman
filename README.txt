@@ -1,7 +1,7 @@
 VIAGGI IN PULLMAN · LA TERRA
 ============================
 
-Versione: 1.2.1
+Versione: 1.3
 Pacchetto creato il: 27/10/2026
 
 Come installarla o aggiornarla: vedi LEGGIMI.txt.
@@ -9,6 +9,17 @@ Aggiornamento: carica su GitHub TUTTI i file, config.js compreso (contiene già 
 
 MODIFICHE
 ---------
+
+VERSIONE 1.3 · 27/10/2026
+- Biglietteria eventi (senza bus): nel riquadro «Incasso e documento» non ci sono più la colonna
+  «€ bus», la riga «Bus» nei totali e il supplemento fila. Restano biglietto, diritti e circuito.
+- Il documento «Fattura» si sceglie solo nei tour: in gite giornaliere, eventi e biglietteria restano
+  Scontrino, Caparra e Senza documento.
+- Anagrafica: pulsante «Importa da Word o Excel» (file .xlsx, .docx con tabella, .csv). L'app riconosce
+  da sola le colonne (cognome, nome, data di nascita, cellulare, email, indirizzo, città, codice fiscale…),
+  mostra l'anteprima e si può correggere ogni colonna prima di importare. I clienti già presenti si
+  completano senza cambiare i dati che ci sono già; le righe ripetute nel file contano una volta sola.
+- Scheda cliente: nuovi campi CAP, Città, Codice fiscale / P. IVA e Codice SDI o PEC (servono per le fatture).
 
 VERSIONE 1.2.1 · 27/10/2026
 - La chiave dell'app Dropbox è già scritta nel config.js del pacchetto: negli aggiornamenti si caricano
