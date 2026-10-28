@@ -1,7 +1,7 @@
 VIAGGI IN PULLMAN · LA TERRA
 ============================
 
-Versione: 1.3
+Versione: 1.3.1
 Pacchetto creato il: 27/10/2026
 
 Come installarla o aggiornarla: vedi LEGGIMI.txt.
@@ -9,6 +9,14 @@ Aggiornamento: carica su GitHub TUTTI i file, config.js compreso (contiene già 
 
 MODIFICHE
 ---------
+
+VERSIONE 1.3.1 · 27/10/2026
+- Importazione clienti: nell'anteprima le date di nascita si vedono già giuste (es. 20/06/75) anche
+  quando Excel le salva come numero (27565), e i cellulari senza spazi.
+- Anagrafica molto grande (decine di migliaia di clienti): ora è divisa in 32 file su Dropbox, così
+  modificare un cliente invia solo una piccola parte dell'anagrafica e non tutta. Il passaggio dal
+  vecchio file unico avviene da solo alla prima apertura, senza perdere clienti.
+- Ricerca, suggerimenti mentre scrivi nella lista e importazione molto più veloci con tanti clienti.
 
 VERSIONE 1.3 · 27/10/2026
 - Biglietteria eventi (senza bus): nel riquadro «Incasso e documento» non ci sono più la colonna

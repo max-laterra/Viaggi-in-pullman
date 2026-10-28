@@ -1,6 +1,6 @@
 (function () {
   'use strict';
-  const VERSION = '1.3';
+  const VERSION = '1.3.1';
   const LOGO = './logo.jpg';
   const KEY = 'laterra.prenotazioniPosti.v1';
   const $ = (s, r = document) => r.querySelector(s);
@@ -286,6 +286,45 @@
   let S = null;
   const UI = { year: null, cat: 'tutte', hidePast: false, hq: '', view: 'home', tripId: null, busId: null, sec: 'lista', sel: null, selP: null, move: null, filter: 'prossime', modal: null, cartOrder: 'posto', dock: true, onlyFree: false };
   const P = { trip: id => `/viaggi/${id}.json`, users: '/config/utenti.json', cfg: '/config/impostazioni.json', clients: '/anagrafica/clienti.json' };
+  // L'anagrafica può avere decine di migliaia di clienti: si divide in 32 file, così modificare un cliente
+  // invia a Dropbox solo il suo file (circa 1/32 dell'anagrafica) e non tutta. Il vecchio file unico
+  // (/anagrafica/clienti.json, versioni fino alla 1.3) si legge ancora e si svuota dopo il passaggio.
+  const NSH = 32;
+  const shardPath = i => `/anagrafica/clienti-${String(i).padStart(2, '0')}.json`;
+  const shardOf = id => { let h = 0x811c9dc5; for (let i = 0; i < id.length; i++) h = Math.imul(h ^ id.charCodeAt(i), 16777619); return (h >>> 0) % NSH; };
+  let legacyClients = false, lastCStamp = 0;
+  function readClients() {
+    const out = {}, gone = {};
+    const add = d => { if (!d) return; Object.entries(d.gone || {}).forEach(([id, ts]) => { gone[id] = Math.max(gone[id] || 0, ts); }); Object.entries(d.clienti || {}).forEach(([id, x]) => { const y = out[id]; if (!y || (+x.u || 0) >= (+y.u || 0)) out[id] = x; }); };
+    // nel vecchio file, dopo il passaggio, le «cancellazioni» vogliono dire solo «spostato nei 32 file»: non valgono per i clienti spostati
+    const leg = STORE.get(P.clients); if (leg) add(leg.spostato ? { clienti: leg.clienti } : leg);
+    legacyClients = !!(leg && Object.keys(leg.clienti || {}).length);
+    for (let i = 0; i < NSH; i++) add(STORE.get(shardPath(i)));
+    Object.keys(out).forEach(id => { if (gone[id] && gone[id] >= (+out[id].u || 0)) delete out[id]; });
+    Object.keys(gone).forEach(id => { if (out[id]) delete gone[id]; });
+    return JSON.parse(JSON.stringify({ clienti: out, gone }));
+  }
+  // come stampMap, ma salva solo i file dei clienti cambiati
+  function flushClients(force) {
+    if (!force && !legacyClients && Date.now() - lastCStamp < 2000) { clearTimeout(flushClients.t); flushClients.t = setTimeout(() => flushClients(true), 2100); return; }
+    lastCStamp = Date.now();
+    const obj = S.clients, now = tick(), prev = MSNAP.clients || {}, cur = obj.clienti || {}; const dirtyS = new Set();
+    Object.keys(cur).forEach(id => { const j = itemJSON(cur[id]); if (prev[id] !== j) { cur[id].u = now; prev[id] = itemJSON(cur[id]); dirtyS.add(shardOf(id)); } });
+    Object.keys(prev).forEach(id => { if (!(id in cur)) { obj.gone = obj.gone || {}; obj.gone[id] = now; delete prev[id]; dirtyS.add(shardOf(id)); } });
+    MSNAP.clients = prev;
+    if (legacyClients) { for (let i = 0; i < NSH; i++) dirtyS.add(i); }
+    dirtyS.forEach(i => {
+      const part = { clienti: {}, gone: {}, u: now };
+      Object.keys(cur).forEach(id => { if (shardOf(id) === i) part.clienti[id] = cur[id]; });
+      Object.keys(obj.gone || {}).forEach(id => { if (shardOf(id) === i) part.gone[id] = obj.gone[id]; });
+      STORE.put(shardPath(i), part);
+    });
+    if (legacyClients) {
+      const leg = STORE.get(P.clients) || {}; const g = {}; Object.keys(leg.clienti || {}).forEach(id => { g[id] = now; });
+      STORE.put(P.clients, { clienti: {}, gone: g, u: now, spostato: 'in /anagrafica/clienti-00…31.json dalla versione 1.3.1' });
+      legacyClients = false; DIAG.ev('sync', `Anagrafica divisa in ${NSH} file (${Object.keys(cur).length} clienti)`);
+    }
+  }
   const AGENZIE_DEF = [{ id: 'rg', nome: 'Ragusa', cassa: 'Cassa Ragusa', indirizzo: '' }, { id: 'md', nome: 'Modica', cassa: 'Cassa Modica', indirizzo: '' }, { id: 'mr', nome: 'Marina di Ragusa', cassa: 'Cassa Marina di Ragusa', indirizzo: '' }];
   const DEF_CFG = () => ({ u: 0, agenzie: JSON.parse(JSON.stringify(AGENZIE_DEF)), luoghi: [], waTemplate: '', postoUrl: '', telAgenzia: '', seeded: [] });
   // Viaggi del 2027 presi da «Elenco_2027_49.xlsm» (foglio Elenco), eventi e concerti compresi
@@ -334,10 +373,11 @@
 
   function load() {
     const trips = STORE.list('/viaggi/').map(([, d]) => d).filter(t => t && t.id && !t.deleted).map(t => tripInit(JSON.parse(JSON.stringify(t))));
-    S = { trips, cfg: Object.assign(DEF_CFG(), STORE.get(P.cfg) || {}), users: STORE.get(P.users) ? JSON.parse(JSON.stringify(STORE.get(P.users))) : { users: {} }, clients: STORE.get(P.clients) ? JSON.parse(JSON.stringify(STORE.get(P.clients))) : { clienti: {} } };
+    S = { trips, cfg: Object.assign(DEF_CFG(), STORE.get(P.cfg) || {}), users: STORE.get(P.users) ? JSON.parse(JSON.stringify(STORE.get(P.users))) : { users: {} }, clients: readClients() };
     S.users.users = S.users.users || {}; S.clients.clienti = S.clients.clienti || {};
     if (!Array.isArray(S.cfg.agenzie) || !S.cfg.agenzie.length) S.cfg.agenzie = JSON.parse(JSON.stringify(AGENZIE_DEF));
     S.trips.forEach(t => { seeU(t); snap(t); }); seeU(S.users); seeU(S.clients); snapMaps();
+    if (legacyClients) setTimeout(save, 0);
   }
   // i viaggi dell'elenco 2027 si aggiungono una volta sola per tutto l'archivio (stesso codice su tutti i computer)
   function seedCatalog() {
@@ -359,10 +399,10 @@
     clearTimeout(saveT); if (!S) return;
     S.trips.forEach(t => { if (stamp(t)) STORE.put(P.trip(t.id), persistForm(t)); });
     if (stampMap(S.users, 'users', 'users')) STORE.put(P.users, S.users);
-    if (stampMap(S.clients, 'clienti', 'clients')) STORE.put(P.clients, S.clients);
+    flushClients(false);
     const cj = itemJSON(S.cfg); if (cj !== MSNAP.cfg) { S.cfg.u = tick(); MSNAP.cfg = itemJSON(S.cfg); STORE.put(P.cfg, S.cfg); }
   }
-  window.addEventListener('beforeunload', () => { try { flush(); } catch (e) { /* niente */ } });
+  window.addEventListener('beforeunload', () => { try { flush(); flushClients(true); } catch (e) { /* niente */ } });
   function deleteTrip(id) {
     S.trips = S.trips.filter(x => x.id !== id); SNAP.delete(id);
     STORE.put(P.trip(id), { id, deleted: true, u: tick(), tu: HLC });
@@ -370,7 +410,7 @@
   // arrivano modifiche da un altro computer: si uniscono con quelle di questo, senza perdere niente
   function applyRemote(paths) {
     if (!S) return;
-    let touched = false;
+    let touched = false, clientsDone = false;
     paths.forEach(p => {
       const d = STORE.get(p);
       if (p.startsWith('/viaggi/')) {
@@ -381,8 +421,10 @@
         const nt = tripInit(JSON.parse(JSON.stringify(merged)));
         if (i >= 0) S.trips[i] = nt; else S.trips.push(nt);
         snap(nt); touched = true;
-      } else if (p === P.users || p === P.clients || p === P.cfg) {
-        const name = p === P.users ? 'users' : p === P.clients ? 'clients' : 'cfg';
+      } else if (p.startsWith('/anagrafica/')) {
+        if (!clientsDone) { clientsDone = true; flush(); flushClients(true); S.clients = readClients(); seeU(S.clients); snapMaps(); touched = true; if (legacyClients) save(); }
+      } else if (p === P.users || p === P.cfg) {
+        const name = p === P.users ? 'users' : 'cfg';
         flush();
         const dd = STORE.get(p); seeU(dd);
         const merged = name === 'cfg' ? dd : STORE.mergeFor(p)(JSON.parse(JSON.stringify(S[name])), dd);
@@ -2187,7 +2229,7 @@
   //   /viaggi/<id>.json                   un file per viaggio (lista, attesa, annullati, bus e posti)
   //   /config/utenti.json                 account, ruoli, agenzie permesse, impronte delle password
   //   /config/impostazioni.json           agenzie e casse, luoghi di partenza, testi WhatsApp
-  //   /anagrafica/clienti.json            anagrafica clienti
+  //   /anagrafica/clienti-00…31.json      anagrafica clienti, divisa in 32 file (ogni cliente sta sempre nello stesso file)
   //   /cassa/aaaa-mm/aaaa-mm-gg_<pc>.json incassi registrati da ogni computer (ognuno scrive solo i suoi)
   //   /cassa/chiusure/aaaa-mm-gg_<ag>.json chiusure di cassa
   //   /programmi/<id-viaggio>/<file>      PDF o foto del programma
@@ -2275,7 +2317,7 @@
     function mergeFor(path) {
       if (path.startsWith('/viaggi/')) return mergeTrip;
       if (path === '/config/utenti.json') return mergeMap('users');
-      if (path === '/anagrafica/clienti.json') return mergeMap('clienti');
+      if (path.startsWith('/anagrafica/')) return mergeMap('clienti');
       if (path.startsWith('/cassa/movimenti/')) return mergeUnion('movs');
       if (path.startsWith('/registro/') && !path.startsWith('/registro/dispositivi/')) return mergeUnion('ev');
       return lww;
@@ -2611,9 +2653,18 @@
   const nk = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
   const baseCognome = cg => { const m = RX.exec(String(cg || '').trim()); return (m ? m[1] : String(cg || '')).trim(); };
   const telK = s => String(s || '').replace(/\D/g, '').replace(/^(0039|39)(?=3\d{8,9}$)/, '');
-  function findClient(cg, nm, nascita, tel) {
+  // chiavi di ricerca dei clienti, ricalcolate solo quando un cliente cambia (l'anagrafica può essere molto grande)
+  const CK = new Map();
+  function ckey(id, x) {
+    const raw = `${x.cognome}|${x.nome}|${x.tel}|${x.natoA}|${x.part}|${x.email}|${x.citta || ''}`; let k = CK.get(id);
+    if (!k || k.raw !== raw) { k = { raw, c: nk(x.cognome), n: nk(x.nome), t: telK(x.tel) }; k.cn = k.c + ' ' + k.n; k.s = nk(`${x.cognome} ${x.nome} ${x.tel} ${x.natoA} ${x.part} ${x.email} ${x.citta || ''}`); CK.set(id, k); }
+    return k;
+  }
+  // indice cognome+nome → clienti, per cercare in fretta tra decine di migliaia
+  function clientIx() { const ix = new Map(); Object.entries(clients()).forEach(([id, x]) => { const k = ckey(id, x).cn; const a = ix.get(k); if (a) a.push(id); else ix.set(k, [id]); }); return ix; }
+  function findClient(cg, nm, nascita, tel, ix) {
     const c = nk(baseCognome(cg)), n = nk(nm); if (!c || !n) return null;
-    const same = Object.entries(clients()).filter(([, x]) => nk(x.cognome) === c && nk(x.nome) === n);
+    const same = ix ? (ix.get(c + ' ' + n) || []).map(id => [id, clients()[id]]).filter(([, x]) => x) : Object.entries(clients()).filter(([id, x]) => { const k = ckey(id, x); return k.c === c && k.n === n; });
     if (!same.length) return null;
     const byN = nascita && same.find(([, x]) => x.nascita && x.nascita === nascita); if (byN) return byN[0];
     const byT = tel && same.find(([, x]) => telK(x.tel) && telK(x.tel) === telK(tel)); if (byT) return byT[0];
@@ -2655,8 +2706,8 @@
     const cgq = nk(baseCognome(f === 'cognome' ? input.value : r.cognome)), nmq = nk(f === 'nome' ? input.value : '');
     if (cgq.length < 2 && !(f === 'nome' && cgq)) return acClose();
     const ix = AC.ix || (AC.ix = { at: 0 }); if (Date.now() - ix.at > 15000) { AC.cnt = {}; Object.entries(clientIndex()).forEach(([id, a]) => { AC.cnt[id] = a.length; }); ix.at = Date.now(); }
-    const items = Object.entries(clients()).filter(([, x]) => nk(x.cognome).startsWith(cgq) && (!nmq || nk(x.nome).startsWith(nmq)))
-      .sort((a, b) => (AC.cnt[b[0]] || 0) - (AC.cnt[a[0]] || 0) || nk(a[1].cognome + ' ' + a[1].nome).localeCompare(nk(b[1].cognome + ' ' + b[1].nome))).slice(0, 6);
+    const items = Object.entries(clients()).filter(([id, x]) => { const k = ckey(id, x); return k.c.startsWith(cgq) && (!nmq || k.n.startsWith(nmq)); })
+      .sort((a, b) => (AC.cnt[b[0]] || 0) - (AC.cnt[a[0]] || 0) || ckey(a[0], a[1]).cn.localeCompare(ckey(b[0], b[1]).cn)).slice(0, 6);
     if (!items.length || (items.length === 1 && r.cid === items[0][0] && nk(r.nome) === nk(items[0][1].nome))) return acClose();
     AC.items = items; AC.i = 0; AC.rowId = r.id; AC.f = f;
     if (!AC.el) { AC.el = document.createElement('div'); AC.el.className = 'acbox'; AC.el.setAttribute('role', 'listbox'); AC.el.setAttribute('aria-label', 'Clienti già in anagrafica'); document.body.appendChild(AC.el); }
@@ -2690,11 +2741,12 @@
   // ---- pagina Anagrafica ----
   function anagView() {
     const q = nk(UI.aq || ''); const ix = clientIndex();
-    let list = Object.entries(clients()).filter(([, x]) => !q || nk(`${x.cognome} ${x.nome} ${x.tel} ${x.natoA} ${x.part} ${x.email}`).includes(q) || telK(x.tel).includes(q.replace(/\D/g, '') || '§'));
-    list.sort((a, b) => nk(a[1].cognome + ' ' + a[1].nome).localeCompare(nk(b[1].cognome + ' ' + b[1].nome)));
+    const qd = q.replace(/\D/g, '');
+    let list = Object.entries(clients()).filter(([id, x]) => { if (!q) return true; const k = ckey(id, x); return k.s.includes(q) || (qd.length >= 3 && k.t.includes(qd)); });
+    list.sort((a, b) => { const x = ckey(a[0], a[1]).cn, y = ckey(b[0], b[1]).cn; return x < y ? -1 : x > y ? 1 : 0; });
     const tot = Object.keys(clients()).length;
     if (!UI.cl || !clients()[UI.cl]) UI.cl = list[0] ? list[0][0] : null;
-    const groups = []; list.slice(0, 400).forEach(([id, x]) => { const l = (nk(x.cognome)[0] || '#').toUpperCase(); let g = groups[groups.length - 1]; if (!g || g.l !== l) { g = { l, items: [] }; groups.push(g); } g.items.push([id, x]); });
+    const groups = []; list.slice(0, 400).forEach(([id, x]) => { const l = (ckey(id, x).c[0] || '#').toUpperCase(); let g = groups[groups.length - 1]; if (!g || g.l !== l) { g = { l, items: [] }; groups.push(g); } g.items.push([id, x]); });
     const sel = UI.cl && clients()[UI.cl]; const hist = (sel && ix[UI.cl]) || [];
     const ro = ACC.can('readonly');
     const paidOf = h => { const m = bkMoney(h.t, h.bk); return m; };
@@ -2845,8 +2897,8 @@
   function impPlan() {
     const I = UI.imp; const tab = I.tabs[I.ti]; const body = tab.rows.slice(I.head + 1);
     const recs = body.map(r => impRecord(r, I.map)).filter(o => o.cognome && o.nome && !/^(cognome|nome|totale|accompagnat|autist)/i.test(o.cognome));
-    let nuovi = 0, agg = 0, uguali = 0; const seen = new Set(); let dup = 0;
-    recs.forEach(o => { const k = nk(o.cognome + ' ' + o.nome + ' ' + (o.nascita || o.tel || '')); if (seen.has(k)) { o._dup = true; dup++; return; } seen.add(k); const id = findClient(o.cognome, o.nome, o.nascita, o.tel); o._id = id; if (!id) nuovi++; else { const x = clients()[id]; Object.keys(o).some(f => !f.startsWith('_') && o[f] && !x[f]) ? agg++ : uguali++; } });
+    let nuovi = 0, agg = 0, uguali = 0; const seen = new Set(); let dup = 0; const ix = clientIx();
+    recs.forEach(o => { const k = nk(o.cognome + ' ' + o.nome + ' ' + (o.nascita || o.tel || '')); if (seen.has(k)) { o._dup = true; dup++; return; } seen.add(k); const id = findClient(o.cognome, o.nome, o.nascita, o.tel, ix); o._id = id; if (!id) nuovi++; else { const x = clients()[id]; Object.keys(o).some(f => !f.startsWith('_') && o[f] && !x[f]) ? agg++ : uguali++; } });
     return { recs, nuovi, agg, uguali, dup, scarti: body.filter(r => r.some(c => String(c).trim())).length - recs.length - dup };
   }
   // ---- finestra di importazione ----
@@ -2869,7 +2921,7 @@
       <div class="infobox">Controlla la riga grigia: sopra ogni colonna c'è cosa contiene. Se è sbagliato, cambialo dal menu. Le colonne «— non importare —» si saltano.</div>
       <label class="chk"><input type="checkbox" data-imph="1"${I.head >= 0 ? ' checked' : ''}> La prima riga è l'intestazione (non è un cliente)${I.head >= 0 ? `: «${esc(tab.rows[I.head].filter(Boolean).slice(0, 5).join(' · '))}»` : ''}</label>
       <div class="imp-w"><table class="imp-t"><thead><tr><th class="res">Risultato</th>${Array.from({ length: width }, (_, c) => `<th><select data-impc="${c}" aria-label="Colonna ${c + 1}">${IMPF.map(([k, l]) => `<option value="${k}"${I.map[c] === k ? ' selected' : ''}>${l}</option>`).join('')}</select></th>`).join('')}</tr></thead>
-        <tbody>${prev.map(r => { const o = impRecord(r, I.map); return `<tr><td class="res">${o.cognome && o.nome ? `<b>${esc(o.cognome)}</b> ${esc(o.nome)}${o.nascita ? '<br><small>' + esc(o.nascita) + '</small>' : ''}` : '<small>saltata</small>'}</td>${Array.from({ length: width }, (_, c) => `<td class="${I.map[c] ? '' : 'off'}">${esc(String(r[c] || '').slice(0, 40))}</td>`).join('')}</tr>`; }).join('')}</tbody></table></div>
+        <tbody>${prev.map(r => { const o = impRecord(r, I.map); return `<tr><td class="res">${o.cognome && o.nome ? `<b>${esc(o.cognome)}</b> ${esc(o.nome)}${o.nascita ? '<br><small>' + esc(o.nascita) + '</small>' : ''}` : '<small>saltata</small>'}</td>${Array.from({ length: width }, (_, c) => `<td class="${I.map[c] ? '' : 'off'}">${esc(String(I.map[c] === 'nascita' ? impDate(r[c]) : (I.map[c] === 'tel' || I.map[c] === 'tel2') ? impTel(r[c]) : (r[c] || '')).slice(0, 40))}</td>`).join('')}</tr>`; }).join('')}</tbody></table></div>
       <div class="imp-sum"><div><b>${P.recs.length - P.dup}</b><span>clienti nel file</span></div><div><b>${P.nuovi}</b><span>nuovi</span></div><div><b>${P.agg}</b><span>già presenti, si completano</span></div><div><b>${P.uguali}</b><span>già presenti, uguali</span></div></div>
       ${P.scarti > 0 || P.dup ? `<div class="small">${P.scarti > 0 ? `${P.scarti} righe senza cognome o nome saltate. ` : ''}${P.dup ? `${P.dup} righe ripetute nel file contate una volta sola.` : ''}</div>` : ''}
       ${!I.map.includes('cognome') && !I.map.includes('cn') ? '<div class="warnbox">Scegli quale colonna contiene il cognome (o «Cognome e nome insieme»).</div>' : ''}
@@ -2885,10 +2937,10 @@
   }
   function impGo() {
     if (ACC.can('readonly')) return;
-    const P = impPlan(); let nuovi = 0, agg = 0;
+    const P = impPlan(); let nuovi = 0, agg = 0; const ix = clientIx();
     P.recs.forEach(o => {
-      if (o._dup) return; let id = findClient(o.cognome, o.nome, o.nascita, o.tel);
-      if (!id) { id = 'c' + uid(); clients()[id] = { cognome: o.cognome, nome: o.nome, nascita: '', natoA: '', tel: '', email: '', indirizzo: '', part: '', pref: '', note: '', since: todayISO(), src: 'import' }; nuovi++; }
+      if (o._dup) return; let id = findClient(o.cognome, o.nome, o.nascita, o.tel, ix);
+      if (!id) { id = 'c' + uid(); const k = nk(o.cognome) + ' ' + nk(o.nome); const a = ix.get(k); if (a) a.push(id); else ix.set(k, [id]); clients()[id] = { cognome: o.cognome, nome: o.nome, nascita: '', natoA: '', tel: '', email: '', indirizzo: '', part: '', pref: '', note: '', since: todayISO(), src: 'import' }; nuovi++; }
       else { const x = clients()[id]; if (Object.keys(o).some(f => !f.startsWith('_') && o[f] && !x[f])) agg++; }
       const x = clients()[id];
       if (o.tel && x.tel && telK(o.tel) !== telK(x.tel) && !x.tel2 && !o.tel2) o.tel2 = o.tel;
