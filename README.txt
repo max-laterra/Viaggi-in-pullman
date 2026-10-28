@@ -1,14 +1,52 @@
 VIAGGI IN PULLMAN · LA TERRA
 ============================
 
-Versione: 1.3.1
-Pacchetto creato il: 27/10/2026
+Versione: 1.6
+Pacchetto creato il: 28/10/2026
 
 Come installarla o aggiornarla: vedi LEGGIMI.txt.
 Aggiornamento: carica su GitHub TUTTI i file, config.js compreso (contiene già la chiave di Dropbox).
 
 MODIFICHE
 ---------
+
+VERSIONE 1.6 · 28/10/2026
+- Pagamento misto più semplice (pulsante «Misto (es. contanti + POS)»): con contanti e POS basta
+  scrivere uno dei due importi, l'altro si riempie da solo con quello che manca. Il pulsante «resto»
+  accanto a ogni metodo ci mette la differenza. Sotto si vede la somma e se torna con l'importo.
+  Gli altri metodi (bonifico, PostePay, buono…) sono in «Altri metodi». Se l'importo è vuoto, diventa
+  la somma dei metodi. Nel resoconto, nella chiusura di cassa e nel file per Excel ogni metodo
+  resta separato.
+- Lo zip ha la versione nel nome (es. viaggi-in-pullman-1.6.zip).
+
+VERSIONE 1.5 · 28/10/2026
+- Fatture dei tour: pulsante «Apri in Danea». L'app scarica la fattura in formato Easyfatt-Xml
+  (cliente con codice fiscale o partita IVA, codice SDI o PEC, indirizzo, righe del viaggio,
+  supplementi, acconti già pagati e saldo da pagare). Con un doppio clic sul file si apre Danea con la
+  fattura pronta: si preme «Importa», si controlla e si invia come fattura elettronica.
+  In alternativa, in Danea: Documenti › Utilità › Importa documenti Easyfatt-Xml.
+- Contabilità › Resoconto giornaliero: «Fatture del giorno per Danea» prepara un solo file con tutte.
+- Le fatture già preparate per Danea si riconoscono («preparata per Danea»).
+- Impostazioni › Danea Easyfatt: codice IVA dei viaggi (74ter) e tipo di pagamento per ogni metodo,
+  scritti come nelle tabelle di Danea.
+- Viaggio: nuovo campo «Codice prodotto Danea» (in Modifica gita), così la riga della fattura si
+  collega al prodotto giusto in Danea.
+
+VERSIONE 1.4 · 28/10/2026
+- Lista: la colonna «€» è l'ultima a destra (dopo «posto»).
+- Partenze in testa alla lista: si scelgono dai luoghi di Impostazioni › Luoghi di partenza, con l'ora
+  (fino a 6 partenze). Nella lista, la colonna «part» è una tendina con le partenze del viaggio, cliente
+  per cliente (se il viaggio non ha partenze, propone tutti i luoghi).
+- Tour: il documento è sempre la Fattura (niente scelta Scontrino/Caparra). Tolta la tendina «Categoria»
+  dal riquadro dell'incasso: la categoria si mette da sola in base al tipo di viaggio.
+- Dati per la fattura più completi: cognome, nome, sesso, data e luogo di nascita (presi dall'anagrafica
+  o dalla lista se ci sono). Il codice fiscale si calcola da solo (comuni italiani, anche soppressi, e
+  stati esteri); un codice scritto a mano viene controllato. Alla registrazione i dati si salvano
+  nella scheda del cliente. In rari casi (omocodia) il codice vero è diverso: fa fede la tessera sanitaria.
+- Anagrafica: nuovo campo «Sesso».
+- Corretto: l'animazione «Ciao …» all'accesso ripartiva due volte.
+- Corretto: cliccando un cliente suggerito dall'anagrafica la riga non si compilava (bisognava usare
+  la tastiera). Ora basta un clic.
 
 VERSIONE 1.3.1 · 27/10/2026
 - Importazione clienti: nell'anteprima le date di nascita si vedono già giuste (es. 20/06/75) anche

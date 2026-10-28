@@ -1,6 +1,6 @@
 (function () {
   'use strict';
-  const VERSION = '1.3.1';
+  const VERSION = '1.6';
   const LOGO = './logo.jpg';
   const KEY = 'laterra.prenotazioniPosti.v1';
   const $ = (s, r = document) => r.querySelector(s);
@@ -279,6 +279,73 @@
         return { files: out };
       }
     };
+  })();
+
+  // ---------- codice fiscale: calcolo da cognome, nome, sesso, data e luogo di nascita ----------
+  // L'elenco dei comuni (anche quelli soppressi, per chi è nato prima) e degli stati esteri con il loro
+  // codice catastale sta in vendor/comuni.txt e si carica solo quando serve.
+  // Attenzione: in rari casi (omocodia) l'Agenzia delle Entrate assegna un codice diverso: fa fede la tessera sanitaria.
+  const CF = (() => {
+    let rows = null, loading = null;
+    const slug = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/['’`]/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim();
+    function load() {
+      if (rows) return Promise.resolve(rows);
+      if (!loading) loading = fetch('./vendor/comuni.txt').then(r => { if (!r.ok) throw new Error('elenco comuni non disponibile'); return r.text(); }).then(txt => {
+        const m = new Map();
+        txt.split('\n').forEach(l => { if (!l) return; const [name, prov, code, from, to] = l.split('|'); const k = slug(name); const a = m.get(k) || []; a.push({ name, prov, code, from, to }); m.set(k, a); });
+        rows = m; return m;
+      }).catch(e => { loading = null; throw e; });
+      return loading;
+    }
+    // «Ragusa», «Ragusa (RG)», «RAGUSA RG», «Venezuela»… → il comune valido alla data di nascita
+    function find(place, isoDate) {
+      if (!rows || !place) return null;
+      let p = String(place).trim(), prov = '';
+      const mm = /^(.*?)[\s,]*\(?\b([A-Za-z]{2})\)?\s*$/.exec(p); if (mm && rows.has(slug(mm[1])) && !rows.has(slug(p))) { p = mm[1]; prov = mm[2].toUpperCase(); }
+      const list = rows.get(slug(p)); if (!list) return null;
+      const d = isoDate || '';
+      const ok = list.filter(x => (!prov || x.prov === prov) && (!d || ((!x.from || x.from <= d) && (!x.to || x.to >= d))));
+      const cands = ok.length ? ok : list.filter(x => !x.to);
+      const codes = [...new Set(cands.map(x => x.code))];
+      if (codes.length !== 1) return codes.length ? { ambiguous: true, list: cands } : null;
+      const x = cands[cands.length - 1]; return { code: x.code, name: x.name, prov: x.prov };
+    }
+    const VOW = /[AEIOU]/;
+    const letters = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().replace(/[^A-Z]/g, '');
+    function part(s, isName) {
+      const L = letters(s); const cons = L.split('').filter(c => !VOW.test(c)); const vow = L.split('').filter(c => VOW.test(c));
+      if (isName && cons.length >= 4) return cons[0] + cons[2] + cons[3];
+      return (cons.join('') + vow.join('') + 'XXX').slice(0, 3);
+    }
+    const MESI_CF = 'ABCDEHLMPRST';
+    const ODD = { 0: 1, 1: 0, 2: 5, 3: 7, 4: 9, 5: 13, 6: 15, 7: 17, 8: 19, 9: 21, A: 1, B: 0, C: 5, D: 7, E: 9, F: 13, G: 15, H: 17, I: 19, J: 21, K: 2, L: 4, M: 18, N: 20, O: 11, P: 3, Q: 6, R: 8, S: 12, T: 14, U: 16, V: 10, W: 22, X: 25, Y: 24, Z: 23 };
+    const EVEN = c => (/\d/.test(c) ? +c : c.charCodeAt(0) - 65);
+    const control = s15 => { let t = 0; for (let i = 0; i < 15; i++) t += i % 2 === 0 ? ODD[s15[i]] : EVEN(s15[i]); return String.fromCharCode(65 + (t % 26)); };
+    function calc({ cognome, nome, sesso, nascita, code }) {
+      const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(nascita || ''); if (!m || !code || !letters(cognome) || !letters(nome) || !/^[MF]$/.test(sesso || '')) return '';
+      const day = +m[3] + (sesso === 'F' ? 40 : 0);
+      const s15 = part(cognome) + part(nome, true) + m[1].slice(2) + MESI_CF[+m[2] - 1] + String(day).padStart(2, '0') + code.toUpperCase();
+      return s15 + control(s15);
+    }
+    // controllo del codice scritto a mano (anche omocodici); per 11 cifre controlla la partita IVA
+    function check(v) {
+      v = String(v || '').toUpperCase().replace(/\s/g, '');
+      if (/^\d{11}$/.test(v)) { let s = 0; for (let i = 0; i < 11; i++) { let n = +v[i]; if (i % 2) { n *= 2; if (n > 9) n -= 9; } s += n; } return s % 10 === 0 ? 'piva' : 'piva-errata'; }
+      if (!/^[A-Z]{6}[0-9LMNPQRSTUV]{2}[A-Z][0-9LMNPQRSTUV]{2}[A-Z][0-9LMNPQRSTUV]{3}[A-Z]$/.test(v)) return v ? 'formato' : '';
+      return control(v.slice(0, 15)) === v[15] ? 'ok' : 'errato';
+    }
+    // il sesso dal nome, solo come proposta (si corregge dal menu)
+    const MASC_A = /^(andrea|luca|nicola|mattia|elia|tobia|enea|battista|giosuè|gianluca|gianandrea|zaccaria|geremia|isaia|evangelista)$/i;
+    const guessSex = nome => { const n = String(nome || '').trim().split(/\s+/)[0] || ''; if (!n) return ''; return MASC_A.test(n) ? 'M' : /a$/i.test(n) ? 'F' : 'M'; };
+    // «20/06/75» → «1975-06-20» (le date a due cifre dopo l'anno in corso sono del Novecento)
+    function isoFromIt(v) {
+      v = String(v || '').trim(); let m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v); if (m) return v;
+      m = /^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2,4})$/.exec(v); if (!m) return '';
+      let y = +m[3]; if (m[3].length <= 2) { const cy = new Date().getFullYear() % 100; y += y > cy ? 1900 : 2000; }
+      return `${y}-${String(+m[2]).padStart(2, '0')}-${String(+m[1]).padStart(2, '0')}`;
+    }
+    const itFromIso = v => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v || ''); return m ? `${m[3]}/${m[2]}/${m[1].slice(2)}` : ''; };
+    return { load, find, calc, check, guessSex, isoFromIt, itFromIso, ready: () => !!rows };
   })();
 
   // ---------- stato ----------
@@ -1473,8 +1540,12 @@
     const e = (k, ph = '') => `<input class="hc num" data-q="${k}" inputmode="decimal" value="${Q[k] != null ? esc(String(Q[k]).replace('.', ',')) : ''}" placeholder="${ph}">`;
     const tx = (k, ph = '') => `<input class="hc" data-qt="${k}" value="${esc(Q[k] || '')}" placeholder="${ph}">`;
     const tkRow = tk ? `<div class="wh-tkt"><b>${bigl ? 'Biglietto' : 'Biglietto dell\'evento (se lo vendete voi)'}</b><label>intero €${e('tkt1')}</label><label><input class="hc lab" data-qt="tkt2L" value="${esc(Q.tkt2L || 'ridotto')}" aria-label="Nome del ridotto"> €${e('tkt2')}</label><label>diritti € (a biglietto)${e('diritti')}</label><label>circuito<select class="hc" data-qt="circuito"><option value="">—</option>${CIRCUITI.map(c => `<option${Q.circuito === c ? ' selected' : ''}>${c}</option>`).join('')}</select></label></div>` : '';
-    const deps = [0, 1, 2].map(i => { const d = t.partenze[i] || {}; return `<div class="hdep"><input class="hc" data-dep2="${i}" data-k="citta" value="${esc(d.citta || '')}" placeholder="città"><input class="hc" data-dep2="${i}" data-k="luogo" value="${esc(d.luogo || '')}" placeholder="luogo"><input class="hc" data-dep2="${i}" data-k="ora" value="${esc(d.ora || '')}" placeholder="ora"></div>`; }).join('');
-    return `<div class="whead${bigl ? ' bigl' : ''}">
+    // partenze: si scelgono tra i luoghi di Impostazioni › Luoghi di partenza (con l'ora)
+    const LU = (S.cfg.luoghi || []).filter(l => l.code || l.citta);
+    const nDep = Math.min(6, Math.max(3, t.partenze.filter(d => d && (d.citta || d.luogo || d.code)).length + 1));
+    const deps = !LU.length
+      ? Array.from({ length: 3 }, (_, i) => { const d = t.partenze[i] || {}; return `<div class="hdep"><input class="hc" data-dep2="${i}" data-k="citta" value="${esc(d.citta || '')}" placeholder="città"><input class="hc" data-dep2="${i}" data-k="luogo" value="${esc(d.luogo || '')}" placeholder="luogo"><input class="hc" data-dep2="${i}" data-k="ora" value="${esc(d.ora || '')}" placeholder="ora"></div>`; }).join('') + '<div class="small dephint">Per scegliere i luoghi da un elenco, aggiungili in Impostazioni › Luoghi di partenza.</div>'
+      : Array.from({ length: nDep }, (_, i) => { const d = t.partenze[i] || {}; const cur = depLuogo(d); return `<div class="hdep sel"><select class="hc" data-depsel="${i}" aria-label="Partenza ${i + 1}"><option value="">—</option>${LU.map((l, j) => `<option value="${j}"${cur === l ? ' selected' : ''}>${esc([l.code, l.citta, l.luogo].filter(Boolean).join(' · '))}</option>`).join('')}${!cur && (d.citta || d.luogo) ? `<option value="cur" selected>${esc([d.citta, d.luogo].filter(Boolean).join(' · '))} (non in elenco)</option>` : ''}</select><input class="hc" data-dep2="${i}" data-k="ora" value="${esc(d.ora || '')}" placeholder="ora" aria-label="Ora partenza ${i + 1}"></div>`; }).join('');    return `<div class="whead${bigl ? ' bigl' : ''}">
       <div class="wh-title"><textarea class="hc big" data-tf="nome" rows="3" aria-label="Nome della gita">${esc(t.nome)}</textarea></div>
       ${bigl ? '' : `<div class="wh-grid">
         <label>Adulti €</label>${e('adulti')}${tour ? `<label>singola €</label>${e('singola')}` : '<span></span><span></span>'}
@@ -1489,6 +1560,17 @@
     </div>
     <div class="wnotes"><label>Nota 1: <input class="hc" data-tf="note1" value="${esc(t.note1 || '')}"></label><label>Nota 2: <input class="hc" data-tf="note2" value="${esc(t.note2 || '')}"></label></div>`;
   }
+  // il luogo predefinito che corrisponde a una partenza del viaggio (per codice, o per città e punto di salita)
+  function depLuogo(d) {
+    const LU = (S.cfg.luoghi || []); if (!d) return null;
+    return (d.code && LU.find(l => String(l.code || '').toUpperCase() === String(d.code).toUpperCase())) || ((d.citta || d.luogo) && LU.find(l => nk(l.citta) === nk(d.citta) && (!d.luogo || nk(l.luogo) === nk(d.luogo)))) || null;
+  }
+  // codici di partenza da proporre nella colonna «part» della lista: quelli del viaggio, altrimenti tutti
+  function partOpts(t) {
+    const LU = (S.cfg.luoghi || []).filter(l => l.code);
+    const fromTrip = (t.partenze || []).map(d => { const l = depLuogo(d); return l ? l : null; }).filter(Boolean);
+    return (fromTrip.length ? fromTrip : LU).map(l => ({ code: String(l.code).toUpperCase(), label: [l.citta, l.luogo].filter(Boolean).join(' · ') }));
+  }
   function wRow(t, r, i, cols, ctx, bigl) {
     const x = ctx.byRow[r.id]; const head = x && x.k === 0; const bk = x && x.bk;
     const ok = bk && saldato(bk); const seat = ctx.SI[r.id];
@@ -1500,14 +1582,14 @@
     const tip = head && bk._m ? `Totale ${euro(bk._m.due)} · pagato ${euro(bk._m.paid)}${bk._m.rest ? ' · da pagare ' + euro(bk._m.rest) : ''}${bk.mancano ? ` · mancano ${bk.mancano} nomi` : ''}` : '';
     return `<tr class="${cls}" data-rowid="${r.id}">
       <td class="wn">${drag}<button class="rn" data-act="rowmenu" data-id="${r.id}" aria-label="Riga ${i + 1}: azioni">${i + 1}</button></td>
-      ${cols.map(([f, l]) => head && f === 'pagato' ? `<td class="c-pagato"><button class="eurobtn${ok ? ' ok' : bk._m && bk._m.paid ? ' part' : ''}${UI.pay && UI.pay.bkId === bk.id ? ' on' : ''}" data-act="paypanel" data-id="${bk.id}" title="Incasso e documento (scontrino o fattura)" aria-label="Incasso e documento di ${esc(bkName(bk))}">${bk._m && bk._m.paid ? esc(fmtNum(bk._m.paid)) : '€'}</button></td>` : `<td class="c-${f}${head && f === 'cognome' && bk.mancano ? ' miss' : ''}"${head && f === 'cognome' && tip ? ` title="${esc(tip)}"` : ''}><input class="wc" data-r="${r.id}" data-f="${f}" value="${esc(r[f] || '')}" aria-label="${esc(l)} riga ${i + 1}" autocomplete="off"></td>`).join('')}
-      ${bigl ? '' : `<td class="wpos">${seatTxt}</td>`}</tr>`;
+      ${cols.filter(([f]) => f !== 'pagato').concat(bigl ? [] : [['posto', 'posto']], cols.filter(([f]) => f === 'pagato')).map(([f, l]) => f === 'posto' ? `<td class="wpos">${seatTxt}</td>` : f === 'part' && ctx.parts.length ? `<td class="c-part"><select class="wc wsel" data-r="${r.id}" data-f="part" aria-label="Partenza riga ${i + 1}"><option value=""></option>${ctx.parts.map(o => `<option value="${esc(o.code)}"${String(r.part || '').toUpperCase() === o.code ? ' selected' : ''} title="${esc(o.label)}">${esc(o.code)}</option>`).join('')}${r.part && !ctx.parts.some(o => o.code === String(r.part).toUpperCase()) ? `<option value="${esc(r.part)}" selected>${esc(r.part)}</option>` : ''}</select></td>` : head && f === 'pagato' ? `<td class="c-pagato"><button class="eurobtn${ok ? ' ok' : bk._m && bk._m.paid ? ' part' : ''}${UI.pay && UI.pay.bkId === bk.id ? ' on' : ''}" data-act="paypanel" data-id="${bk.id}" title="Incasso e documento (scontrino o fattura)" aria-label="Incasso e documento di ${esc(bkName(bk))}">${bk._m && bk._m.paid ? esc(fmtNum(bk._m.paid)) : '€'}</button></td>` : `<td class="c-${f}${head && f === 'cognome' && bk.mancano ? ' miss' : ''}"${head && f === 'cognome' && tip ? ` title="${esc(tip)}"` : ''}><input class="wc" data-r="${r.id}" data-f="${f}" value="${esc(r[f] || '')}" aria-label="${esc(l)} riga ${i + 1}" autocomplete="off"></td>`).join('')}
+</tr>`;
   }
   function listaView(t, D, SI, T) {
     const bigl = tripCat(t) === 'biglietteria'; const tour = !bigl && isTourT(t); const cols = listCols(tour, bigl);
     const pp = UI.pay && UI.pay.tripId === t.id ? payPanelHTML(t) : ''; if (UI.pay && !pp) UI.pay = null;
     const byRow = {}; D.forEach((bk, gi) => bk.persone.forEach((p, k) => { byRow[p.id] = { bk, gi, k }; }));
-    const ctx = { byRow, SI };
+    const ctx = { byRow, SI, parts: partOpts(t) };
     const Q = t.quota;
     const sup = (k, l) => `<td><span class="sl">${l}</span><input class="hc num" data-qs="${k}" inputmode="decimal" value="${Q.suppl[k] != null ? esc(String(Q.suppl[k]).replace('.', ',')) : ''}" placeholder="€"></td>`;
     const annTable = (k, title) => {
@@ -1525,7 +1607,7 @@
         ${tour ? `<button class="btn sm" data-act="rooming">${ICON.print} Rooming list</button>` : ''}
         ${bigl ? '' : `<button class="btn sm${UI.dock && !pp ? ' dark' : ' primary'}" data-act="dock" aria-pressed="${!!UI.dock && !pp}">${ICON.dock} ${UI.dock && !pp ? 'Nascondi piantina' : 'Piantina accanto'}</button>`}
       </div>
-      <div class="wtw" data-droplist="1"><table class="wl"><thead><tr><th>N</th>${cols.map(([f, l]) => `<th class="c-${f}">${esc(l)}</th>`).join('')}${bigl ? '' : '<th>posto</th>'}</tr></thead>
+      <div class="wtw" data-droplist="1"><table class="wl"><thead><tr><th>N</th>${cols.filter(([f]) => f !== 'pagato').map(([f, l]) => `<th class="c-${f}">${esc(l)}</th>`).join('')}${bigl ? '' : '<th>posto</th>'}${cols.filter(([f]) => f === 'pagato').map(([f, l]) => `<th class="c-${f}">${esc(l)}</th>`).join('')}</tr></thead>
         <tbody>${t.rows.map((r, i) => wRow(t, r, i, cols, ctx, bigl)).join('')}</tbody></table></div>
       <div class="whelp small">${bigl ? 'Una riga per cliente: «Rossi x 2» e i nomi sotto. Con il pulsante «€» si registra l\'incasso e si prepara lo scontrino.' : `Si scrive come in Word`}${bigl ? '' : `: «Rossi x 3» sulla prima riga e le altre persone sotto. Invio = riga sotto. Il numero a sinistra apre il menu della riga (inserisci, elimina, lista d'attesa, non parte più). Cognome <span class="pos">verde</span> = saldato. Per mettere i posti trascina ${ICON.grip} sulla piantina: dalla prima riga si sposta tutta la prenotazione, dalle altre la singola persona. Il pulsante «€» della prima riga apre l'incasso con scontrino o fattura.`}</div>
       ${bigl ? '' : `<div class="wsupp"><h3 class="wt">Supplementi per i posti assegnati</h3><table class="wl wl-s"><tr>${sup(1, '1ª fila')}${sup(2, '2ª fila')}${sup(3, '3ª fila')}${sup(4, '4ª fila')}${sup('p2', '2° porta')}</tr></table>
@@ -1667,6 +1749,7 @@
       <div class="grid3"><div class="field"><label for="t-cat">Tipo</label><select id="t-cat">${['gita', 'tour', 'evento', 'biglietteria'].map(c => `<option value="${c}"${(t ? tripCat(t) : 'gita') === c ? ' selected' : ''}>${CAT_L[c]}</option>`).join('')}</select></div>
       <div class="field"><label for="t-code">Codice (es. G07, T08)</label><input id="t-code" value="${esc(t ? t.code || '' : '')}"></div>
       <label class="chk" style="align-self:end"><input type="checkbox" id="t-extra"${t && t.extra ? ' checked' : ''}> Data extra (replica)</label></div>
+      <div class="field"><label for="t-danea">Codice prodotto Danea (per «Apri in Danea» nelle fatture)</label><input id="t-danea" value="${esc(t ? t.codDanea || '' : '')}" placeholder="es. 261018 boschi e zafferana 18/10/26"></div>
       <div class="field"><label for="t-prog">Link al programma (PDF su Dropbox o pagina del sito)</label><input id="t-prog" value="${esc(t ? t.programma || '' : '')}" placeholder="https://www.laterra.it/..."></div>`,
       `${t ? `<button class="btn danger" data-act="deltrip" style="margin-right:auto">${ICON.trash} Elimina gita</button>` : ''}<button class="btn" data-act="close">Annulla</button><button class="btn primary" data-act="savetrip">${t ? 'Salva' : 'Crea e aggiungi il primo bus'}</button>`);
   }
@@ -2648,7 +2731,7 @@
   // ---------- anagrafica clienti ----------
   // Si riempie da sola con le persone scritte nelle liste dei viaggi; si può anche modificare a mano.
   // Mentre scrivi il cognome nella lista, i clienti già conosciuti compaiono tra i suggeriti: Invio compila la riga.
-  const CLF = [['cognome', 'Cognome'], ['nome', 'Nome'], ['nascita', 'Data di nascita'], ['natoA', 'Nato/a a'], ['tel', 'Cellulare'], ['tel2', 'Altro telefono'], ['email', 'Email'], ['indirizzo', 'Indirizzo'], ['cap', 'CAP'], ['citta', 'Città'], ['cf', 'Codice fiscale / P. IVA'], ['sdi', 'Codice SDI o PEC (fattura)'], ['part', 'Partenza abituale (codice)'], ['pref', 'Preferenze (es. posto davanti)'], ['note', 'Note']];
+  const CLF = [['cognome', 'Cognome'], ['nome', 'Nome'], ['nascita', 'Data di nascita'], ['natoA', 'Nato/a a'], ['sesso', 'Sesso (M/F)'], ['tel', 'Cellulare'], ['tel2', 'Altro telefono'], ['email', 'Email'], ['indirizzo', 'Indirizzo'], ['cap', 'CAP'], ['citta', 'Città'], ['cf', 'Codice fiscale / P. IVA'], ['sdi', 'Codice SDI o PEC (fattura)'], ['part', 'Partenza abituale (codice)'], ['pref', 'Preferenze (es. posto davanti)'], ['note', 'Note']];
   const clients = () => S.clients.clienti;
   const nk = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
   const baseCognome = cg => { const m = RX.exec(String(cg || '').trim()); return (m ? m[1] : String(cg || '')).trim(); };
@@ -3122,7 +3205,7 @@
   function docPill(m) {
     if (!m.doc) return m.tipo === 'storno' ? '<small>storno</small>' : '';
     const l = DOC_L[m.doc] || m.doc;
-    return `<span class="mpill ${m.docStato === 'da_emettere' ? 'm-pp' : 'm-alt'}" title="${m.docStato === 'da_emettere' ? 'Documento da emettere: la stampante non è ancora collegata' : ''}">${esc(l)}${m.docStato === 'da_emettere' ? ' · da emettere' : ''}</span>`;
+    return `<span class="mpill ${m.docStato === 'da_emettere' ? 'm-pp' : 'm-alt'}" title="${m.docStato === 'da_emettere' ? 'Documento da emettere: la stampante non è ancora collegata' : ''}">${esc(l)}${m.docStato === 'da_emettere' ? (m.danea ? ' · preparata per Danea' : ' · da emettere') : ''}</span>`;
   }
   const yy2 = iso => { const [y, m, d] = String(iso || '').split('-'); return d ? `${d}/${m}/${y.slice(2)}` : ''; };
 
@@ -3150,7 +3233,10 @@
       desc: `${yy2(t.data)} ${t.nome}`.toLowerCase(), lines: groups, suppl: r2(suppl), dir, circuito: circ, emis: todayISO(), ant: false,
       imp: m.rest != null && m.rest > 0 ? r2(m.rest) : '', met: 'contanti', mix: {}, pratica: '', canale: 'In agenzia', dataPag: todayISO(), pagante: '', note: '',
       legacy: h.pagato || '',
-      fatt: { cf: (cl && cl.cf) || '', ind: (cl && cl.indirizzo) || '', cap: (cl && cl.cap) || '', citta: (cl && cl.citta) || '', sdi: (cl && cl.sdi) || '', pec: (cl && cl.pec) || '' }
+      fatt: (() => { const p0 = bk.persone[0] || {}; const nm = (cl && cl.nome) || p0.nome || ''; return {
+        cognome: (cl && cl.cognome) || bkName(bk), nome: nm, sesso: (cl && cl.sesso) || CF.guessSex(nm),
+        nascita: CF.isoFromIt((cl && cl.nascita) || p0.nascita || ''), natoA: (cl && cl.natoA) || p0.natoA || '',
+        cf: (cl && cl.cf) || '', cfAuto: !(cl && cl.cf), ind: (cl && cl.indirizzo) || '', cap: (cl && cl.cap) || '', citta: (cl && cl.citta) || '', sdi: (cl && cl.sdi) || '', pec: (cl && cl.pec) || '' }; })()
     };
   }
   function payTotals(f) {
@@ -3181,11 +3267,10 @@
       <div class="pp-b">
         <div class="pay-sum"><div><span>Totale</span><b>${m.due != null ? money(m.due) : '—'}</b></div><div><span>Già pagato</span><b>${money(m.paid)}</b></div><div class="hi"><span>Da pagare</span><b>${m.rest != null ? money(m.rest) : '—'}</b></div></div>
         ${m.due == null ? '<div class="warnbox small">Mancano i prezzi del viaggio in testa alla lista: il totale si calcola dalle righe qui sotto.</div>' : ''}
-        <div class="pp-sec"><span class="pp-l">Documento</span><div class="seg wrap" role="radiogroup" aria-label="Documento">${DOCS.filter(([k]) => k !== 'fattura' || f.tour || f.doc === 'fattura').map(([k, l]) => `<button type="button" role="radio" data-act="pfdoc" data-k="${k}" aria-pressed="${f.doc === k}">${l}</button>`).join('')}</div></div>
-        <div class="pp-g2"><label>Categoria<select data-pf="cat">${CATS.map(c => `<option${c === f.cat ? ' selected' : ''}>${c}</option>`).join('')}</select></label>
-          <label>Cognome e nome<input data-pf="cliente" value="${esc(f.cliente)}" autocomplete="off"></label></div>
+        ${f.tour ? '<div class="pp-sec"><span class="pp-l">Documento</span><div class="pp-doc1">Fattura</div></div>' : `<div class="pp-sec"><span class="pp-l">Documento</span><div class="seg wrap" role="radiogroup" aria-label="Documento">${DOCS.filter(([k]) => k !== 'fattura').map(([k, l]) => `<button type="button" role="radio" data-act="pfdoc" data-k="${k}" aria-pressed="${f.doc === k}">${l}</button>`).join('')}</div></div>`}
+        <label class="pp-1">Cognome e nome${f.doc === 'fattura' ? ' (come appare nel resoconto)' : ''}<input data-pf="cliente" value="${esc(f.cliente)}" autocomplete="off"></label>
         <label class="pp-1">Descrizione<input data-pf="desc" value="${esc(f.desc)}" autocomplete="off"></label>
-        ${f.doc === 'fattura' ? `<div class="pp-fatt"><span class="pp-l">Dati per la fattura</span><div class="pp-g2"><label>Codice fiscale o P. IVA<input data-pff="cf" value="${esc(f.fatt.cf)}" autocomplete="off"></label><label>Codice SDI o PEC<input data-pff="sdi" value="${esc(f.fatt.sdi || f.fatt.pec)}" autocomplete="off"></label></div><div class="pp-g3"><label>Indirizzo<input data-pff="ind" value="${esc(f.fatt.ind)}"></label><label>CAP<input data-pff="cap" value="${esc(f.fatt.cap)}" inputmode="numeric"></label><label>Città<input data-pff="citta" value="${esc(f.fatt.citta)}"></label></div></div>` : ''}
+        ${f.doc === 'fattura' ? fattHTML(f.fatt) : ''}
         <table class="pp-lines"><thead><tr><th></th><th>Q</th>${f.bigl ? '' : '<th>€ bus</th>'}${tkOn ? '<th>€ biglietto</th>' : ''}<th class="r">Totale</th></tr></thead><tbody>
           ${f.lines.map((l, i) => `<tr><td><input class="pf-in lab" data-pl="${i}" data-k="l" value="${esc(l.l)}" aria-label="Riga ${i + 1}"></td><td><input class="pf-in num q" data-pl="${i}" data-k="q" inputmode="numeric" value="${l.q ? esc(String(l.q)) : ''}" aria-label="Quantità riga ${i + 1}"></td>${f.bigl ? '' : `<td><input class="pf-in num" data-pl="${i}" data-k="bus" inputmode="decimal" value="${+l.bus ? esc(fmtNum(+l.bus)) : ''}" aria-label="Euro bus riga ${i + 1}"></td>`}${tkOn ? `<td><input class="pf-in num" data-pl="${i}" data-k="tkt" inputmode="decimal" value="${+l.tkt ? esc(fmtNum(+l.tkt)) : ''}" aria-label="Euro biglietto riga ${i + 1}"></td>` : ''}<td class="r" id="pl-t${i}">${l.q ? money((+l.q) * ((+l.bus || 0) + (+l.tkt || 0))) : ''}</td></tr>`).join('')}
         </tbody></table>
@@ -3193,19 +3278,73 @@
         ${tkOn ? `<div class="pp-g2"><label>Emissione biglietti<input type="date" data-pf="emis" value="${esc(f.emis)}"></label><label class="chk pp-chk"><input type="checkbox" data-pfc="ant"${f.ant ? ' checked' : ''}> Emissione anticipata</label></div>` : ''}
         <div class="pp-tot" id="pp-tot">${payTotHTML(T, f.bigl)}</div>
         <div class="pp-sec"><span class="pp-l">Incassato adesso</span><input id="pf-imp" class="pf-in num pay-imp" data-pf="imp" inputmode="decimal" value="${f.imp === '' ? '' : esc(fmtNum(+f.imp))}" placeholder="0,00" autocomplete="off"><span class="pay-warn" id="pp-warn" role="status">${payWarnTxt(f, m)}</span></div>
-        <div class="pay-met" role="radiogroup" aria-label="Metodo di pagamento">${[...METODI, ['misto', 'Misto']].map(([k, l]) => `<button type="button" role="radio" aria-checked="${f.met === k}" data-act="pfmet" data-k="${k}">${l}</button>`).join('')}</div>
-        ${f.met === 'misto' ? `<div class="pp-mix">${METODI.map(([k, l]) => `<div class="pay-row"><span>${l}</span><input data-pfm="${k}" inputmode="decimal" value="${f.mix[k] ? esc(fmtNum(f.mix[k])) : ''}" placeholder="0,00" aria-label="${l}" autocomplete="off"></div>`).join('')}</div>` : ''}
+        <div class="pay-met" role="radiogroup" aria-label="Metodo di pagamento">${[...METODI, ['misto', 'Misto (es. contanti + POS)']].map(([k, l]) => `<button type="button" role="radio" aria-checked="${f.met === k}" data-act="pfmet" data-k="${k}">${l}</button>`).join('')}</div>
+        ${f.met === 'misto' ? mixHTML(f) : ''}
         ${f.met !== 'contanti' && f.met !== 'pos' ? `<div class="pp-g3"><label>N. pratica<input data-pf="pratica" value="${esc(f.pratica)}"></label><label>Canale<select data-pf="canale">${CANALI.map(c => `<option${c === f.canale ? ' selected' : ''}>${c}</option>`).join('')}</select></label><label>Data pagamento<input type="date" data-pf="dataPag" value="${esc(f.dataPag)}"></label></div><label class="pp-1">Pagante (se diverso)<input data-pf="pagante" value="${esc(f.pagante)}"></label>` : ''}
         <label class="pp-1">Note pratica<input data-pf="note" value="${esc(f.note)}" placeholder="es. buono n° 26001"></label>
         <label class="pp-1">Pagato prima, fuori dall'app (come nella lista Word)<input data-pf="legacy" class="num" inputmode="decimal" value="${esc(f.legacy)}" placeholder="0"></label>
         <div class="small">${canPay ? `Registrato da <b>${esc(ACC.me().name)}</b> · <b>${esc(agName(ACC.sess.ag))}</b> · ${esc(cassaName(ACC.sess.ag))}` : 'Per incassare scegli l\'agenzia in cui lavori (in alto).'}</div>
         ${canPay ? `<div class="pp-act"><button class="btn primary big" data-act="pfsave">${f.doc === 'scontrino' ? ICON.print + ' ' : ''}${mainBtn}${+f.imp ? ' · ' + money(+f.imp) : ''}</button></div>` : ''}
-        ${hist.length ? `<div class="pp-sec"><span class="pp-l">Incassi registrati</span><div class="pay-hist">${hist.map(x => `<div class="${x.tipo === 'storno' ? 'neg' : ''}${storn.has(x.id) ? ' gone' : ''}"><span>${esc(fmtDate(x.day).slice(0, 5))} · ${esc(x.who)}<br>${docPill(x)}</span><span>${(x.parts || []).map(p => `<span class="mpill ${MET_C[p.m] || 'm-alt'}">${esc(MET_L[p.m] || p.m)}</span>`).join(' ')}</span><b>${money(x.tot)}</b>${x.tipo !== 'storno' && !storn.has(x.id) && ACC.can('cassa') && (ACC.can('cassaAll') || (x.uid === ACC.sess.uid && x.day === todayISO())) ? `<button class="btn sm ghost" data-act="storno" data-id="${x.id}">Storna</button>` : ''}</div>`).join('')}</div></div>` : ''}
+        ${hist.length ? `<div class="pp-sec"><span class="pp-l">Incassi registrati</span><div class="pay-hist">${hist.map(x => `<div class="${x.tipo === 'storno' ? 'neg' : ''}${storn.has(x.id) ? ' gone' : ''}"><span>${esc(fmtDate(x.day).slice(0, 5))} · ${esc(x.who)}<br>${docPill(x)}</span><span>${(x.parts || []).map(p => `<span class="mpill ${MET_C[p.m] || 'm-alt'}">${esc(MET_L[p.m] || p.m)}</span>`).join(' ')}</span><b>${money(x.tot)}</b>${x.doc === 'fattura' && x.tipo !== 'storno' && !storn.has(x.id) ? `<button class="btn sm${x.danea ? '' : ' primary'}" data-act="danea1" data-id="${x.id}" title="Scarica la fattura per Danea">${x.danea ? 'Di nuovo in Danea' : 'Apri in Danea'}</button>` : ''}${x.tipo !== 'storno' && !storn.has(x.id) && ACC.can('cassa') && (ACC.can('cassaAll') || (x.uid === ACC.sess.uid && x.day === todayISO())) ? `<button class="btn sm ghost" data-act="storno" data-id="${x.id}">Storna</button>` : ''}</div>`).join('')}</div></div>` : ''}
       </div></section>`;
+  }
+  // dati per la fattura, con il calcolo del codice fiscale
+  function fattHTML(F) {
+    return `<div class="pp-fatt"><span class="pp-l">Dati per la fattura</span>
+      <div class="pp-g2"><label>Cognome<input data-pff="cognome" value="${esc(F.cognome)}" autocomplete="off"></label><label>Nome<input data-pff="nome" value="${esc(F.nome)}" autocomplete="off"></label></div>
+      <div class="pp-g3"><label>Sesso<select data-pff="sesso"><option value=""${!F.sesso ? ' selected' : ''}>—</option><option value="F"${F.sesso === 'F' ? ' selected' : ''}>Femmina</option><option value="M"${F.sesso === 'M' ? ' selected' : ''}>Maschio</option></select></label>
+        <label>Data di nascita<input type="date" data-pff="nascita" value="${esc(F.nascita)}"></label>
+        <label>Luogo di nascita<input data-pff="natoA" value="${esc(F.natoA)}" placeholder="comune o stato estero" autocomplete="off"><small class="pp-hint" id="pf-cfplace"></small></label></div>
+      <label class="pp-1">Codice fiscale o P. IVA<input data-pff="cf" id="pf-cf" value="${esc(F.cf)}" autocomplete="off" style="text-transform:uppercase"><small class="pp-hint" id="pf-cfst"></small></label>
+      <label class="pp-1">Codice SDI o PEC<input data-pff="sdi" value="${esc(F.sdi || F.pec)}" autocomplete="off"></label>
+      <div class="pp-g3"><label>Indirizzo<input data-pff="ind" value="${esc(F.ind)}"></label><label>CAP<input data-pff="cap" value="${esc(F.cap)}" inputmode="numeric"></label><label>Città<input data-pff="citta" value="${esc(F.citta)}"></label></div></div>`;
+  }
+  // ricalcola il codice fiscale quando cambiano cognome, nome, sesso, data o luogo di nascita
+  function cfRecalc() {
+    const f = UI.pay && UI.pay.f; if (!f || f.doc !== 'fattura') return; const F = f.fatt;
+    const st = (id, txt, cls) => { const el = $('#' + id); if (el) { el.textContent = txt; el.className = 'pp-hint ' + (cls || ''); } };
+    const status = () => { const c = CF.check(F.cf); st('pf-cfst', !F.cf ? 'Si calcola da solo con i dati qui sopra' : c === 'ok' ? (F.cfAuto ? '✓ Calcolato dai dati di nascita' : '✓ Codice fiscale corretto') : c === 'piva' ? '✓ Partita IVA' : c === 'errato' ? '✗ Il carattere finale non torna: ricontrolla' : c === 'piva-errata' ? '✗ Partita IVA non valida' : '✗ Non è un codice fiscale (16 caratteri) né una partita IVA (11 cifre)', /✓/.test(c === 'ok' || c === 'piva' ? '✓' : '') ? 'ok' : F.cf ? 'bad' : ''); };
+    CF.load().then(() => {
+      const pl = F.natoA ? CF.find(F.natoA, F.nascita) : null;
+      st('pf-cfplace', !F.natoA ? '' : pl && pl.code ? `${pl.name}${pl.prov && pl.prov !== 'EE' ? ' (' + pl.prov + ')' : ' · estero'} · ${pl.code}` : pl && pl.ambiguous ? 'Più comuni con questo nome: aggiungi la provincia, es. «Castro (LE)»' : 'Non trovato: controlla come è scritto', pl && pl.code ? 'ok' : 'bad');
+      const v = CF.calc({ cognome: F.cognome, nome: F.nome, sesso: F.sesso, nascita: F.nascita, code: pl && pl.code });
+      if (v && (!F.cf || F.cfAuto)) { F.cf = v; F.cfAuto = true; const i = $('#pf-cf'); if (i && (document.activeElement !== i || !i.value.trim())) i.value = v; }
+      status();
+    }).catch(() => { st('pf-cfplace', 'Elenco dei comuni non disponibile (serve internet la prima volta)', 'bad'); status(); });
+  }
+  // pagamento misto: si scrive quanto con ogni metodo; il «resto» va dove serve con un tocco.
+  // Con contanti e POS basta scriverne uno: l'altro si riempie da solo con quello che manca.
+  const MIX_MAIN = ['contanti', 'pos'];
+  function mixHTML(f) {
+    const row = ([k, l]) => `<div class="pay-row"><span>${l}</span><input data-pfm="${k}" inputmode="decimal" value="${f.mix[k] ? esc(fmtNum(f.mix[k])) : ''}" placeholder="0,00" aria-label="${l}" autocomplete="off"><button type="button" class="btn sm ghost" data-act="pfrest" data-k="${k}" title="Metti qui quello che manca">resto</button></div>`;
+    const others = METODI.filter(([k]) => !MIX_MAIN.includes(k)); const openO = others.some(([k]) => f.mix[k]);
+    return `<div class="pp-mix">${METODI.filter(([k]) => MIX_MAIN.includes(k)).map(row).join('')}
+      <details${openO ? ' open' : ''}><summary>Altri metodi (bonifico, PostePay, buono…)</summary>${others.map(row).join('')}</details>
+      <div class="pp-mixsum" id="pp-mixsum">${mixSumTxt(f)}</div></div>`;
+  }
+  function mixSumTxt(f) {
+    const parts = METODI.filter(([k]) => +f.mix[k] > 0).map(([k, l]) => `${l} ${money(f.mix[k])}`); const s = r2(METODI.reduce((a, [k]) => a + (+f.mix[k] || 0), 0)); const imp = r2(+f.imp || 0);
+    if (!parts.length) return 'Scrivi quanto paga con ogni metodo: con contanti e POS basta scriverne uno.';
+    const d = r2(imp - s);
+    return `${parts.join(' + ')} = <b>${money(s)}</b> ${!imp ? '' : Math.abs(d) < 0.01 ? '<span class="ok">✓ torna con l\'importo</span>' : d > 0 ? `<span class="bad">mancano ${money(d)}</span>` : `<span class="bad">${money(-d)} in più</span>`}`;
+  }
+  function mixInput(k, v) {
+    const f = UI.pay.f; f.mix[k] = v; f.mixT = f.mixT || {}; f.mixT[k] = true;
+    // importo vuoto: diventa la somma dei metodi
+    if (!(+f.imp > 0) || f.impFromMix) { f.imp = r2(METODI.reduce((a, [x]) => a + (+f.mix[x] || 0), 0)) || ''; f.impFromMix = true; const i = $('#pf-imp'); if (i) i.value = f.imp ? fmtNum(f.imp) : ''; }
+    // contanti + POS: l'altro si riempie con il resto finché non lo tocchi
+    else if (MIX_MAIN.includes(k)) { const o = MIX_MAIN.find(x => x !== k); if (!f.mixT[o]) { const rest = r2(+f.imp - METODI.filter(([x]) => x !== o).reduce((a, [x]) => a + (+f.mix[x] || 0), 0)); f.mix[o] = rest > 0 ? rest : 0; const i = $(`[data-pfm="${o}"]`); if (i) i.value = f.mix[o] ? fmtNum(f.mix[o]) : ''; } }
+    const el = $('#pp-mixsum'); if (el) el.innerHTML = mixSumTxt(f);
+  }
+  function mixRest(k) {
+    const f = UI.pay.f; const rest = r2(+f.imp - METODI.filter(([x]) => x !== k).reduce((a, [x]) => a + (+f.mix[x] || 0), 0));
+    if (!(+f.imp > 0)) return toast('Scrivi prima l\'importo incassato adesso');
+    f.mix[k] = rest > 0 ? rest : 0; f.mixT = f.mixT || {}; f.mixT[k] = true; const i = $(`[data-pfm="${k}"]`); if (i) i.value = f.mix[k] ? fmtNum(f.mix[k]) : '';
+    const el = $('#pp-mixsum'); if (el) el.innerHTML = mixSumTxt(f);
   }
   function payTotHTML(T, bigl) {
     return `${bigl ? '' : `<div><span>Bus</span><b>${money(T.bus)}</b></div>`}${T.tkt ? `<div><span>Biglietti (${T.nT})</span><b>${money(T.tkt)}</b></div>` : ''}${T.dirT ? `<div><span>Diritti</span><b>${money(T.dirT)}</b></div>` : ''}${T.sup ? `<div><span>Suppl. fila</span><b>${money(T.sup)}</b></div>` : ''}
-      <div class="tot"><span>Totale</span><b>${money(T.tot)}</b></div><div class="ag"><span>Nello scontrino (parte agenzia)</span><b>${money(T.agenzia)}</b></div>${T.tkt ? `<div><span>Biglietti del circuito, a parte</span><b>${money(T.tkt)}</b></div>` : ''}`;
+      <div class="tot"><span>Totale</span><b>${money(T.tot)}</b></div>${UI.pay && UI.pay.f && UI.pay.f.doc === 'fattura' ? '' : `<div class="ag"><span>Nello scontrino (parte agenzia)</span><b>${money(T.agenzia)}</b></div>`}${T.tkt ? `<div><span>Biglietti del circuito, a parte</span><b>${money(T.tkt)}</b></div>` : ''}`;
   }
   function payWarnTxt(f, m) { const v = +f.imp; if (!v || m.rest == null) return ''; return v > m.rest + 0.009 ? (m.rest <= 0 ? 'Attenzione: risulta già pagato tutto.' : `Attenzione: è più del dovuto di ${money(v - m.rest)}.`) : v < m.rest - 0.009 ? `Acconto: restano ${money(m.rest - v)}.` : ''; }
   // aggiorna i totali senza ridisegnare il riquadro (così non si perde il cursore)
@@ -3216,10 +3355,11 @@
   }
   function payInput(el) {
     const f = UI.pay && UI.pay.f; if (!f) return false; const d = el.dataset;
+    if (d.pf === 'imp') f.impFromMix = false;
     if (d.pf) { const k = d.pf; f[k] = ['imp', 'suppl', 'dir'].includes(k) ? (parseEuro(el.value) ?? (el.value.trim() ? f[k] : '')) : el.value; if (k === 'legacy') { const t = trip(); const h = t && rowById(t, UI.pay.bkId); if (h) { h.pagato = el.value.trim(); save(); } } payRecalc(); return true; }
     if (d.pl !== undefined) { const l = f.lines[+d.pl]; l[d.k] = d.k === 'l' ? el.value : d.k === 'q' ? (parseInt(el.value, 10) || 0) : (parseEuro(el.value) || 0); payRecalc(); return true; }
-    if (d.pff) { f.fatt[d.pff] = el.value; return true; }
-    if (d.pfm) { f.mix[d.pfm] = parseEuro(el.value) || 0; return true; }
+    if (d.pff) { f.fatt[d.pff] = d.pff === 'cf' ? el.value.toUpperCase().replace(/\s/g, '') : el.value; if (d.pff === 'cf') f.fatt.cfAuto = !el.value.trim(); if (['cognome', 'nome', 'sesso', 'nascita', 'natoA', 'cf'].includes(d.pff)) cfRecalc(); return true; }
+    if (d.pfm) { mixInput(d.pfm, parseEuro(el.value) || 0); return true; }
     if (d.pfc) { f[d.pfc] = el.checked; return true; }
     return false;
   }
@@ -3238,6 +3378,7 @@
       if (Math.abs(s - imp) > 0.009) return toast(`I metodi fanno ${money(s)}, l'importo è ${money(imp)}`);
     } else parts = [{ m: f.met, a: imp }];
     if (f.doc === 'fattura' && !String(f.fatt.cf || '').trim()) return toast('Per la fattura scrivi il codice fiscale o la partita IVA');
+    if (f.doc === 'fattura') { const c = CF.check(f.fatt.cf); if (c !== 'ok' && c !== 'piva') return toast(c === 'piva-errata' ? 'La partita IVA non è valida: ricontrollala' : 'Il codice fiscale non è valido: ricontrollalo'); }
     const T = payTotals(f); const m = bkMoney(t, bk);
     const tipo = m.rest != null && imp >= m.rest - 0.009 ? 'saldo' : 'acconto';
     const agz = T.tot > 0 ? r2(imp * T.agenzia / T.tot) : imp;
@@ -3245,11 +3386,11 @@
       doc: f.doc, docStato: f.doc === 'scontrino' || f.doc === 'fattura' ? 'da_emettere' : '', cat: f.cat, desc: f.desc, circuito: T.tkt ? f.circuito : '', emis: T.tkt ? f.emis : '', ant: !!f.ant,
       lines: f.lines.filter(l => +l.q).map(l => ({ l: l.l, q: +l.q, bus: +l.bus || 0, tkt: +l.tkt || 0 })), suppl: T.sup, dir: +f.dir || 0, nT: T.nT, docTot: T.tot, agenzia: agz, biglietti: r2(imp - agz),
       pratica: f.pratica, canale: f.met === 'contanti' || f.met === 'pos' ? '' : f.canale, dataPag: f.met === 'contanti' || f.met === 'pos' ? '' : f.dataPag, pagante: f.pagante, note: f.note, fatt: f.doc === 'fattura' ? Object.assign({}, f.fatt) : null, sigla: sigla(ACC.sess.uid, ACC.me().name) });
-    if (f.doc === 'fattura' && bk.head.cid && S.clients.clienti[bk.head.cid]) { const c = S.clients.clienti[bk.head.cid]; Object.assign(c, { cf: f.fatt.cf, sdi: f.fatt.sdi, cap: f.fatt.cap, citta: f.fatt.citta }); if (f.fatt.ind) c.indirizzo = f.fatt.ind; save(); }
+    if (f.doc === 'fattura' && bk.head.cid && S.clients.clienti[bk.head.cid]) { const c = S.clients.clienti[bk.head.cid]; Object.assign(c, { cf: f.fatt.cf, sdi: f.fatt.sdi, cap: f.fatt.cap, citta: f.fatt.citta }); if (f.fatt.sesso) c.sesso = f.fatt.sesso; if (f.fatt.nascita) c.nascita = CF.itFromIso(f.fatt.nascita); if (f.fatt.natoA) c.natoA = f.fatt.natoA; if (f.fatt.ind) c.indirizzo = f.fatt.ind; save(); }
     ACC.tlog('info', `Incasso ${money(mv.tot)} (${parts.map(p => MET_L[p.m]).join(' + ')}) · ${DOC_L[f.doc]} · ${mv.cliente} · ${t.nome}`);
     let msg = `Incasso registrato: ${money(mv.tot)} · ${tipo}`;
     if (f.doc === 'scontrino') { const r = fiscalPrint(mv); msg += r.ok ? ' · scontrino stampato' : ` · scontrino di ${money(agz)} da emettere (${r.msg})`; }
-    if (f.doc === 'fattura') msg += ' · fattura da emettere';
+    if (f.doc === 'fattura') msg += ' · fattura pronta: premi «Apri in Danea» qui sotto';
     UI.pay.f = payDraft(t, deriveBookings(t).find(x => x.id === bk.id) || bk); commit(); toast(msg);
   }
 
@@ -3320,7 +3461,7 @@
     return `${contaTabs()}<div class="pagehead"><div><h1>Resoconto del ${esc(fmtDate(day))}</h1><div class="sub">${esc(fmtDate(day, true))} · ${inc.length} ${inc.length === 1 ? 'incasso' : 'incassi'}${ag !== 'tutte' ? ' · ' + esc(agName(ag)) : ' · tutte le agenzie'}</div></div>
         <div class="hbtns"><div class="seg" role="group" aria-label="Agenzia">${[['tutte', 'Tutte'], ...S.cfg.agenzie.map(a => [a.id, a.nome])].map(([k, l]) => `<button data-act="gag" data-v="${k}" aria-pressed="${ag === k}">${esc(l)}</button>`).join('')}</div>
           <button class="btn" data-act="gday" data-v="${dayISO(prev)}">‹</button><input type="date" class="btn" data-gdate="1" value="${esc(day)}" aria-label="Giorno"><button class="btn" data-act="gday" data-v="${dayISO(next)}">›</button>
-          <button class="btn" data-act="gexport">Scarica per Excel (foglio CASSA)</button></div></div>
+          ${inc.some(m => m.doc === 'fattura') ? '<button class="btn" data-act="daneaday">Fatture del giorno per Danea</button>' : ''}<button class="btn" data-act="gexport">Scarica per Excel (foglio CASSA)</button></div></div>
       <div class="tiles"><div class="tile dark"><span>Incassato</span><b>${money(tot)}</b><small>${inc.length} movimenti</small></div>${METG.map(([k, l]) => `<div class="tile"><span><i class="mdot ${MET_C[k]}"></i>${l}</span><b>${money(per[k] || 0)}</b>${k === 'altro' && Object.keys(altri).length ? `<small>${Object.entries(altri).map(([x, v]) => `${esc(MET_L[x] || x)} ${esc(fmtNum(v))}`).join(' · ')}</small>` : ''}</div>`).join('')}</div>
       <div class="three">
         <section class="box form"><h3>Cassa contanti</h3><div class="kv"><span>Inizio giornata</span><b>${money(sal.inizio)}</b></div><div class="kv"><span>Contanti incassati</span><b>${money(sal.inc)}</b></div>${sal.prel ? `<div class="kv"><span>Prelievi</span><b>− ${money(sal.prel)}</b></div>` : ''}${sal.app ? `<div class="kv"><span>Apporti</span><b>+ ${money(sal.app)}</b></div>` : ''}<div class="kv tot"><span>Fine giornata</span><b>${money(sal.fine)}</b></div>${ch && ch.contati && ch.contati.contanti != null ? `<div class="kv"><span>Contati alla chiusura</span><b>${money(ch.contati.contanti)} ${Math.abs(ch.contati.contanti - (per.contanti || 0)) < 0.01 ? '<span class="pill ok">quadra</span>' : ''}</b></div>` : ''}</section>
@@ -3333,6 +3474,79 @@
       </tbody></table></div></section>`;
   }
 
+  // ---------- «Apri in Danea»: la fattura preparata nell'app diventa un file Easyfatt-Xml ----------
+  // Facendo doppio clic sul file scaricato (oppure in Danea: Documenti › Utilità › Importa documenti Easyfatt-Xml)
+  // Danea mostra la fattura pronta: si preme «Importa», si controlla e si invia come fattura elettronica.
+  // Danea abbina il cliente per codice fiscale, partita IVA, email o PEC; se non c'è lo crea.
+  // Tracciato: https://www.danea.it/software/easyfatt/xml/documenti/
+  const DANEA_DEF = () => ({ iva: '74ter', pag: {} });
+  const daneaCfg = () => Object.assign(DANEA_DEF(), S.cfg.danea || {});
+  const xq = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' }[c]));
+  const xt = (tag, v) => (v === '' || v == null ? '' : `<${tag}>${xq(v)}</${tag}>`);
+  const n2 = v => (Math.round((+v || 0) * 100) / 100).toFixed(2);
+  // la fattura nell'app: il movimento di cassa con documento «fattura» (con le righe, i dati del cliente e il viaggio)
+  function daneaDoc(m) {
+    const C = daneaCfg(); const t = S.trips.find(x => x.id === m.tripId); const F = m.fatt || {};
+    const cf = String(F.cf || '').toUpperCase().replace(/\s/g, ''); const piva = /^\d{11}$/.test(cf);
+    const sdi = String(F.sdi || '').trim(); const isPec = /@/.test(sdi);
+    const cl = t && (() => { const bk = deriveBookings(t).find(b => b.id === m.bkId); return bk && bk.head.cid ? S.clients.clienti[bk.head.cid] : null; })();
+    const nome = [F.cognome, F.nome].filter(Boolean).join(' ').trim() || m.cliente;
+    const when = t ? fmtTripDate(t) : '';
+    const rows = (m.lines || []).filter(l => +l.q).map(l => `<Row>${xt('Code', t && t.codDanea)}${xt('Description', `${t ? t.nome : m.desc}${when ? ' · ' + when : ''}${(m.lines || []).filter(x => +x.q).length > 1 || l.l !== 'Intero' ? ' · ' + l.l : ''}`)}<Qty>${+l.q}</Qty><Price>${n2((+l.bus || 0) + (+l.tkt || 0))}</Price><VatCode>${xq(C.iva)}</VatCode></Row>`);
+    if (+m.suppl) rows.push(`<Row><Description>Supplemento posti in pullman</Description><Qty>1</Qty><Price>${n2(m.suppl)}</Price><VatCode>${xq(C.iva)}</VatCode></Row>`);
+    if (+m.dir && +m.nT) rows.push(`<Row><Description>Diritti di prevendita</Description><Qty>${+m.nT}</Qty><Price>${n2(m.dir)}</Price><VatCode>${xq(C.iva)}</VatCode></Row>`);
+    if (!rows.length) rows.push(`<Row>${xt('Code', t && t.codDanea)}<Description>${xq(m.desc || (t && t.nome) || 'Viaggio')}</Description><Qty>1</Qty><Price>${n2(m.docTot || m.tot)}</Price><VatCode>${xq(C.iva)}</VatCode></Row>`);
+    // pagamenti: tutti gli incassi registrati per questa prenotazione (già pagati) + l'eventuale saldo ancora da pagare
+    const pays = allMovs().filter(x => x.tripId === m.tripId && x.bkId === m.bkId && isInc(x)).sort((a, b) => a.at.localeCompare(b.at));
+    const stornati = new Set(pays.filter(x => x.storno).map(x => x.storno));
+    const paid = pays.filter(x => x.tipo !== 'storno' && !stornati.has(x.id));
+    // quanto risultava già pagato nella lista prima dell'app (colonna «pagato» del Word)
+    const bk0 = t && deriveBookings(t).find(b => b.id === m.bkId); const legacy = bk0 ? Math.max(0, bkMoney(t, bk0).paid - paidMovs(t.id, bk0.id)) : 0;
+    const tot = +m.docTot || +m.tot; const paidTot = paid.reduce((a, x) => a + (+x.tot || 0), 0) + legacy;
+    const pl = (legacy > 0.009 ? [`<Payment><Advance>true</Advance><Date>${paid[0] ? paid[0].day : m.day}</Date><Amount>${n2(legacy)}</Amount><Paid>true</Paid></Payment>`] : []).concat(paid.map(x => `<Payment><Advance>${x.tipo === 'acconto' ? 'true' : 'false'}</Advance><Date>${x.day}</Date><Amount>${n2(x.tot)}</Amount><Paid>true</Paid></Payment>`));
+    if (tot - paidTot > 0.009) pl.push(`<Payment><Advance>false</Advance><Date>${(t && t.quota && t.quota.saldoEntro) || (t && t.data) || todayISO()}</Date><Amount>${n2(tot - paidTot)}</Amount><Paid>false</Paid></Payment>`);
+    const met = (m.parts || [])[0] ? m.parts[0].m : ''; const pn = (C.pag || {})[met] || '';
+    const note = [`Viaggi in Pullman · ${m.cliente}`, m.pratica ? 'pratica ' + m.pratica : '', `incasso del ${fmtDate(m.day)} (${(m.parts || []).map(p => MET_L[p.m] || p.m).join(' + ')}) registrato da ${m.who} · ${agName(m.ag)}`, m.note].filter(Boolean).join(' · ');
+    return `<Document><DocumentType>I</DocumentType><Date>${todayISO()}</Date>`
+      + xt('CustomerName', nome) + xt('CustomerAddress', F.ind) + xt('CustomerPostcode', F.cap) + xt('CustomerCity', F.citta) + xt('CustomerCountry', 'Italia')
+      + (piva ? xt('CustomerVatCode', cf) : xt('CustomerFiscalCode', cf))
+      + (isPec ? xt('CustomerPec', sdi) : xt('CustomerEInvoiceDestCode', sdi.toUpperCase()))
+      + xt('CustomerEmail', cl && cl.email) + xt('CustomerCellPhone', (cl && cl.tel) || m.tel)
+      + `<PricesIncludeVat>true</PricesIncludeVat>` + xt('PaymentName', pn) + xt('InternalComment', note)
+      + `<Rows>${rows.join('')}</Rows><Payments>${pl.join('')}</Payments></Document>`;
+  }
+  function daneaFile(movs) {
+    return `<?xml version="1.0" encoding="UTF-8"?>\n<EasyfattDocuments AppVersion="2" Creator="Viaggi in Pullman ${xq(VERSION)}"><Documents>${movs.map(daneaDoc).join('')}</Documents></EasyfattDocuments>\n`;
+  }
+  function daneaDownload(movs, name) {
+    movs = movs.filter(m => m && m.doc === 'fattura' && m.tipo !== 'storno');
+    if (!movs.length) return toast('Nessuna fattura da preparare');
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([daneaFile(movs)], { type: 'application/xml' })); a.download = name.replace(/[\\/:*?"<>|]+/g, ' ').trim() + '.DefXml';
+    document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    movs.forEach(m => movPatch(m.id, { danea: new Date().toISOString(), daneaBy: ACC.me().name }));
+    ACC.tlog('info', `Danea: preparate ${movs.length} ${movs.length === 1 ? 'fattura' : 'fatture'} (${movs.map(m => m.cliente).join(', ').slice(0, 200)})`);
+    toast(`File per Danea scaricato: aprilo con un doppio clic (o in Danea: Documenti › Utilità › Importa documenti Easyfatt-Xml)`);
+  }
+  // segna sul movimento che la fattura è stata preparata per Danea (il movimento resta nel file del computer che l'ha creato)
+  function movPatch(id, patch) {
+    const hit = STORE.list('/cassa/movimenti/').find(([, d]) => d && (d.movs || []).some(x => x.id === id)); if (!hit) return;
+    const [p, d] = hit; const cur = JSON.parse(JSON.stringify(d));
+    cur.movs = cur.movs.map(x => x.id === id ? Object.assign(x, patch, { u: tick() }) : x); STORE.put(p, cur); render();
+  }
+  function daneaSettingsHTML() {
+    const C = daneaCfg();
+    return `<h2>Danea Easyfatt</h2><p class="sub">Servono al pulsante «Apri in Danea» delle fatture dei tour. I valori devono essere scritti esattamente come in Danea.</p>
+      <div class="box form"><label>Codice IVA dei viaggi (tabella «Categorie Iva» di Danea)<input id="dn-iva" value="${esc(C.iva)}" placeholder="74ter"></label>
+        <h3>Tipo di pagamento per metodo (tabella «Tipi pagamento» di Danea)</h3><div class="small">Lascia vuoto se non vuoi indicarlo: lo sceglierete in Danea.</div>
+        ${METODI.map(([k, l]) => `<label class="kv"><span>${esc(l)}</span><input data-dnpag="${k}" value="${esc((C.pag || {})[k] || '')}" placeholder="es. ${k === 'bonifico' ? 'Bonifico bancario' : k === 'contanti' ? 'Contanti' : k === 'pos' ? 'Bancomat / POS' : ''}"></label>`).join('')}
+        <div><button class="btn primary" data-act="savedanea">Salva</button></div></div>
+      <div class="box form"><h3>Codice prodotto Danea dei viaggi</h3><div class="small">Si scrive in ogni viaggio: «Modifica gita» › «Codice prodotto Danea» (es. 261018 boschi e zafferana 18/10/26). Se manca, la riga della fattura ha solo la descrizione.</div></div>`;
+  }
+  function daneaSave() {
+    const pag = {}; $$('[data-dnpag]').forEach(i => { if (i.value.trim()) pag[i.dataset.dnpag] = i.value.trim(); });
+    S.cfg.danea = { iva: ($('#dn-iva').value || '').trim() || '74ter', pag }; save(); toast('Impostazioni di Danea salvate');
+  }
+
   // ---------- impostazioni a sezioni ----------
   const SSEC = [
     ['account', 'Il mio account', 'A', '#6E6E73', null],
@@ -3340,6 +3554,7 @@
     ['agenzie', 'Agenzie e casse', '€', '#2DA160', 'settings'],
     ['luoghi', 'Luoghi di partenza e mappe', 'M', '#0A6CD6', 'settings'],
     ['whatsapp', 'WhatsApp ai clienti', 'W', '#1FA855', 'settings'],
+    ['danea', 'Danea Easyfatt', 'D', '#E07B00', 'settings'],
     ['sync', 'Sincronizzazione', 'S', '#2B2F33', null],
     ['backup', 'Copia di sicurezza', 'C', '#6E6E73', 'settings']
   ];
@@ -3387,6 +3602,7 @@
       <div class="box form"><div class="kv"><span>Stato</span><b>${!st.hasKey ? 'Dropbox non configurato (manca la chiave in config.js)' : st.linked ? (st.error ? 'Errore: ' + esc(st.error) : st.pending ? `${st.pending} modifiche da inviare` : 'Tutto sincronizzato') : 'Non collegato: i dati restano solo su questo computer'}</b></div>
         <div class="kv"><span>Ultima sincronizzazione</span><b>${st.last ? esc(st.last.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' })) : '—'}</b></div><div class="kv"><span>Questo computer</span><b>${esc(STORE.device.id)}</b></div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">${st.linked ? '<button class="btn" data-act="syncnow">Sincronizza adesso</button>' : st.hasKey ? '<button class="btn primary" data-act="glink">Collega Dropbox</button>' : ''}</div></div>`; }
+    else if (sec === 'danea') body = daneaSettingsHTML();
     else if (sec === 'backup') body = `<h2>Copia di sicurezza</h2><p class="sub">Dropbox tiene già tutto, anche le versioni precedenti dei file. Qui puoi scaricare una copia completa o recuperare i dati della versione di prova.</p>
       <div class="box form"><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" data-act="export">Scarica una copia</button><label class="btn" for="s-restore">Recupera da una copia (anche della versione OnBoard)<input id="s-restore" type="file" accept=".json,application/json" hidden></label></div>
       <div class="small">Recuperando una copia, i viaggi si aggiungono a quelli che ci sono già: se un viaggio dell'elenco 2027 è ancora vuoto, la lista della copia ci entra dentro.</div></div>`;
@@ -3528,13 +3744,13 @@
   }
 
   // ---------- render ----------
-  const FOCUS_KEYS = ['hq', 'aq', 'r', 'ar', 'nr', 'f', 'q', 'qs', 'qt', 'tf', 'dep2', 'dep', 'k', 'bind', 'cl', 'cfgag', 'cfgl', 'pf', 'pl', 'pff', 'pfm', 'usig'];
-  const ACT_PERM = { unew: 'users', unewm: 'tech', ureset: 'users', usave: 'users', resetall: 'tech', doresetall: 'tech', savekeys: 'tech', wipelocal: 'tech', lgf: 'tech', lexport: 'tech', diagexport: 'tech', lnew: 'settings', ldel: 'settings', savewa: 'settings', savetel: 'settings', export: 'settings', pay: 'cassa', paypanel: 'viaggi', pfsave: 'cassa', cashmov: 'cassa', cashsave: 'cassa', storno: 'cassa', cclose: 'cassa', ccsave: 'cassa', clnew: 'anag', cldel: 'anag', impgo: 'anag', newtrip: 'viaggi', deltrip: 'viaggi' };
+  const FOCUS_KEYS = ['depsel', 'hq', 'aq', 'r', 'ar', 'nr', 'f', 'q', 'qs', 'qt', 'tf', 'dep2', 'dep', 'k', 'bind', 'cl', 'cfgag', 'cfgl', 'pf', 'pl', 'pff', 'pfm', 'usig'];
+  const ACT_PERM = { unew: 'users', unewm: 'tech', ureset: 'users', usave: 'users', resetall: 'tech', doresetall: 'tech', savekeys: 'tech', wipelocal: 'tech', lgf: 'tech', lexport: 'tech', diagexport: 'tech', lnew: 'settings', ldel: 'settings', savewa: 'settings', savetel: 'settings', savedanea: 'settings', export: 'settings', pay: 'cassa', paypanel: 'viaggi', pfsave: 'cassa', cashmov: 'cassa', cashsave: 'cassa', storno: 'cassa', cclose: 'cassa', ccsave: 'cassa', clnew: 'anag', cldel: 'anag', impgo: 'anag', newtrip: 'viaggi', deltrip: 'viaggi' };
   const VIEW_PERM = { home: 'viaggi', models: 'viaggi', trip: 'viaggi', anag: 'anag', conta: 'conta', super: 'tech' };
-  let lastNav = '', lastSess = '';
+  let lastNav = '', lastSess = '', lastGateHTML = '';
   function render() {
     const t0 = performance.now();
-    try { renderIn(); } catch (e) { DIAG.ev('errore', 'Errore nel disegnare la pagina: ' + e.message, { stack: e.stack, vista: UI.view, sezione: UI.sec }); throw e; }
+    try { renderIn(); if (UI.pay) setTimeout(cfRecalc, 0); } catch (e) { DIAG.ev('errore', 'Errore nel disegnare la pagina: ' + e.message, { stack: e.stack, vista: UI.view, sezione: UI.sec }); throw e; }
     const ms = performance.now() - t0;
     const sk = ACC.sess ? `${ACC.sess.uid}|${ACC.sess.ag || ''}` : '';
     if (sk !== lastSess) { const me = ACC.me(); DIAG.ev('accesso', sk ? `Dentro come ${me ? me.name + ' (' + ROLE_L[me.role] + ')' : '?'}${ACC.sess.ag ? ' · ' + agName(ACC.sess.ag) : ''}` : 'Nessuno collegato (schermata di accesso)'); lastSess = sk; }
@@ -3548,11 +3764,14 @@
     if (step) {
       document.body.classList.add('gated');
       const hadFocus = document.activeElement && document.activeElement.closest && document.activeElement.closest('#app');
-      $('#app').innerHTML = gateView(step);
+      const gh = gateView(step);
+      // la stessa schermata non si ridisegna: altrimenti l'animazione «Ciao …» ripartiva quando arrivava la sincronizzazione
+      if (gh === lastGateHTML && $('#app .gate')) return;
+      lastGateHTML = gh; $('#app').innerHTML = gh;
       const f = $('#app form input:not([type=checkbox])'); if (f && !hadFocus) setTimeout(() => f.focus(), 30);
       return;
     }
-    document.body.classList.remove('gated');
+    document.body.classList.remove('gated'); lastGateHTML = '';
     if (VIEW_PERM[UI.view] && !ACC.can(VIEW_PERM[UI.view])) UI.view = ACC.can('viaggi') ? 'home' : 'conta';
     if (UI.view === 'cassa' && !(ACC.can('cassa') || ACC.can('cassaAll'))) UI.view = 'home';
     const ae = document.activeElement; let fsel = null, fpos = null;
@@ -3749,6 +3968,9 @@
       case 'lnew': S.cfg.luoghi = S.cfg.luoghi || []; S.cfg.luoghi.push({ code: '', citta: '', luogo: '', maps: '' }); save(); render(); { const ins = $$('[data-cfgl][data-k="code"]'); if (ins.length) ins[ins.length - 1].focus(); } break;
       case 'ldel': S.cfg.luoghi.splice(+el.dataset.i, 1); save(); render(); break;
       case 'savewa': S.cfg.waTemplate = $('#s-wa').value; save(); toast('Testo del messaggio salvato'); break;
+      case 'savedanea': daneaSave(); break;
+      case 'danea1': { if (!(ACC.can('cassa') || ACC.can('conta'))) break; const m = allMovs().find(x => x.id === el.dataset.id); if (m) daneaDownload([m], `Fattura ${m.cliente} ${m.day}`); break; }
+      case 'daneaday': { if (!(ACC.can('cassa') || ACC.can('conta'))) break; const g = giornoData(); const st = new Set(g.movs.filter(x => x.storno).map(x => x.storno)); daneaDownload(g.movs.filter(x => x.doc === 'fattura' && x.tipo !== 'storno' && !st.has(x.id)), `Fatture ${g.day}${g.ag !== 'tutte' ? ' ' + agName(g.ag) : ''}`); break; }
       case 'savetel': S.cfg.telAgenzia = ($('#s-tel').value || '').trim(); save(); toast('Telefono salvato'); break;
       case 'syncnow': STORE.syncNow().then(() => { toast('Sincronizzato'); render(); }).catch(() => toast('Dropbox non risponde adesso: riprovo da solo')); break;
       case 'savekeys': waSettingsSave(); ACC.tlog('avviso', 'Chiavi WhatsApp aggiornate'); toast('Chiavi salvate'); render(); break;
@@ -3766,8 +3988,9 @@
       case 'pay': case 'paypanel': closePop(); if (UI.pay && UI.pay.bkId === el.dataset.id && el.dataset.act === 'paypanel') payClose(); else payOpen(el.dataset.id); break;
       case 'pfclose': payClose(); break;
       case 'pfdoc': if (UI.pay) { UI.pay.f.doc = el.dataset.k; render(); } break;
-      case 'pfmet': if (UI.pay) { UI.pay.f.met = el.dataset.k; if (el.dataset.k === 'misto' && !Object.keys(UI.pay.f.mix).length) UI.pay.f.mix = {}; render(); } break;
+      case 'pfmet': if (UI.pay) { const f = UI.pay.f; f.met = el.dataset.k; if (el.dataset.k === 'misto') { f.mix = {}; f.mixT = {}; f.impFromMix = !(+f.imp > 0); } render(); if (el.dataset.k === 'misto') setTimeout(() => { const i = $('[data-pfm="contanti"]'); if (i) i.focus(); }, 30); } break;
       case 'pfsave': if (UI.pay) paySave(); break;
+      case 'pfrest': if (UI.pay) mixRest(el.dataset.k); break;
       case 'cashmov': cashMovModal(el.dataset.k); break;
       case 'cashsave': cashMovSave(); break;
       case 'ctab': UI.ctab = el.dataset.v; render(); break;
@@ -3797,7 +4020,7 @@
       case 'newtrip': tripModal(null); break;
       case 'edittrip': tripModal(t); break;
       case 'savetrip': {
-        const v = { nome: $('#t-nome').value.trim(), data: $('#t-data').value, fine: $('#t-fine').value, programma: $('#t-prog').value.trim(), cat: $('#t-cat').value, code: $('#t-code').value.trim(), extra: $('#t-extra').checked };
+        const v = { nome: $('#t-nome').value.trim(), data: $('#t-data').value, fine: $('#t-fine').value, programma: $('#t-prog').value.trim(), cat: $('#t-cat').value, codDanea: ($('#t-danea') ? $('#t-danea').value.trim() : ''), code: $('#t-code').value.trim(), extra: $('#t-extra').checked };
         if (!v.nome) { toast('Scrivi il nome della gita'); $('#t-nome').focus(); break; }
         if (!v.data) { toast('Scegli la data di partenza'); break; }
         if (UI.modal.id) { Object.assign(S.trips.find(x => x.id === UI.modal.id), v); closeModal(); commit(); }
@@ -3907,6 +4130,7 @@
     if (d.qs && t) { t.quota.suppl[d.qs] = parseEuro(el.value); save(); return; }
     if (d.qt && t) { t.quota[d.qt] = el.value.trim(); save(); return; }
     if (d.tf && t) { if (d.tf !== 'nome' || el.value.trim()) t[d.tf] = el.type === 'date' ? el.value : el.value; save(); return; }
+    if (d.depsel !== undefined && t) { const i = +d.depsel; const old = t.partenze[i] || {}; if (el.value === 'cur') return; if (el.value === '') { t.partenze[i] = { citta: '', luogo: '', ora: old.ora || '', code: '' }; } else { const l = (S.cfg.luoghi || [])[+el.value]; if (l) t.partenze[i] = { citta: l.citta || '', luogo: l.luogo || '', ora: old.ora || '', code: String(l.code || '').toUpperCase() }; } while (t.partenze.length && !(t.partenze[t.partenze.length - 1] || {}).citta && !(t.partenze[t.partenze.length - 1] || {}).ora) t.partenze.pop(); save(); later(); return; }
     if (d.dep2 !== undefined && t) { t.partenze[+d.dep2] = t.partenze[+d.dep2] || { citta: '', luogo: '', ora: '' }; t.partenze[+d.dep2][d.k] = el.value; save(); return; }
     if (d.bind && b) { b[d.bind] = el.value; save(); return; }
     if (d.dep !== undefined && b) { b.partenze[+d.dep][d.k] = d.k === 'code' ? el.value.toUpperCase() : el.value; save(); return; }
@@ -3940,6 +4164,12 @@
   });
   document.addEventListener('submit', e => { const f = e.target.closest('form[data-form]'); if (!f) return; e.preventDefault(); gateSubmit(f).catch(err => { GATE.busy = false; GATE.msg = 'Qualcosa non ha funzionato: riprova.'; ACC.tlog('errore', 'Accesso: ' + (err && err.message || err)); render(); }); });
   window.addEventListener('scroll', () => { if (AC.el) acClose(); }, { passive: true });
+  // suggerimento dell'anagrafica: si sceglie appena si preme il tasto del mouse, prima che il campo perda il cursore
+  // (prima, uscendo dal campo, la lista si ridisegnava e il clic andava perso)
+  document.addEventListener('mousedown', e => {
+    const it = e.target.closest && e.target.closest('.acbox [data-act=acpick]'); if (!it || e.button !== 0) return;
+    e.preventDefault(); e.stopPropagation(); acPick(it.dataset.id);
+  }, true);
   document.addEventListener('keydown', e => {
     if (e.key === 'Escape' && AC.el && !(e.target.classList && e.target.classList.contains('wc'))) { acClose(); return; }
     if (e.key === 'Escape') { if ($('#pop')) return closePop(); if (!$('#print-root').hidden) return closePrint(); if ($('#modal-root').innerHTML) return closeModal(); if (UI.pay) return payClose(); if (UI.sel || UI.selP || UI.move != null) { UI.sel = UI.selP = null; UI.move = null; render(); } return; }

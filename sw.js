@@ -1,7 +1,7 @@
 // Rende l'app utilizzabile anche senza connessione. Il numero cambia da solo a ogni nuova versione.
-const VERSION = "viaggi-laterra-1.3.1";
-const SHELL = ["./", "./index.html", "./app.js?v=1.3.1", "./app.css?v=1.3.1", "./config.js?v=1.3.1", "./dropbox.js?v=1.3.1", "./layouts.js?v=1.3.1", "./vendor/jszip.min.js",
-  "./vendor/pdfjs/pdf.min.mjs", "./vendor/pdfjs/pdf.worker.min.mjs", "./logo.jpg", "./posto.html", "./manifest.webmanifest",
+const VERSION = "viaggi-laterra-1.6";
+const SHELL = ["./", "./index.html", "./app.js?v=1.6", "./app.css?v=1.6", "./config.js?v=1.6", "./dropbox.js?v=1.6", "./layouts.js?v=1.6", "./vendor/jszip.min.js",
+  "./vendor/pdfjs/pdf.min.mjs", "./vendor/comuni.txt", "./vendor/pdfjs/pdf.worker.min.mjs", "./logo.jpg", "./posto.html", "./manifest.webmanifest",
   "./icons/icon-192.png", "./icons/icon-512.png", "./icons/apple-touch-icon.png", "./icons/favicon-64.png"];
 self.addEventListener("install", (e) => { e.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener("activate", (e) => { e.waitUntil((async () => { for (const k of await caches.keys()) if (k !== VERSION) await caches.delete(k); await self.clients.claim(); })()); });
