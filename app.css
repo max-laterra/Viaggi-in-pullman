@@ -1082,3 +1082,7 @@ input.btn[type=date],input.btn[type=month]{font:600 14px var(--sans);color:var(-
 .pp-mix .pay-row .btn.sm{padding:4px 10px}
 .pp-mixsum{font-size:13.5px;padding:4px 2px}.pp-mixsum .ok{color:#1E7A3C;font-weight:600}.pp-mixsum .bad{color:var(--red);font-weight:600}
 .pay-met button[data-k="misto"]{grid-column:span 2;white-space:nowrap}
+
+.wl select.wsel.room{text-align:left;text-align-last:left;padding-left:5px}
+.wl-staff{max-width:760px}
+.rlt tr.rl-g td{background:#F1EFEA;font-weight:800;text-transform:uppercase;letter-spacing:.03em;font-size:12px;padding:6px 8px}

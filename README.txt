@@ -1,7 +1,7 @@
 VIAGGI IN PULLMAN · LA TERRA
 ============================
 
-Versione: 1.6
+Versione: 1.7
 Pacchetto creato il: 28/10/2026
 
 Come installarla o aggiornarla: vedi LEGGIMI.txt.
@@ -9,6 +9,21 @@ Aggiornamento: carica su GitHub TUTTI i file, config.js compreso (contiene già 
 
 MODIFICHE
 ---------
+
+VERSIONE 1.7 · 28/10/2026
+- Lista dei tour: la colonna «hotel» è una tendina con Singola, Matrimoniale, Tripla, Quadrupla,
+  Matrimoniale + lettino (le scritte delle liste Word come «matrim» o «singola» vengono riconosciute).
+  In «Matrimoniale + lettino» la terza persona è il bambino nel lettino.
+- Lista dei tour: l'ultima colonna ha il simbolo «€» (prima «P»).
+- Rooming list rifatta: camere raggruppate per tipo (singole, doppie, matrimoniali, matrimoniali +
+  lettino, triple, quadruple) con numero di camera e ospiti; l'età solo per i bambini; nelle note per
+  l'hotel restano solo le cose utili (cibo, allergie, richieste) e spariscono pagamenti, bonifici,
+  telefoni, email e richieste sui posti del pullman; tolti i trattini finali dai nomi.
+- Nuova tabella «Staff in hotel» nella lista dei tour (accompagnatore, autista… con la loro camera):
+  finiscono in fondo alla rooming list. Importando la lista Word si riempie da sola con le righe
+  «accompagnatore» e «autista».
+- Biglietteria eventi: al posto delle tre tabelle «Non partono più» c'è una sola sezione «Vuole vendere
+  il biglietto» (dal menu del numero di riga: «Vuole vendere il biglietto»).
 
 VERSIONE 1.6 · 28/10/2026
 - Pagamento misto più semplice (pulsante «Misto (es. contanti + POS)»): con contanti e POS basta

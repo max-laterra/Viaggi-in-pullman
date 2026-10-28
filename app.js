@@ -1,6 +1,6 @@
 (function () {
   'use strict';
-  const VERSION = '1.6';
+  const VERSION = '1.7';
   const LOGO = './logo.jpg';
   const KEY = 'laterra.prenotazioniPosti.v1';
   const $ = (s, r = document) => r.querySelector(s);
@@ -549,6 +549,7 @@
   const isExtraBed = s => /^\s*\+|3\s*°?\s*lett|letto\s*agg|aggiunt/i.test(s || '');
   function normCam(s) {
     s = String(s || '').trim(); const l = s.toLowerCase(); if (!l) return '';
+    if (/lett(ino|o)?\b/.test(l) && /matr|dopp/.test(l)) return 'matrimoniale + lettino';
     if (/^sing/.test(l)) return 'singola'; if (/^dopp/.test(l)) return 'doppia'; if (/^matr/.test(l)) return 'matrimoniale';
     if (/^tripl/.test(l)) return 'tripla'; if (/^quadr/.test(l)) return 'quadrupla'; if (isExtraBed(l)) return /3/.test(l) ? '3° letto' : '+ letto';
     return s;
@@ -560,7 +561,7 @@
     bk.persone.forEach(p => { const st = roomStart(p); if (!cur || st) { cur = { tipo: st ? (isExtraBed(p.camera) ? '' : p.camera) : '', num: p.ncam || '', persone: [] }; rooms.push(cur); } cur.persone.push(p); });
     return rooms;
   }
-  function roomKind(r) { const n = r.persone.length; if (n === 1) return 'singola'; if (n === 2) return r.tipo === 'doppia' ? 'doppia' : 'matrimoniale'; if (n === 3) return 'tripla'; if (n === 4) return 'quadrupla'; return `${n} letti`; }
+  function roomKind(r) { const n = r.persone.length; if (r.tipo === 'matrimoniale + lettino') return r.tipo; if (n === 1) return 'singola'; if (n === 2) return r.tipo === 'doppia' ? 'doppia' : 'matrimoniale'; if (n === 3) return 'tripla'; if (n === 4) return 'quadrupla'; return `${n} letti`; }
   function roomLabel(r) { const k = roomKind(r); const base = r.tipo && r.tipo !== k ? `${r.tipo.slice(0, 6)}. +${r.persone.length - 2}` : k; return (r.num ? `n. ${r.num} ` : '') + base; }
   function ageAt(p, iso) {
     const m = /(\d{1,2})\/(\d{1,2})\/(\d{2,4})/.exec(p.nascita || ''); if (!m) return null;
@@ -575,6 +576,7 @@
     if (a != null && a < lo) return 'inf';
     if (a != null && a <= hi) return 'bam';
     if (/3/.test(p.camera || '') && isExtraBed(p.camera)) return '3l';
+    if (room && room.tipo === 'matrimoniale + lettino' && idx >= 2) return 'inf';
     if (room && room.persone.length >= 3 && idx >= 2) return '3l';
     return 'ad';
   }
@@ -1055,7 +1057,7 @@
       const di = idx.data; const shift = di >= 0 ? 3 - di : 0;
       if (shift) Object.keys(idx).forEach(k => { if (idx[k] >= di) idx[k] += shift; });
     }
-    const out = [], warn = [], raw = []; let cur = null, left = 0, guida = false, prevFila = '';
+    const out = [], warn = [], raw = [], staff = []; let cur = null, left = 0, guida = false, prevFila = '';
     for (let i = (hdr >= 0 ? hdr + 1 : 0); i < rows.length; i++) {
       const r = rows[i]; if (!r.length || !r.some(Boolean)) continue;
       const joined = r.join(' ');
@@ -1067,6 +1069,14 @@
         if (/guida|2\s*°?\s*autista|second[oa] autista/i.test(joined)) guida = true;
         // dopo il separatore ci sono solo accompagnatore e autista: guardo se nelle righe successive si parla di guida
         for (let j = i + 1; j < rows.length && j < i + 4; j++) if (/guida|2\s*°?\s*autista/i.test(rows[j].join(' '))) guida = true;
+        // accompagnatore, autista, guida con la loro camera (servono alla rooming list)
+        for (let j = i; j < rows.length && j < i + 8; j++) {
+          const rr = rows[j]; if (/lista d.?attesa|non partono|supplementi/i.test(rr.join(' '))) break;
+          const o2 = /^(\d{1,3}|-+|)$/.test(String(rr[0] || '').trim()) ? 0 : -1; const ro = String(rr[1 + o2] || '').trim();
+          if (!/^(accompagnat|autist|guida|hostess|capogruppo)/i.test(ro)) continue;
+          const gg = k => idx[k] >= 0 ? String(rr[idx[k] + o2] || '').trim() : '';
+          staff.push({ ruolo: ro.charAt(0).toUpperCase() + ro.slice(1).toLowerCase(), nome: String(rr[2 + o2] || '').trim(), camera: gg('hotel') ? normCam(gg('hotel')) : '', num: gg('cam') });
+        }
         break;
       }
       if (!hasN && hdr < 0) continue;
@@ -1116,7 +1126,7 @@
       g.bonifico = g.persone.some(p => /bonific/i.test(p.note || ''));
       g.persone.forEach(p => { delete p._paid; delete p._ann; });
     });
-    return { bookings: out, warn, guida, raw };
+    return { bookings: out, warn, guida, raw, staff };
   }
   function parsePaste(text) { return parseRows(text.split(/\r?\n/).map(l => l.split('\t'))); }
   async function docxTables(file) {
@@ -1404,8 +1414,8 @@
   }
   const saldato = bk => !!(bk.head.saldato || (bk._m && bk._m.saldato));
   function roomsText(rooms) {
-    const order = ['singola', 'doppia', 'matrimoniale', 'tripla', 'quadrupla'];
-    const pl = { singola: 'singole', doppia: 'doppie', matrimoniale: 'matrimoniali', tripla: 'triple', quadrupla: 'quadruple' };
+    const order = ['singola', 'doppia', 'matrimoniale', 'matrimoniale + lettino', 'tripla', 'quadrupla'];
+    const pl = { singola: 'singole', doppia: 'doppie', matrimoniale: 'matrimoniali', 'matrimoniale + lettino': 'matrimoniali + lettino', tripla: 'triple', quadrupla: 'quadruple' };
     return Object.keys(rooms).sort((a, c) => order.indexOf(a) - order.indexOf(c)).map(k => `${rooms[k]} ${rooms[k] > 1 ? (pl[k] || k) : k}`).join(' · ');
   }
 
@@ -1413,7 +1423,7 @@
   const listCols = (tour, bigl) => bigl
     ? [['cognome', 'cognome'], ['nome', 'nome'], ['tel', 'contatto'], ['note', 'note / mail'], ['pagato', '€']]
     : tour
-    ? [['cognome', 'cognome'], ['nome', 'nome'], ['nascita', 'data'], ['tel', 'contatto'], ['natoA', 'nato/a a'], ['part', 'P'], ['hotel', 'hotel'], ['cam', 'C'], ['fila', 'fila'], ['note', 'note / mail'], ['pagato', 'P']]
+    ? [['cognome', 'cognome'], ['nome', 'nome'], ['nascita', 'data'], ['tel', 'contatto'], ['natoA', 'nato/a a'], ['part', 'P'], ['hotel', 'hotel'], ['cam', 'C'], ['fila', 'fila'], ['note', 'note / mail'], ['pagato', '€']]
     : [['cognome', 'cognome'], ['nome', 'nome'], ['nascita', 'data'], ['tel', 'contatto'], ['part', 'part'], ['fila', 'fila'], ['note', 'note / mail'], ['pagato', '€']];
   const ATTC = [['cognome', 'Cognome'], ['nome', 'Nome'], ['nascita', 'data di nascita'], ['tel', 'contatto'], ['part', 'part'], ['note', 'note'], ['richiesta', 'data di richiesta'], ['avviso', 'data di avviso'], ['risposta', 'risposta del cliente']];
   function syncInfo(st) {
@@ -1571,6 +1581,12 @@
     const fromTrip = (t.partenze || []).map(d => { const l = depLuogo(d); return l ? l : null; }).filter(Boolean);
     return (fromTrip.length ? fromTrip : LU).map(l => ({ code: String(l.code).toUpperCase(), label: [l.citta, l.luogo].filter(Boolean).join(' · ') }));
   }
+  // tipi di camera della tendina «hotel» (si salva il nome; le liste Word con «matrim», «singol»… vengono riconosciute)
+  const ROOMT = [['singola', 'Singola'], ['matrimoniale', 'Matrimoniale'], ['tripla', 'Tripla'], ['quadrupla', 'Quadrupla'], ['matrimoniale + lettino', 'Matrimoniale + lettino']];
+  function roomSel(attr, v, label) {
+    const cur = String(v || '').trim(); const k = cur ? normCam(cur) : ''; const known = ROOMT.some(([x]) => x === k);
+    return `<select class="wc wsel room" ${attr} aria-label="${esc(label)}"><option value=""></option>${ROOMT.map(([x, l]) => `<option value="${x}"${known && k === x ? ' selected' : ''}>${l}</option>`).join('')}${cur && !known ? `<option value="${esc(cur)}" selected>${esc(cur)}</option>` : ''}</select>`;
+  }
   function wRow(t, r, i, cols, ctx, bigl) {
     const x = ctx.byRow[r.id]; const head = x && x.k === 0; const bk = x && x.bk;
     const ok = bk && saldato(bk); const seat = ctx.SI[r.id];
@@ -1582,8 +1598,15 @@
     const tip = head && bk._m ? `Totale ${euro(bk._m.due)} · pagato ${euro(bk._m.paid)}${bk._m.rest ? ' · da pagare ' + euro(bk._m.rest) : ''}${bk.mancano ? ` · mancano ${bk.mancano} nomi` : ''}` : '';
     return `<tr class="${cls}" data-rowid="${r.id}">
       <td class="wn">${drag}<button class="rn" data-act="rowmenu" data-id="${r.id}" aria-label="Riga ${i + 1}: azioni">${i + 1}</button></td>
-      ${cols.filter(([f]) => f !== 'pagato').concat(bigl ? [] : [['posto', 'posto']], cols.filter(([f]) => f === 'pagato')).map(([f, l]) => f === 'posto' ? `<td class="wpos">${seatTxt}</td>` : f === 'part' && ctx.parts.length ? `<td class="c-part"><select class="wc wsel" data-r="${r.id}" data-f="part" aria-label="Partenza riga ${i + 1}"><option value=""></option>${ctx.parts.map(o => `<option value="${esc(o.code)}"${String(r.part || '').toUpperCase() === o.code ? ' selected' : ''} title="${esc(o.label)}">${esc(o.code)}</option>`).join('')}${r.part && !ctx.parts.some(o => o.code === String(r.part).toUpperCase()) ? `<option value="${esc(r.part)}" selected>${esc(r.part)}</option>` : ''}</select></td>` : head && f === 'pagato' ? `<td class="c-pagato"><button class="eurobtn${ok ? ' ok' : bk._m && bk._m.paid ? ' part' : ''}${UI.pay && UI.pay.bkId === bk.id ? ' on' : ''}" data-act="paypanel" data-id="${bk.id}" title="Incasso e documento (scontrino o fattura)" aria-label="Incasso e documento di ${esc(bkName(bk))}">${bk._m && bk._m.paid ? esc(fmtNum(bk._m.paid)) : '€'}</button></td>` : `<td class="c-${f}${head && f === 'cognome' && bk.mancano ? ' miss' : ''}"${head && f === 'cognome' && tip ? ` title="${esc(tip)}"` : ''}><input class="wc" data-r="${r.id}" data-f="${f}" value="${esc(r[f] || '')}" aria-label="${esc(l)} riga ${i + 1}" autocomplete="off"></td>`).join('')}
+      ${cols.filter(([f]) => f !== 'pagato').concat(bigl ? [] : [['posto', 'posto']], cols.filter(([f]) => f === 'pagato')).map(([f, l]) => f === 'posto' ? `<td class="wpos">${seatTxt}</td>` : f === 'hotel' ? `<td class="c-hotel">${roomSel(`data-r="${r.id}" data-f="hotel"`, r.hotel, 'Camera riga ' + (i + 1))}</td>` : f === 'part' && ctx.parts.length ? `<td class="c-part"><select class="wc wsel" data-r="${r.id}" data-f="part" aria-label="Partenza riga ${i + 1}"><option value=""></option>${ctx.parts.map(o => `<option value="${esc(o.code)}"${String(r.part || '').toUpperCase() === o.code ? ' selected' : ''} title="${esc(o.label)}">${esc(o.code)}</option>`).join('')}${r.part && !ctx.parts.some(o => o.code === String(r.part).toUpperCase()) ? `<option value="${esc(r.part)}" selected>${esc(r.part)}</option>` : ''}</select></td>` : head && f === 'pagato' ? `<td class="c-pagato"><button class="eurobtn${ok ? ' ok' : bk._m && bk._m.paid ? ' part' : ''}${UI.pay && UI.pay.bkId === bk.id ? ' on' : ''}" data-act="paypanel" data-id="${bk.id}" title="Incasso e documento (scontrino o fattura)" aria-label="Incasso e documento di ${esc(bkName(bk))}">${bk._m && bk._m.paid ? esc(fmtNum(bk._m.paid)) : '€'}</button></td>` : `<td class="c-${f}${head && f === 'cognome' && bk.mancano ? ' miss' : ''}"${head && f === 'cognome' && tip ? ` title="${esc(tip)}"` : ''}><input class="wc" data-r="${r.id}" data-f="${f}" value="${esc(r[f] || '')}" aria-label="${esc(l)} riga ${i + 1}" autocomplete="off"></td>`).join('')}
 </tr>`;
+  }
+  // accompagnatore, autista e altro personale che dorme in hotel (vanno nella rooming list)
+  function staffBox(t) {
+    const st = t.staff && t.staff.length ? t.staff : [{ ruolo: 'Accompagnatore' }, { ruolo: 'Autista' }];
+    return `<h3 class="wt">Staff in hotel</h3><div class="wtw"><table class="wl wl-staff"><thead><tr><th>N</th><th>ruolo</th><th>cognome e nome</th><th>camera</th><th>C</th></tr></thead><tbody>
+      ${st.map((s, i) => `<tr><td class="wn"><button class="rn" data-act="staffdel" data-i="${i}" aria-label="Togli">${i + 1}</button></td><td><input class="wc" data-st="${i}" data-k="ruolo" value="${esc(s.ruolo || '')}" aria-label="Ruolo"></td><td><input class="wc" data-st="${i}" data-k="nome" value="${esc(s.nome || '')}" placeholder="facoltativo" aria-label="Nome"></td><td>${roomSel(`data-st="${i}" data-k="camera"`, s.camera, 'Camera ' + (s.ruolo || ''))}</td><td><input class="wc" data-st="${i}" data-k="num" value="${esc(s.num || '')}" aria-label="Numero camera"></td></tr>`).join('')}
+    </tbody></table></div><button class="btn sm ghost" data-act="staffadd">${ICON.plus} riga</button>`;
   }
   function listaView(t, D, SI, T) {
     const bigl = tripCat(t) === 'biglietteria'; const tour = !bigl && isTourT(t); const cols = listCols(tour, bigl);
@@ -1592,9 +1615,9 @@
     const ctx = { byRow, SI, parts: partOpts(t) };
     const Q = t.quota;
     const sup = (k, l) => `<td><span class="sl">${l}</span><input class="hc num" data-qs="${k}" inputmode="decimal" value="${Q.suppl[k] != null ? esc(String(Q.suppl[k]).replace('.', ',')) : ''}" placeholder="€"></td>`;
-    const annTable = (k, title) => {
+    const annTable = (k, title, dl = 'data di annullo') => {
       const rows = t.annullati.filter(r => r.stato === k);
-      return `<h3 class="wt">${title}</h3><div class="wtw"><table class="wl wl-ann"><thead><tr><th>N</th>${cols.map(([, l]) => `<th>${esc(l)}</th>`).join('')}<th>data di annullo</th></tr></thead><tbody>
+      return `<h3 class="wt">${title}</h3><div class="wtw"><table class="wl wl-ann"><thead><tr><th>N</th>${cols.map(([, l]) => `<th>${esc(l)}</th>`).join('')}<th>${dl}</th></tr></thead><tbody>
         ${rows.map((r, i) => `<tr><td class="wn"><button class="rn" data-act="annmenu" data-id="${r.id}" aria-label="Azioni">${i + 1}</button></td>${cols.map(([f, l]) => `<td><input class="wc" data-nr="${r.id}" data-f="${f}" value="${esc(r[f] || '')}" aria-label="${esc(l)}"></td>`).join('')}<td><input class="wc" data-nr="${r.id}" data-f="dataAnn" value="${esc(r.dataAnn || '')}" aria-label="data di annullo"></td></tr>`).join('') || `<tr><td colspan="${cols.length + 2}" class="emptyrow">—</td></tr>`}
       </tbody></table></div><button class="btn sm ghost" data-act="annadd" data-k="${k}">${ICON.plus} riga</button>`;
     };
@@ -1616,7 +1639,8 @@
       <div class="wtw"><table class="wl wl-att"><thead><tr><th>N</th>${ATTC.map(([, l]) => `<th>${esc(l)}</th>`).join('')}</tr></thead><tbody>
         ${t.attesa.map((r, i) => `<tr${isEmptyRow(r) ? ' class="blank"' : ''}><td class="wn"><button class="rn" data-act="attmenu" data-id="${r.id}" aria-label="Azioni">${i + 1}</button></td>${ATTC.map(([f, l]) => `<td><input class="wc" data-ar="${r.id}" data-f="${f}" value="${esc(r[f] || '')}" aria-label="${esc(l)}"></td>`).join('')}</tr>`).join('')}
       </tbody></table></div>
-      ${annTable('da', 'Non partono più – da rimborsare')}${annTable('fatto', 'Non partono più – già rimborsati')}${annTable('no', 'Non partono più – hanno rinunciato senza avere rimborso')}`;
+      ${tour ? staffBox(t) : ''}
+      ${bigl ? annTable('vende', 'Vuole vendere il biglietto', 'data richiesta') : annTable('da', 'Non partono più – da rimborsare') + annTable('fatto', 'Non partono più – già rimborsati') + annTable('no', 'Non partono più – hanno rinunciato senza avere rimborso')}`;
     const side = pp || (UI.dock && !bigl ? mapPanel(t, 'dock') : '');
     return `<div class="lwrap${side ? ' dock' : ''}${pp ? ' paying' : ''}"><div class="lmain">${main}</div>${side ? `<aside class="ldock">${side}</aside>` : ''}</div>`;
   }
@@ -1777,16 +1801,28 @@
     if (!deps.length && !txt) return '';
     return `<div class="pm-n"><h4>Da sapere</h4><div class="deps-p">${deps.join('') || '<span>—</span>'}</div><div class="txt">${esc(txt) || '—'}</div></div>`;
   }
+  // rooming list per l'hotel: camere divise per tipo, ospiti, solo le note utili all'hotel (niente pagamenti,
+  // telefoni, email o richieste sui posti del pullman), e in fondo lo staff (accompagnatore, autista)
+  const NOHOTEL = /@|\b\d{6,}\b|bonific|pagat|pagament|acconto|\bsald|caparr|buono|\bft\b|fattur|provvisori|n[°º]|ricevut|€|regalo|\bfila\b|bus|pullman|corridoio|finestrin|\blato\b|met[aà] bus|fondo|\bporta\b|davanti|dietro|\bposto\b|uscita|ultim|penultim|non alla fine/i;
+  const hotelNote = s => String(s || '').split(/\s*(?:·|;|\n|,(?=\s*[A-Za-zÀ-ÿ]))\s*/).map(x => x.trim()).filter(x => x && !NOHOTEL.test(x)).join(' · ');
+  const cleanN = s => String(s || '').replace(/\s*[-–]+\s*$/, '').trim();
   function roomingPages(t) {
     const D = deriveBookings(t); const T = summaryOf(t, D, seatIndex(t)); const Q = t.quota;
     const rooms = []; D.forEach(bk => roomsOf(bk).forEach(r => rooms.push({ r, bk })));
     const num = x => { const n = parseInt(x.r.num, 10); return isNaN(n) ? 1e6 : n; };
-    rooms.sort((a, c) => num(a) - num(c));
-    const rows = rooms.map(({ r }) => `<tr><td class="rn">${esc(r.num || '—')}</td><td>${esc(roomKind(r))}${r.tipo && r.tipo !== roomKind(r) ? ` <small>(${esc(r.tipo)} + letto)</small>` : ''}</td><td>${r.persone.map(p => `${esc(p.cognome)} ${esc(p.nome)}${ageAt(p, t.data) != null && ageAt(p, t.data) < 12 ? ` <small>(${ageAt(p, t.data)} anni)</small>` : ''}`).join('<br>')}</td><td class="rnote">${esc([...new Set(r.persone.map(p => p.row.note).filter(Boolean))].join(' · '))}</td></tr>`).join('');
+    const ORD = ['singola', 'doppia', 'matrimoniale', 'matrimoniale + lettino', 'tripla', 'quadrupla'];
+    const PL = { singola: 'Singole', doppia: 'Doppie', matrimoniale: 'Matrimoniali', 'matrimoniale + lettino': 'Matrimoniali + lettino', tripla: 'Triple', quadrupla: 'Quadruple' };
+    const groups = {}; rooms.forEach(x => { const k = roomKind(x.r); (groups[k] = groups[k] || []).push(x); });
+    const keys = Object.keys(groups).sort((a, c) => (ORD.indexOf(a) < 0 ? 99 : ORD.indexOf(a)) - (ORD.indexOf(c) < 0 ? 99 : ORD.indexOf(c)));
+    const guest = (p, i, r) => { const a = ageAt(p, t.data); const inf = r.tipo === 'matrimoniale + lettino' && i >= 2; return `${esc(cleanN(p.cognome))} ${esc(cleanN(p.nome))}${a != null && a < 12 ? ` <small>(${a} ${a === 1 ? 'anno' : 'anni'}${inf ? ', lettino' : ''})</small>` : inf ? ' <small>(lettino)</small>' : ''}`; };
+    const staff = (t.staff || []).filter(s => s.camera || s.nome);
+    const sec = k => `<tr class="rl-g"><td colspan="3">${esc(PL[k] || k)} · ${groups[k].length}</td></tr>` + groups[k].sort((a, c) => num(a) - num(c)).map(({ r }) => `<tr><td class="rn">${esc(r.num || '—')}</td><td>${r.persone.map((p, i) => guest(p, i, r)).join('<br>')}</td><td class="rnote">${esc([...new Set(r.persone.map(p => hotelNote(p.row.note)).filter(Boolean))].join(' · '))}</td></tr>`).join('');
+    const staffRows = staff.length ? `<tr class="rl-g"><td colspan="3">Staff · ${staff.length}</td></tr>` + staff.map(s => `<tr><td class="rn">${esc(s.num || '—')}</td><td>${esc(s.nome || s.ruolo)}${s.nome ? ` <small>(${esc(s.ruolo)})</small>` : ''}</td><td class="rnote">${esc(s.camera ? s.camera : '')}</td></tr>`).join('') : '';
+    const nStaff = staff.length; const cnt = keys.map(k => `${groups[k].length} ${groups[k].length === 1 ? k : (PL[k] || k).toLowerCase()}`).join(' · ');
     return `<div class="page rl">${pmHeader({ cell: (LMAP['54'] || {}).cell || '', nome: '', desc: '' }).replace('<div class="mod">Modello: <br></div>', '')}
-      <div class="pm-t"><h2>Rooming list · ${esc(t.nome)}</h2><span>${esc(fmtTripDate(t))}</span>${Q.hotel ? `<span><b>${esc(Q.hotel)}</b></span>` : ''}<span>${T.nRooms} camere: ${esc(roomsText(T.rooms))} · ${T.pers} persone</span></div>
-      <table class="rlt"><thead><tr><th>Camera</th><th>Tipo</th><th>Ospiti</th><th>Note</th></tr></thead><tbody>${rows || '<tr><td colspan="4">Nessuna camera indicata nella lista.</td></tr>'}</tbody></table>
-      <div class="pm-foot"><span>Accompagnatore e autista non compresi</span><span>Stampato il ${fmtDate(todayISO())}</span></div></div>`;
+      <div class="pm-t"><h2>Rooming list · ${esc(t.nome)}</h2><span>${esc(fmtTripDate(t))}</span>${Q.hotel ? `<span><b>${esc(Q.hotel)}</b></span>` : ''}<span>${rooms.length + nStaff} camere: ${esc(cnt)}${nStaff ? ' + ' + nStaff + ' staff' : ''} · ${T.pers + nStaff} persone</span></div>
+      <table class="rlt"><thead><tr><th>Camera</th><th>Ospiti</th><th>Note per l'hotel</th></tr></thead><tbody>${keys.map(sec).join('') + staffRows || '<tr><td colspan="3">Nessuna camera indicata nella lista.</td></tr>'}</tbody></table>
+      <div class="pm-foot"><span>${nStaff ? '' : 'Accompagnatore e autista non indicati (si aggiungono in «Staff in hotel» nella lista)'}</span><span>Stampato il ${fmtDate(todayISO())}</span></div></div>`;
   }
   // la lista stampata come il file Word
   function listPages(t) {
@@ -1797,7 +1833,7 @@
     const tr = (r, i, extra) => `<tr><td>${i + 1}</td>${cols.map(([f]) => `<td>${esc(f === 'pagato' && paidH[r.id] ? paidH[r.id] : r[f] || '')}</td>`).join('')}${extra ? extra(r) : ''}</tr>`;
     const head = `<thead><tr><th>N</th>${cols.map(([, l]) => `<th>${esc(l)}</th>`).join('')}`;
     const ann = k => t.annullati.filter(r => r.stato === k && !isEmptyRow(r));
-    const annT = (k, title) => ann(k).length ? `<h3 class="lt">${title}</h3><table class="lpt">${head}<th>data di annullo</th></tr></thead><tbody>${ann(k).map((r, i) => tr(r, i, x => `<td>${esc(x.dataAnn || '')}</td>`)).join('')}</tbody></table>` : '';
+    const annT = (k, title, dl = 'data di annullo') => ann(k).length ? `<h3 class="lt">${title}</h3><table class="lpt">${head}<th>${dl}</th></tr></thead><tbody>${ann(k).map((r, i) => tr(r, i, x => `<td>${esc(x.dataAnn || '')}</td>`)).join('')}</tbody></table>` : '';
     const att = t.attesa.filter(r => !isEmptyRow(r));
     const sp = [1, 2, 3, 4].map(f => Q.suppl[f]); 
     return `<div class="page lp">
@@ -1809,7 +1845,7 @@
       ${t.guida ? '<div class="lnote">------- x guida e 2° autista</div>' : ''}
       ${sp.some(v => v != null) || Q.suppl.p2 != null ? `<h3 class="lt">Supplementi per i posti assegnati</h3><div class="lnote">1ª fila ${euro(sp[0])} · 2ª fila ${euro(sp[1])} · 3ª fila ${euro(sp[2])} · 4ª fila ${euro(sp[3])} · 2° porta ${euro(Q.suppl.p2)}</div>` : ''}
       ${att.length ? `<h3 class="lt">Lista d'attesa</h3><table class="lpt"><thead><tr><th>N</th>${ATTC.map(([, l]) => `<th>${esc(l)}</th>`).join('')}</tr></thead><tbody>${att.map((r, i) => `<tr><td>${i + 1}</td>${ATTC.map(([f]) => `<td>${esc(r[f] || '')}</td>`).join('')}</tr>`).join('')}</tbody></table>` : ''}
-      ${annT('da', 'Non partono più – da rimborsare')}${annT('fatto', 'Non partono più – già rimborsati')}${annT('no', 'Non partono più – hanno rinunciato senza avere rimborso')}
+      ${bigl ? annT('vende', 'Vuole vendere il biglietto', 'data richiesta') : annT('da', 'Non partono più – da rimborsare') + annT('fatto', 'Non partono più – già rimborsati') + annT('no', 'Non partono più – hanno rinunciato senza avere rimborso')}
       <div class="pm-foot"><span>${full.length} righe</span><span>Stampato il ${fmtDate(todayISO())}</span></div></div>`;
   }
   function mapPages(t, b) {
@@ -3744,7 +3780,7 @@
   }
 
   // ---------- render ----------
-  const FOCUS_KEYS = ['depsel', 'hq', 'aq', 'r', 'ar', 'nr', 'f', 'q', 'qs', 'qt', 'tf', 'dep2', 'dep', 'k', 'bind', 'cl', 'cfgag', 'cfgl', 'pf', 'pl', 'pff', 'pfm', 'usig'];
+  const FOCUS_KEYS = ['st', 'depsel', 'hq', 'aq', 'r', 'ar', 'nr', 'f', 'q', 'qs', 'qt', 'tf', 'dep2', 'dep', 'k', 'bind', 'cl', 'cfgag', 'cfgl', 'pf', 'pl', 'pff', 'pfm', 'usig'];
   const ACT_PERM = { unew: 'users', unewm: 'tech', ureset: 'users', usave: 'users', resetall: 'tech', doresetall: 'tech', savekeys: 'tech', wipelocal: 'tech', lgf: 'tech', lexport: 'tech', diagexport: 'tech', lnew: 'settings', ldel: 'settings', savewa: 'settings', savetel: 'settings', savedanea: 'settings', export: 'settings', pay: 'cassa', paypanel: 'viaggi', pfsave: 'cassa', cashmov: 'cassa', cashsave: 'cassa', storno: 'cassa', cclose: 'cassa', ccsave: 'cassa', clnew: 'anag', cldel: 'anag', impgo: 'anag', newtrip: 'viaggi', deltrip: 'viaggi' };
   const VIEW_PERM = { home: 'viaggi', models: 'viaggi', trip: 'viaggi', anag: 'anag', conta: 'conta', super: 'tech' };
   let lastNav = '', lastSess = '', lastGateHTML = '';
@@ -3800,14 +3836,14 @@
     openPop(el, `<div class="ph"><b>Riga ${t.rows.indexOf(r) + 1}</b><span>${bk ? `${esc(bkName(bk))} x ${bk.persone.length}` : 'riga vuota'}</span></div>
       <button data-act="rowins" data-id="${id}" data-d="0">Inserisci una riga sopra</button>
       <button data-act="rowins" data-id="${id}" data-d="1">Inserisci una riga sotto</button>
-      ${bk ? `<button data-act="selbk" data-id="${bk.id}">Mostra sulla piantina</button>
+      ${bk ? `${tripCat(t) === 'biglietteria' ? '' : `<button data-act="selbk" data-id="${bk.id}">Mostra sulla piantina</button>`}
       ${head && ACC.can('cassa') ? `<button data-act="pay" data-id="${bk.id}">${ICON.euro} Incasso e documento (scontrino, fattura…)</button>` : ''}
-      ${head ? `<button data-act="abituale" data-id="${bk.id}">${bk.head.abituale ? '✓ ' : ''}Cliente abituale (precedenza nelle prime file)</button>
+      ${head && tripCat(t) !== 'biglietteria' ? `<button data-act="abituale" data-id="${bk.id}">${bk.head.abituale ? '✓ ' : ''}Cliente abituale (precedenza nelle prime file)</button>
       <button data-act="saldato" data-id="${bk.id}">${bk.head.saldato ? '✓ ' : ''}Segna come saldato (anche se il prezzo è diverso)</button>` : ''}
       <button data-act="toatt" data-id="${bk.id}">Sposta tutta la prenotazione in lista d'attesa</button>
-      <button data-act="toann" data-id="${bk.id}" data-k="da">Non parte più – da rimborsare</button>
+      ${tripCat(t) === 'biglietteria' ? `<button data-act="toann" data-id="${bk.id}" data-k="vende">Vuole vendere il biglietto</button>` : `<button data-act="toann" data-id="${bk.id}" data-k="da">Non parte più – da rimborsare</button>
       <button data-act="toann" data-id="${bk.id}" data-k="fatto">Non parte più – già rimborsato</button>
-      <button data-act="toann" data-id="${bk.id}" data-k="no">Non parte più – senza rimborso</button>` : ''}
+      <button data-act="toann" data-id="${bk.id}" data-k="no">Non parte più – senza rimborso</button>`}` : ''}
       <button class="danger" data-act="rowdel" data-id="${id}">Elimina questa riga</button>`);
   }
   function attMenu(id, el) {
@@ -3817,6 +3853,9 @@
   }
   function annMenu(id, el) {
     const r = trip().annullati.find(x => x.id === id); if (!r) return;
+    if (r.stato === 'vende') return openPop(el, `<div class="ph"><b>${esc(r.cognome || 'Riga')}</b><span>vuole vendere il biglietto</span></div>
+      <button data-act="annrest" data-id="${id}">Ci ripensa: rimetti tra i biglietti venduti</button>
+      <button class="danger" data-act="anndel" data-id="${id}">Biglietto rivenduto: togli la riga</button>`);
     openPop(el, `<div class="ph"><b>${esc(r.cognome || 'Riga')}</b><span>non parte più</span></div>
       ${r.stato !== 'da' ? `<button data-act="annmove" data-id="${id}" data-k="da">Sposta in «da rimborsare»</button>` : ''}
       ${r.stato !== 'fatto' ? `<button data-act="annmove" data-id="${id}" data-k="fatto">Sposta in «già rimborsati»</button>` : ''}
@@ -3880,6 +3919,7 @@
     t.attesa.splice(ai, 0, ...(res.attesa || []).map(r => ({ ...blankAtt(), ...r })));
     (res.annullati || []).forEach(r => t.annullati.push({ ...pickRow(r), dataAnn: r.dataAnn || '', stato: r.stato }));
     if (res.part.guida) { t.guida = true; t.buses.forEach(b => { b.guida = true; }); }
+    if ((res.part.staff || []).length && (replace || !(t.staff || []).length)) t.staff = res.part.staff;
     t.rows.forEach(r => upsertFromRow(r));
   }
 
@@ -4067,7 +4107,7 @@
       case 'rowdel': { const r = rowById(t, el.dataset.id); closePop(); const go = () => { unseatRow(t, r); t.rows = t.rows.filter(x => x !== r); commit(); }; if (isEmptyRow(r)) go(); else confirmBox('Elimina riga', `Elimino la riga di ${esc(r.cognome)} ${esc(r.nome)}?`, 'Elimina', go); break; }
       case 'abituale': case 'saldato': { const r = rowById(t, el.dataset.id); r[act] = !r[act]; closePop(); commit(); break; }
       case 'toatt': { const m = moveBookingOut(t, el.dataset.id); if (!m) break; const h = m.rows[0]; let ai = t.attesa.length; while (ai > 0 && isEmptyRow(t.attesa[ai - 1])) ai--; t.attesa.splice(ai, 0, { ...blankAtt(), cognome: /x\s*\d/i.test(h.cognome) ? h.cognome : `${h.cognome} x ${m.rows.length}`, nome: h.nome, nascita: h.nascita, tel: h.tel, part: h.part, note: h.note, richiesta: ddmm() }); closePop(); commit(); toast(`${bkName(m.bk)} spostata in lista d'attesa`); break; }
-      case 'toann': { const m = moveBookingOut(t, el.dataset.id); if (!m) break; m.rows.forEach(r => t.annullati.push({ ...r, stato: el.dataset.k, dataAnn: ddmm() })); closePop(); commit(); toast(`${bkName(m.bk)}: non parte più`); break; }
+      case 'toann': { const m = moveBookingOut(t, el.dataset.id); if (!m) break; m.rows.forEach(r => t.annullati.push({ ...r, stato: el.dataset.k, dataAnn: ddmm() })); closePop(); commit(); toast(`${bkName(m.bk)}: ${el.dataset.k === 'vende' ? 'vuole vendere il biglietto' : 'non parte più'}`); break; }
       case 'attmenu': e.stopPropagation(); attMenu(el.dataset.id, el); break;
       case 'attconf': { const r = t.attesa.find(x => x.id === el.dataset.id); if (!r) { closePop(); break; } const m = RX.exec(String(r.cognome || '').trim()); const n = m ? +m[2] : 1; const base = m ? m[1].trim() : String(r.cognome || '').trim();
         const add = [{ ...blankRow(), cognome: r.cognome, nome: r.nome, nascita: r.nascita, tel: r.tel, part: r.part, note: r.note }]; for (let k = 1; k < n; k++) add.push({ ...blankRow(), cognome: base, part: r.part });
@@ -4077,6 +4117,8 @@
       case 'annmove': { const r = t.annullati.find(x => x.id === el.dataset.id); if (!r) { closePop(); break; } r.stato = el.dataset.k; closePop(); commit(); break; }
       case 'annrest': { const r = t.annullati.find(x => x.id === el.dataset.id); if (!r) { closePop(); break; } t.annullati = t.annullati.filter(x => x !== r); const o = { ...r }; delete o.stato; delete o.dataAnn; t.rows.splice(insertAt(t), 0, o); closePop(); commit(); break; }
       case 'anndel': t.annullati = t.annullati.filter(x => x.id !== el.dataset.id); closePop(); commit(); break;
+      case 'staffadd': { t.staff = (t.staff && t.staff.length ? t.staff : [{ ruolo: 'Accompagnatore' }, { ruolo: 'Autista' }]); t.staff.push({ ruolo: '' }); commit(); break; }
+      case 'staffdel': { t.staff = (t.staff && t.staff.length ? t.staff : [{ ruolo: 'Accompagnatore' }, { ruolo: 'Autista' }]); t.staff.splice(+el.dataset.i, 1); commit(); break; }
       case 'annadd': t.annullati.push({ ...blankRow(), stato: el.dataset.k, dataAnn: '' }); commit(); break;
       // import
       case 'timport': importModal('trip'); break;
@@ -4131,6 +4173,7 @@
     if (d.qt && t) { t.quota[d.qt] = el.value.trim(); save(); return; }
     if (d.tf && t) { if (d.tf !== 'nome' || el.value.trim()) t[d.tf] = el.type === 'date' ? el.value : el.value; save(); return; }
     if (d.depsel !== undefined && t) { const i = +d.depsel; const old = t.partenze[i] || {}; if (el.value === 'cur') return; if (el.value === '') { t.partenze[i] = { citta: '', luogo: '', ora: old.ora || '', code: '' }; } else { const l = (S.cfg.luoghi || [])[+el.value]; if (l) t.partenze[i] = { citta: l.citta || '', luogo: l.luogo || '', ora: old.ora || '', code: String(l.code || '').toUpperCase() }; } while (t.partenze.length && !(t.partenze[t.partenze.length - 1] || {}).citta && !(t.partenze[t.partenze.length - 1] || {}).ora) t.partenze.pop(); save(); later(); return; }
+    if (d.st !== undefined && t) { if (!(t.staff && t.staff.length)) t.staff = [{ ruolo: 'Accompagnatore' }, { ruolo: 'Autista' }]; const s = t.staff[+d.st] = t.staff[+d.st] || {}; s[d.k] = el.value; save(); return; }
     if (d.dep2 !== undefined && t) { t.partenze[+d.dep2] = t.partenze[+d.dep2] || { citta: '', luogo: '', ora: '' }; t.partenze[+d.dep2][d.k] = el.value; save(); return; }
     if (d.bind && b) { b[d.bind] = el.value; save(); return; }
     if (d.dep !== undefined && b) { b.partenze[+d.dep][d.k] = d.k === 'code' ? el.value.toUpperCase() : el.value; save(); return; }
