@@ -1,14 +1,82 @@
 VIAGGI IN PULLMAN · LA TERRA
 ============================
 
-Versione: 1.7
-Pacchetto creato il: 28/10/2026
+Versione: 1.9.1
+Pacchetto creato il: 29/10/2026
 
 Come installarla o aggiornarla: vedi LEGGIMI.txt.
 Aggiornamento: carica su GitHub TUTTI i file, config.js compreso (contiene già la chiave di Dropbox).
 
 MODIFICHE
 ---------
+
+VERSIONE 1.9.1 · 29/10/2026
+SICUREZZA
+- Due o più operatori sullo stesso viaggio: appena qualcuno entra nella stessa lista o nella stessa
+  piantina, a TUTTI compare una finestra grande al centro dello schermo con il nome dell'operatore,
+  l'agenzia da cui lavora e dove si trova (lista prenotazioni, piantina di quale bus, incasso).
+  Dopo «Ho capito» resta una fascia arancione in alto finché l'altro non esce dal viaggio.
+LISTE
+- Con due o più bus c'è una lista per ogni bus («Lista Bus 1», «Lista Bus 2»…), ognuna numerata da 1,
+  con quante persone ci sono e quante hanno il posto. Chi non è su nessun bus va in «Senza bus».
+  Aggiungendo il secondo bus, tutta la lista attuale diventa la «Lista Bus 1».
+  Viaggi che avevano già due bus: ognuno trova le sue persone nella lista del suo bus; chi non era
+  ancora su un bus è nella lista «Senza bus». Le comitive divise tra due bus restano unite.
+- Durante il trascinamento compare in basso una barra con le liste (Bus 1, Bus 2, Senza bus):
+  si lascia lì senza dover scorrere la pagina fino alla lista giusta.
+- Spostare persone da una lista all'altra:
+  · trascinando ⠿ sulla lista di destinazione (dalla prima riga si sposta tutta la prenotazione);
+  · selezionando le righe (⌘ + clic sul numero, Maiusc + clic per un intervallo, doppio clic per tutta
+    la prenotazione) e poi con la barra che compare in basso, con il tasto destro o trascinandole insieme;
+  · dal menu della riga («Sposta in Bus 2»).
+  Chi cambia lista perde il posto sul vecchio bus; il nuovo posto si sceglie sulla piantina.
+  Se si sposta da solo un membro di una comitiva, resta nella sua comitiva (pagamento e cartelli).
+- Stampa lista: con più bus stampa una tabella per ogni bus.
+- Menu della riga (tendina) rifatto: diviso in sezioni con icone, «Non parte più» raccolto in una voce
+  sola, cliente abituale e saldato come interruttori. Si apre anche con il tasto destro.
+PAGAMENTI
+- Comitive: ogni persona può pagare la sua quota. Ogni riga della comitiva ha il suo pulsante «€»;
+  nel riquadro dell'incasso «Chi paga» permette di scegliere tutta la comitiva o una sola persona.
+  Lo scontrino o la fattura sono a nome di quella persona; il capogruppo paga solo per chi non paga
+  da sé. Lo storno e il file per Danea tengono conto del pagamento individuale.
+GESTI
+- Nuova sezione Impostazioni › Gesti e scorciatoie, personale per ogni operatore: cosa fanno clic,
+  doppio clic, ⌘ + clic, Maiusc + clic, ⌥ + clic sul numero della riga e il tasto destro, e le
+  combinazioni di tasti (iniziali: ⌃⌥→ / ⌃⌥← sposta la selezione nella lista del bus dopo/prima,
+  ⌃⌥S seleziona la riga, ⌃⌥A tutta la prenotazione, ⌃⌥E incasso, ⌃⌥M menu, ⌃⌥↓ / ⌃⌥↑ riga sotto/sopra,
+  ⌃⌥P mostra sulla piantina). Esc toglie la selezione.
+
+VERSIONE 1.9 · 28/10/2026
+- Elenco dei viaggi impaginato in colonne, tutto allineato a sinistra e in ordine (grafica «calendario»):
+  la data è un foglietto da calendario del colore del tipo di viaggio, con il giorno grande e sotto
+  mese e anno (per i tour «3–6 Gennaio 2027»); poi il giorno della settimana
+  (DOM, per i tour SAB–MAR), codice, titolo; sotto il titolo, in piccolo, i giorni del tour,
+  l'hotel e «già fatta». A destra restano i bus e i pulsanti Lista e Posti.
+- Tolte le intestazioni dei mesi con il numero dei viaggi («gennaio 2027 · 5 gite · 1 tour»):
+  la barra dei mesi in alto porta comunque al mese scelto.
+- Il tipo di viaggio si riconosce dal colore del foglietto della data (passando sopra con il mouse compare il nome).
+- Tutte le pagine usano l'intera larghezza dello schermo del Mac, senza bordi vuoti ai lati.
+
+VERSIONE 1.8 · 28/10/2026
+- Pagina Viaggi: l'anno si sceglie da una tendina (senza i numeri accanto).
+- Colori dei tipi di viaggio: Gite giallo chiaro, Tour verde chiaro, Eventi azzurro (Biglietteria lilla).
+  I colori si vedono nei filtri, in tutte le righe dell'elenco dei viaggi e nella pagina del viaggio,
+  così il tipo si riconosce a colpo d'occhio. Tolti i numeri accanto ai filtri.
+- Barra dei mesi: solo il nome del mese, senza il numero dei viaggi.
+- Elenco dei viaggi: tolto il riquadro giallo «persone · senza posto».
+- Gita, tour o evento nuovo: parte già con un bus da 52 posti (si cambia da «Posti sul bus»).
+- Lavoro in contemporanea sulla stessa prenotazione:
+  · ogni campo di una riga ricorda quando è stato cambiato: se un operatore cambia il telefono e un
+    altro la nota della stessa riga, restano tutte e due le modifiche (prima vinceva tutta la riga
+    dell'ultimo che salvava);
+  · posti sul bus: ogni posto ricorda quando è stato cambiato e i posti liberati restano liberi; due
+    operatori che sistemano persone diverse sullo stesso bus non si cancellano a vicenda; se la stessa
+    persona viene messa in due posti diversi, resta nel posto scelto per ultimo;
+  · in alto nella lista compare chi altro la sta guardando in quel momento (e se sta incassando);
+  · nel riquadro dell'incasso un avviso se un altro operatore ha aperto l'incasso della stessa
+    prenotazione, per non incassare due volte;
+  · le righe appena cambiate da un altro operatore si illuminano per qualche secondo e, passandoci
+    sopra, dicono chi le ha cambiate.
 
 VERSIONE 1.7 · 28/10/2026
 - Lista dei tour: la colonna «hotel» è una tendina con Singola, Matrimoniale, Tripla, Quadrupla,
