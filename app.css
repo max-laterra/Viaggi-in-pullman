@@ -1408,3 +1408,30 @@ body:has(.selbar) #toast,body:has(.dropbar) #toast{bottom:92px}
 @media (max-width:1250px){.tl .trow.v2{grid-template-columns:auto 60px minmax(0,1fr) 290px auto}}
 @media (max-width:1050px){.tl .trow.v2{grid-template-columns:minmax(0,1fr) auto auto}}
 @media (max-width:700px){.tl .trow.v2{grid-template-columns:minmax(0,1fr)}}
+/* spostare righe in un punto della lista */
+.wl tr.drop-b td{box-shadow:inset 0 3px 0 #2F7BEA}
+.wl tr.drop-a td{box-shadow:inset 0 -3px 0 #2F7BEA}
+/* 2.0 · colonne del riquadro larghe quanto la scritta più lunga: la data non si sovrappone più al giorno */
+.months .t2-blk{grid-template-columns:var(--dw,max-content) var(--gw,max-content) var(--cw,max-content) var(--nw,auto);gap:14px;min-height:44px}
+.t2-d,.t2-g,.t2-c{white-space:nowrap;overflow:visible}
+.t2-c:empty{display:none}
+.months .t2-blk:has(.t2-c:empty){column-gap:14px}
+/* hotel fuori dal riquadro colorato (forma scelta più sotto) */
+.tl .trow.v2{grid-template-columns:auto var(--hw,0px) 64px minmax(0,1fr) 290px auto}
+.tl .trow.v2 .t2-h{grid-column:2;min-width:0}
+.tl .trow.v2 .t2-x{grid-column:3}.tl .trow.v2 .t2-sv{grid-column:4}.tl .trow.v2 .t2-fc{grid-column:5}.tl .trow.v2 .tr-a{grid-column:6}
+.hh{display:flex;align-items:center;gap:6px;min-width:0;font-size:13.5px;font-weight:600;color:var(--ink-2)}
+.hh .sv{width:18px;height:18px;flex:0 0 auto}
+.hh span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* nome dell'iconcina sotto il puntatore */
+.svi{position:relative}
+.svi[data-tip]:hover::after{content:attr(data-tip);position:absolute;top:calc(100% + 6px);left:50%;transform:translateX(-50%);background:#1D1D1F;color:#fff;font-size:12px;font-weight:600;white-space:nowrap;padding:5px 9px;border-radius:8px;z-index:20;pointer-events:none;box-shadow:0 4px 14px rgba(0,0,0,.2)}
+.svi[data-tip]:hover::before{content:"";position:absolute;top:calc(100% + 1px);left:50%;transform:translateX(-50%);border:5px solid transparent;border-bottom-color:#1D1D1F;z-index:20}
+.svi:hover{filter:none;opacity:1}
+.svi:not(.on):hover .sv{filter:grayscale(1);opacity:.55}
+/* testa della lista: tre sezioni della stessa larghezza */
+.thead2 .th-sec,.thead2 .th-sec.deps{flex:1 1 0;min-width:280px;max-width:none}
+.thead2 .th-g{grid-template-columns:repeat(var(--c,3),minmax(0,1fr))}
+.thead2.bigl .th-sec{flex:1 1 0}
+.hh span{display:block}
+.th-sep{grid-column:1/-1;height:1px;background:var(--line);margin:2px 0}

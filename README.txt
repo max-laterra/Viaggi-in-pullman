@@ -1,7 +1,7 @@
 VIAGGI IN PULLMAN · LA TERRA
 ============================
 
-Versione: 1.9.8
+Versione: 2.0
 Pacchetto creato il: 29/10/2026
 
 Come installarla o aggiornarla: vedi LEGGIMI.txt.
@@ -9,6 +9,39 @@ Aggiornamento: carica su GitHub TUTTI i file, config.js compreso (contiene già 
 
 MODIFICHE
 ---------
+
+VERSIONE 2.0 · 29/10/2026
+CORREZIONI
+- Elenco dei viaggi: la data non si sovrappone più al giorno della settimana con i mesi lunghi e i tour
+  di più giorni («24–26 Settembre VEN–DOM», «12–19 Settembre», «30 Set – 4 Ott»). Ogni colonna del
+  riquadro (data, giorno, codice, nome) è larga quanto la scritta più lunga dell'elenco, quindi tutte
+  le righe restano allineate e nessuna scritta finisce sopra l'altra.
+ELENCO DEI VIAGGI
+- Il nome dell'hotel è scritto fuori dal riquadro colorato, in una colonna sua subito dopo, con
+  l'iconcina dell'hotel accanto (bozza «A · testo semplice» scelta da voi). Nel riquadro restano solo
+  data, giorno, codice e nome: tutte le righe hanno la stessa altezza. Il numero dei giorni si legge
+  già dalla data (es. «12–14 Marzo»).
+- Passando con il puntatore su un'iconcina dei servizi compare subito sotto il suo nome
+  (es. «Guide», «Navigazione · non compreso»).
+TESTA DELLA LISTA
+- Tre riquadri della stessa larghezza (prima le partenze prendevano quasi metà dello spazio):
+  · Quote e pagamenti: adulti, bambini (singola, 3° letto, neonati nei tour), poi acconto, saldo e
+    «saldo entro il»;
+  · Date e hotel: partenza, rientro e, nei tour, l'hotel;
+  · Partenze.
+
+VERSIONE 1.9.9 · 29/10/2026
+COMITIVE E ORDINE DELLA LISTA
+- Si può spostare una riga in un punto preciso della lista (anche dentro la stessa lista): si trascina
+  ⠿ sopra la riga dove la si vuole mettere; una linea blu mostra se va sopra o sotto. Dalla prima riga
+  si sposta tutta la prenotazione, dalle altre la singola persona. Serve per mettere in ordine le
+  fermate (es. una comitiva di Ragusa con una persona che sale a Modica: la persona va tra quelli di
+  Modica). Non si finisce mai in mezzo a un'altra comitiva: si va prima o dopo di essa.
+- La persona spostata da sola resta nella sua comitiva (pagamento, cartelli) e sulla riga c'è il
+  segno ↗ «comitiva Rossi x 4». Se invece deve diventare una prenotazione a sé: «Stacca dalla comitiva».
+- Si può staccare anche il capogruppo: il secondo della comitiva prende il suo posto e diventa
+  «Cognome x N-1»; gli incassi già fatti, il colore, «cliente abituale» e «saldato» restano alla
+  comitiva. Il vecchio capogruppo diventa una prenotazione a sé con il segno ⛓ (da chi, quando).
 
 VERSIONE 1.9.8 · 29/10/2026
 ELENCO DEI VIAGGI

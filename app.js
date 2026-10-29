@@ -1,6 +1,6 @@
 (function () {
   'use strict';
-  const VERSION = '1.9.8';
+  const VERSION = '2.0';
   const LOGO = './logo.jpg';
   const KEY = 'laterra.prenotazioniPosti.v1';
   const $ = (s, r = document) => r.querySelector(s);
@@ -1582,15 +1582,48 @@
     D.forEach(bk => { bk.persone.forEach(p => { if (listKey(t, p.row) === lk) n++; }); if (listKey(t, bk.head) === lk) n += Math.max(0, bk.n - bk.persone.length); });
     return n;
   }
-  // staccare una persona dalla sua comitiva (resta traccia sulla riga)
+  // staccare una persona dalla sua comitiva (resta traccia sulla riga).
+  // Se si stacca il capogruppo, il suo posto lo prende il secondo: diventa «Cognome x N-1» e la prenotazione
+  // (incassi, colore, cliente abituale, saldato) passa a lui.
   function detachRow(t, id, who) {
-    const D = deriveBookings(t); const bk = D.find(b => b.persone.some(p => p.id === id)); if (!bk || bk.id === id || bk.persone.length < 2) return null;
+    const D = deriveBookings(t); const bk = D.find(b => b.persone.some(p => p.id === id)); if (!bk || bk.persone.length < 2) return null;
     const r = rowById(t, id); const h = bk.head; const m = RX.exec(String(h.cognome || '').trim());
-    const from = `${bkName(bk)} x ${Math.max(bk.n, bk.persone.length)}`;
-    if (m) h.cognome = `${m[1].trim()} x ${Math.max(1, +m[2] - 1)}`;
-    r.solo = true; delete r.g; delete r.go;
-    r.stacc = { da: from, hid: bk.id, il: new Date().toISOString(), chi: who || '' };
-    return { from, bk };
+    const N = Math.max(bk.n, bk.persone.length); const from = `${bkName(bk)} x ${N}`; const at = new Date().toISOString();
+    if (bk.id !== id) {
+      if (m) h.cognome = `${m[1].trim()} x ${Math.max(1, +m[2] - 1)}`;
+      r.solo = true; delete r.g; delete r.go;
+      r.stacc = { da: from, hid: bk.id, il: at, chi: who || '' };
+      return { from, bk };
+    }
+    // capogruppo: il secondo prende il suo posto
+    const nh = bk.persone[1].row; const base = String(nh.cognome || '').replace(RX, '$1').trim() || bk.persone[1].cognome;
+    nh.cognome = `${base} x ${N - 1}`; delete nh.g; delete nh.go;
+    ['abituale', 'saldato', 'c', 'waOk', 'waSent'].forEach(k => { if (h[k] != null && nh[k] == null) nh[k] = h[k]; });
+    t.rows.forEach(x => { if (x.g === bk.id && x !== nh) x.g = nh.id; });
+    t.bkMap = t.bkMap || {}; t.bkMap[bk.id] = nh.id; Object.keys(t.bkMap).forEach(k => { if (t.bkMap[k] === bk.id) t.bkMap[k] = nh.id; });
+    h.cognome = m ? m[1].trim() : h.cognome; h.solo = true; delete h.g; delete h.go; delete h.saldato; delete h.abituale;
+    h.stacc = { da: from, hid: nh.id, il: at, chi: who || '', capo: true };
+    // la riga del nuovo capogruppo va dove era quella del vecchio (la comitiva non cambia posto nella lista)
+    const i0 = t.rows.indexOf(h), i1 = t.rows.indexOf(nh); if (i0 >= 0 && i1 > i0) { t.rows.splice(i1, 1); t.rows.splice(i0, 0, nh); }
+    if (typeof pmReset === 'function') pmReset();
+    return { from, bk, capo: true, nuovo: base };
+  }
+  // la prenotazione a cui appartengono gli incassi (se il capogruppo è stato staccato, passa al nuovo capogruppo)
+  function resolveBk(tripId, bkId) { const t = S.trips.find(x => x.id === tripId); let id = bkId, n = 0; while (t && t.bkMap && t.bkMap[id] && n++ < 10) id = t.bkMap[id]; return id; }
+  // spostare righe in un punto preciso della lista (anche in un'altra lista): prima o dopo la prenotazione su cui si lasciano.
+  // Una persona spostata da sola resta nella sua comitiva (pagamento, cartelli) a meno che non la si stacchi.
+  function moveRowsTo(t, ids, targetId, after) {
+    const set = new Set(ids); const rows = t.rows.filter(r => set.has(r.id) && !isEmptyRow(r)); if (!rows.length || set.has(targetId)) return 0;
+    const tgt = rowById(t, targetId); if (!tgt) return 0; const lk = listKey(t, tgt);
+    pinGroup(t, rows.map(r => r.id));
+    if (multiBus(t)) rows.forEach(r => setRowBus(t, r, lk));
+    // non si entra in mezzo a un'altra comitiva: si va prima del suo capogruppo o dopo la sua ultima riga
+    const D = deriveBookings(t); const tb = D.find(b => b.persone.some(p => p.id === targetId) && !b.persone.some(p => set.has(p.id)));
+    let anchor = tgt;
+    if (tb) { const own = tb.persone.filter(p => listKey(t, p.row) === lk).map(p => p.row); anchor = after ? own.reduce((a, x) => (t.rows.indexOf(x) > t.rows.indexOf(a) ? x : a), own[0]) : tb.head; if (tb.last && after) { const lr = rowById(t, tb.last); if (lr && t.rows.indexOf(lr) > t.rows.indexOf(anchor)) anchor = lr; } }
+    t.rows = t.rows.filter(r => !set.has(r.id));
+    const at = t.rows.indexOf(anchor) + (after ? 1 : 0); t.rows.splice(at, 0, ...rows);
+    return rows.length;
   }
   // rimetterla nella comitiva da cui era stata staccata
   function reattachRow(t, id) {
@@ -1622,7 +1655,7 @@
   function servIcons(t) {
     if (tripCat(t) === 'biglietteria') return '';
     const on = new Set(tripServ(t));
-    return SERV.map(([k, l, svg]) => `<span class="svi${on.has(k) ? ' on' : ''}" title="${esc(l)}${on.has(k) ? ' · compreso' : ' · non compreso'}">${svg}</span>`).join('');
+    return SERV.map(([k, l, svg]) => `<span class="svi${on.has(k) ? ' on' : ''}" data-tip="${esc(l)}${on.has(k) ? '' : ' · non compreso'}" aria-label="${esc(l)}${on.has(k) ? ' compreso' : ' non compreso'}">${svg}</span>`).join('');
   }
   // caselle da accendere/spegnere nella finestra «Modifica gita»
   function servPicker(t) {
@@ -1717,8 +1750,9 @@
         <div class="t2-d">${dateL}</div>
         <div class="t2-g">${dayL}</div>
         <div class="t2-c">${t.code ? `<span class="tcode">${esc(t.code)}</span>` : ''}</div>
-        <div class="t2-n"><h3 title="${esc(t.nome)}">${esc(t.nome)}</h3>${det.length ? `<div class="tr-m">${det.map(x => `<span>${x}</span>`).join('')}</div>` : ''}</div>
+        <div class="t2-n"><h3 title="${esc(t.nome)}">${esc(t.nome)}</h3></div>
       </div>
+      <div class="t2-h">${t.quota && t.quota.hotel && tripCat(t) !== 'biglietteria' ? `<span class="hh" title="Hotel scelto: ${esc(t.quota.hotel)}">${SERV.find(x => x[0] === 'hotel')[2]}<span>${esc(t.quota.hotel)}</span></span>` : ''}</div>
       <div class="t2-x">${t.extra ? '<span class="xtra">extra</span>' : ''}</div>
       <div class="t2-sv"><div class="sv-i">${servIcons(t)}</div></div>
       <div class="t2-fc sv-c">${freeCounters(t)}</div>
@@ -1793,14 +1827,15 @@
     const notes = notesOf(t);
     return `<div class="thead2${bigl ? ' bigl' : ''}">
       ${bigl ? `<section class="th-sec"><div class="th-h">Data</div><div class="th-g">${date('data-tf="data"', t.data, 'Data dell\'evento')}</div></section>` : `
-      <section class="th-sec"><div class="th-h">Quote</div><div class="th-g" style="--c:${tour ? 3 : 2}">
+      <section class="th-sec"><div class="th-h">Quote e pagamenti</div><div class="th-g" style="--c:3">
         ${money('adulti', 'Adulti')}
         <label class="th-f"><span>${lab('bambiniL', tour ? '3/11 anni' : '4/11 anni', 'Età bambini')}</span><span class="th-in eur"><input class="hc num" data-q="bambini" inputmode="decimal" value="${Q.bambini != null ? esc(String(Q.bambini).replace('.', ',')) : ''}" aria-label="Prezzo bambini"><i>€</i></span></label>
-        ${tour ? money('singola', 'Singola') + money('terzo', '3° letto adulto') + `<label class="th-f"><span>${lab('infantL', '0/2 anni', 'Età neonati')}</span><span class="th-in eur"><input class="hc num" data-q="infant" inputmode="decimal" value="${Q.infant != null ? esc(String(Q.infant).replace('.', ',')) : ''}" placeholder="0" aria-label="Prezzo neonati"><i>€</i></span></label>` : ''}
-      </div></section>
-      <section class="th-sec"><div class="th-h">Date e pagamenti</div><div class="th-g">
-        ${date('data-tf="data"', t.data, 'Partenza')}${date('data-tf="fine"', t.fine, 'Rientro')}
+        ${tour ? money('singola', 'Singola') + money('terzo', '3° letto adulto') + `<label class="th-f"><span>${lab('infantL', '0/2 anni', 'Età neonati')}</span><span class="th-in eur"><input class="hc num" data-q="infant" inputmode="decimal" value="${Q.infant != null ? esc(String(Q.infant).replace('.', ',')) : ''}" placeholder="0" aria-label="Prezzo neonati"><i>€</i></span></label>` : '<span></span>'}
+        <div class="th-sep"></div>
         ${money('acconto', 'Acconto')}${money('saldo', 'Saldo')}${date('data-qt="saldoEntro"', Q.saldoEntro, 'Saldo entro il')}
+      </div></section>
+      <section class="th-sec"><div class="th-h">Date e hotel</div><div class="th-g" style="--c:2">
+        ${date('data-tf="data"', t.data, 'Partenza')}${date('data-tf="fine"', t.fine, 'Rientro')}
         ${tour ? `<label class="th-f wide"><span>Hotel</span><span class="th-in"><input class="hc" data-qt="hotel" value="${esc(Q.hotel || '')}" placeholder="nome hotel, città"></span></label>` : ''}
       </div></section>`}
       ${tkSec}
@@ -1831,7 +1866,8 @@
     const fl = UI.flash && UI.flash[r.id] && Date.now() - UI.flash[r.id].at < 8000 ? UI.flash[r.id] : null;
     let cls = x ? `g${x.gi % 2}` : 'blank'; if (fl) cls += ' flash'; if (head) cls += ' gh'; if (ok) cls += ' paid'; if (bk && UI.sel === bk.id) cls += ' sel'; if (UI.selP === r.id) cls += ' selp'; if ((UI.lsel || []).includes(r.id)) cls += ' lsel';
     const pm = bk && !head && bk.persone.length > 1 ? personMoney(t, bk, r.id) : null; if (pm && pm.paid > 0 && pm.rest === 0 && !ok) cls += ' ppaid';
-    const xg = bk && !head && multiBus(t) && listKey(t, r) !== listKey(t, bk.head) ? ` · comitiva ${bkName(bk)} x ${bk.persone.length} (${listName(t, listKey(t, bk.head))})` : '';
+    const away = bk && !head && r.g && (() => { const rows = listRows(t, listKey(t, r)).filter(x => !isEmptyRow(x)); const k = rows.indexOf(r); const prev = rows[k - 1]; return !prev || !bk.persone.some(p => p.row === prev); })();
+    const xg = bk && !head && multiBus(t) && listKey(t, r) !== listKey(t, bk.head) ? ` · comitiva ${bkName(bk)} x ${bk.persone.length} (${listName(t, listKey(t, bk.head))})` : away ? ` · comitiva ${bkName(bk)} x ${bk.persone.length} (spostata da sola in questo punto della lista)` : '';
     const drag = x ? `<span class="dh" draggable="true" ${head ? `data-dragbk="${bk.id}" title="Trascina tutta la prenotazione (${esc(bkName(bk))} x ${bk.persone.length}) sulla piantina"` : `data-dragp="${r.id}" title="Trascina solo questa persona sulla piantina"`}>${ICON.grip}</span>` : '';
     let seatTxt = '';
     if (seat) { const p = bk.persone.find(q => q.id === r.id); const bad = p && p.req && hasAny(p.req) && !reqOk(LMAP[seat.b.layout], seat.s, p.req); seatTxt = `<span class="pill ${bad ? 'warn' : 'ok'}" title="${bad ? 'Il posto non rispetta la richiesta' : ''}">${esc(seat.b.label.replace(/^Bus\s*/i, 'B'))} · ${seat.s}</span>`; }
@@ -1902,7 +1938,7 @@
     const to = multiBus(t) ? tripLists(t).filter(L => !(here.size === 1 && here.has(L.id))) : [];
     return `<div class="selbar" role="toolbar" aria-label="Righe selezionate"><b>${ids.length} ${ids.length === 1 ? 'persona selezionata' : 'persone selezionate'}</b><span class="small">${nbk} ${nbk === 1 ? 'prenotazione' : 'prenotazioni'}</span>
       ${to.length ? `<span class="sb-l">Sposta in</span>${to.map(L => `<button class="btn sm" data-act="lmove" data-to="${esc(L.id)}">${L.b ? ICON.bus : ''} ${esc(L.b ? L.b.label : L.label)}</button>`).join('')}` : multiBus(t) ? '' : '<span class="small">Con due o più bus potrai spostarle da una lista all\'altra</span>'}
-      ${ids.some(id => { const b = D.find(x => x.persone.some(p => p.id === id)); return b && b.id !== id && b.persone.length > 1; }) ? `<button class="btn sm" data-act="detach" title="Le persone selezionate (non i capigruppo) diventano prenotazioni a sé">${ICON.unlink} Stacca dalla comitiva</button>` : ''}
+      ${ids.some(id => { const b = D.find(x => x.persone.some(p => p.id === id)); return b && b.persone.length > 1; }) ? `<button class="btn sm" data-act="detach" title="Le persone selezionate (non i capigruppo) diventano prenotazioni a sé">${ICON.unlink} Stacca dalla comitiva</button>` : ''}
       <button class="btn sm ghost" data-act="lselclear">${ICON.close} Deseleziona</button></div>`;
   }
   function listaView(t, D, SI, T) {
@@ -3420,8 +3456,9 @@
     pmIndex(); return PMI.get(tripId + '|' + bkId) || 0;
   }
   function pmIndex() {
-    if (PMV !== STORE.ver() || !PMI) { PMI = new Map(); allMovs().filter(isInc).forEach(m => { const k = m.tripId + '|' + m.bkId; PMI.set(k, (PMI.get(k) || 0) + (+m.tot || 0)); if (m.pid) { const kp = k + '|' + m.pid; PMI.set(kp, (PMI.get(kp) || 0) + (+m.tot || 0)); } }); PMV = STORE.ver(); }
+    if (PMV !== STORE.ver() || !PMI) { PMI = new Map(); allMovs().filter(isInc).forEach(m => { const k = m.tripId + '|' + resolveBk(m.tripId, m.bkId); PMI.set(k, (PMI.get(k) || 0) + (+m.tot || 0)); if (m.pid) { const kp = k + '|' + m.pid; PMI.set(kp, (PMI.get(kp) || 0) + (+m.tot || 0)); } }); PMV = STORE.ver(); }
   }
+  function pmReset() { PMI = null; }
   // pagamento individuale: quanto ha pagato una sola persona della comitiva (incassi registrati a suo nome)
   function pidPaid(tripId, bkId, pid) { pmIndex(); return Math.round((PMI.get(tripId + '|' + bkId + '|' + pid) || 0) * 100) / 100; }
   const chiusura = (day, ag) => STORE.get(`/cassa/chiusure/${day}_${ag}.json`);
@@ -3628,7 +3665,7 @@
     const D = deriveBookings(t); const bk = D.find(x => x.id === UI.pay.bkId); if (!bk) return '';
     const f = UI.pay.f; const pid = UI.pay.pid || ''; const m0 = bkMoney(t, bk); bk._m = m0; const m = payMoney(t, bk, pid); const T = payTotals(f);
     const P = pid && bk.persone.find(p => p.id === pid); const comit = bk.persone.length > 1;
-    const hist = allMovs().filter(x => x.tripId === t.id && x.bkId === bk.id && (!pid || x.pid === pid)).sort((a, b) => a.at.localeCompare(b.at));
+    const hist = allMovs().filter(x => x.tripId === t.id && resolveBk(x.tripId, x.bkId) === bk.id && (!pid || x.pid === pid)).sort((a, b) => a.at.localeCompare(b.at));
     const pName = id => { const p = bk.persone.find(q => q.id === id); return p ? `${p.cognome} ${p.nome}`.trim() : ''; };
     const storn = new Set(hist.filter(x => x.storno).map(x => x.storno));
     const canPay = ACC.can('cassa') && ACC.sess.ag;
@@ -3867,7 +3904,7 @@
     const C = daneaCfg(); const t = S.trips.find(x => x.id === m.tripId); const F = m.fatt || {};
     const cf = String(F.cf || '').toUpperCase().replace(/\s/g, ''); const piva = /^\d{11}$/.test(cf);
     const sdi = String(F.sdi || '').trim(); const isPec = /@/.test(sdi);
-    const cl = t && (() => { const bk = deriveBookings(t).find(b => b.id === m.bkId); const r = bk && (m.pid ? (bk.persone.find(p => p.id === m.pid) || {}).row : bk.head); return r && r.cid ? S.clients.clienti[r.cid] : null; })();
+    const cl = t && (() => { const bk = deriveBookings(t).find(b => b.id === resolveBk(m.tripId, m.bkId)); const r = bk && (m.pid ? (bk.persone.find(p => p.id === m.pid) || {}).row : bk.head); return r && r.cid ? S.clients.clienti[r.cid] : null; })();
     const nome = [F.cognome, F.nome].filter(Boolean).join(' ').trim() || m.cliente;
     const when = t ? fmtTripDate(t) : '';
     const rows = (m.lines || []).filter(l => +l.q).map(l => `<Row>${xt('Code', t && t.codDanea)}${xt('Description', `${t ? t.nome : m.desc}${when ? ' · ' + when : ''}${(m.lines || []).filter(x => +x.q).length > 1 || l.l !== 'Intero' ? ' · ' + l.l : ''}`)}<Qty>${+l.q}</Qty><Price>${n2((+l.bus || 0) + (+l.tkt || 0))}</Price><VatCode>${xq(C.iva)}</VatCode></Row>`);
@@ -3876,11 +3913,11 @@
     if (!rows.length) rows.push(`<Row>${xt('Code', t && t.codDanea)}<Description>${xq(m.desc || (t && t.nome) || 'Viaggio')}</Description><Qty>1</Qty><Price>${n2(m.docTot || m.tot)}</Price><VatCode>${xq(C.iva)}</VatCode></Row>`);
     // pagamenti: tutti gli incassi registrati per questa prenotazione (già pagati) + l'eventuale saldo ancora da pagare
     // con il pagamento individuale ogni persona ha i suoi incassi: la fattura di una persona considera solo i suoi, quella della comitiva gli altri
-    const pays = allMovs().filter(x => x.tripId === m.tripId && x.bkId === m.bkId && isInc(x) && (m.pid ? x.pid === m.pid : !x.pid)).sort((a, b) => a.at.localeCompare(b.at));
+    const pays = allMovs().filter(x => x.tripId === m.tripId && resolveBk(x.tripId, x.bkId) === resolveBk(m.tripId, m.bkId) && isInc(x) && (m.pid ? x.pid === m.pid : !x.pid)).sort((a, b) => a.at.localeCompare(b.at));
     const stornati = new Set(pays.filter(x => x.storno).map(x => x.storno));
     const paid = pays.filter(x => x.tipo !== 'storno' && !stornati.has(x.id));
     // quanto risultava già pagato nella lista prima dell'app (colonna «pagato» del Word)
-    const bk0 = t && deriveBookings(t).find(b => b.id === m.bkId); const legacy = bk0 && !m.pid ? Math.max(0, bkMoney(t, bk0).paid - paidMovs(t.id, bk0.id)) : 0;
+    const bk0 = t && deriveBookings(t).find(b => b.id === resolveBk(m.tripId, m.bkId)); const legacy = bk0 && !m.pid ? Math.max(0, bkMoney(t, bk0).paid - paidMovs(t.id, bk0.id)) : 0;
     const tot = +m.docTot || +m.tot; const paidTot = paid.reduce((a, x) => a + (+x.tot || 0), 0) + legacy;
     const pl = (legacy > 0.009 ? [`<Payment><Advance>true</Advance><Date>${paid[0] ? paid[0].day : m.day}</Date><Amount>${n2(legacy)}</Amount><Paid>true</Paid></Payment>`] : []).concat(paid.map(x => `<Payment><Advance>${x.tipo === 'acconto' ? 'true' : 'false'}</Advance><Date>${x.day}</Date><Amount>${n2(x.tot)}</Amount><Paid>true</Paid></Payment>`));
     if (tot - paidTot > 0.009) pl.push(`<Payment><Advance>false</Advance><Date>${(t && t.quota && t.quota.saldoEntro) || (t && t.data) || todayISO()}</Date><Amount>${n2(tot - paidTot)}</Amount><Paid>false</Paid></Payment>`);
@@ -4299,9 +4336,13 @@
   }
   // elenco dei viaggi: tutti i riquadri colorati finiscono allo stesso punto, subito dopo il nome più lungo
   function alignBlocks() {
-    const box = $('.months'); if (!box) return; box.style.removeProperty('--nw');
-    let w = 0; $$('.months .t2-n').forEach(n => { const h = n.querySelector('h3'); const m = n.querySelector('.tr-m'); w = Math.max(w, h ? h.scrollWidth : 0, m ? m.scrollWidth : 0); });
-    if (w) box.style.setProperty('--nw', Math.min(w + 2, 300) + 'px');
+    const box = $('.months'); if (!box) return; ['--nw', '--dw', '--gw', '--cw', '--hw'].forEach(v => box.style.removeProperty(v));
+    // ogni colonna è larga quanto la scritta più lunga (così la data non va mai sopra il giorno, anche con «24–26 Settembre»)
+    const mx = (sel, f) => $$(sel).reduce((w, el) => Math.max(w, f ? f(el) : Math.max(el.scrollWidth, el.getBoundingClientRect().width)), 0);
+    const dw = mx('.months .t2-d'), gw = mx('.months .t2-g'), cw = mx('.months .t2-c .tcode', el => el.getBoundingClientRect().width), nw = mx('.months .t2-n h3'), hw = mx('.months .t2-h .hh span', el => el.scrollWidth + 26);
+    if (dw) box.style.setProperty('--dw', (dw + 4) + 'px'); if (gw) box.style.setProperty('--gw', (gw + 4) + 'px');
+    box.style.setProperty('--cw', (cw ? cw + 2 : 0) + 'px'); if (nw) box.style.setProperty('--nw', Math.min(nw + 2, 300) + 'px');
+    box.style.setProperty('--hw', (hw ? Math.min(hw + 2, 260) : 0) + 'px');
   }
   function commit() { save(); render(); }
   let toastT;
@@ -4326,6 +4367,7 @@
       if (!bigl) h += B('selbk', ICON.pin, 'Mostra sulla piantina', `data-id="${bk.id}"`);
       if (others.length && !inSel) h += `<div class="pm-chips"><span>${head || !comit ? (comit ? 'Sposta la comitiva in' : 'Sposta in') : `Sposta solo ${esc(P.nome || P.cognome)} in`}</span>${others.map(L => `<button data-act="lmove1" data-id="${id}" data-whole="${head ? 1 : 0}" data-to="${esc(L.id)}">${esc(L.b ? L.b.label : L.label)}</button>`).join('')}</div>`;
       if (comit && !head) h += B('detach', ICON.unlink, `Stacca ${esc(P.nome || P.cognome)} dalla comitiva <small>diventa una prenotazione a sé</small>`, `data-id="${id}"`);
+      if (comit && head) h += B('detach', ICON.unlink, `Stacca il capogruppo <small>${esc(bk.persone[1].cognome)} ${esc(bk.persone[1].nome)} diventa capogruppo (x ${Math.max(bk.n, bk.persone.length) - 1})</small>`, `data-id="${id}"`);
       if (r.stacc) h += B('reattach', ICON.link2, `Rimetti nella comitiva ${esc(r.stacc.da.replace(/ x \d+$/, ''))} <small>staccata il ${esc(fmtDate(r.stacc.il.slice(0, 10)).slice(0, 5))}${r.stacc.chi ? ' da ' + esc(r.stacc.chi) : ''}</small>`, `data-id="${id}"`);
       h += B('rsel', ICON.sel, (UI.lsel || []).includes(id) ? 'Togli dalla selezione' : 'Seleziona questa riga', `data-id="${id}"`);
       h += '</div>';
@@ -4373,11 +4415,11 @@
 
   function doDetach(t, ids) {
     const done = []; const me = (ACC.me() || {}).name || '';
-    ids.forEach(id => { const r = rowById(t, id); if (!r) return; const pid = (deriveBookings(t).find(b => b.persone.some(p => p.id === id)) || {}).id; const paid = pid ? pidPaid(t.id, pid, id) : 0; const x = detachRow(t, id, me); if (x) done.push({ r, from: x.from, paid }); });
-    if (!done.length) return toast('Si può staccare solo una persona che è dentro una comitiva (non la prima riga)');
+    ids.forEach(id => { const r = rowById(t, id); if (!r) return; const pid = (deriveBookings(t).find(b => b.persone.some(p => p.id === id)) || {}).id; const paid = pid ? pidPaid(t.id, pid, id) : 0; const x = detachRow(t, id, me); if (x) done.push({ r, from: x.from, paid, capo: x.capo, nuovo: x.nuovo }); });
+    if (!done.length) return toast('Si può staccare solo una persona che è dentro una comitiva');
     UI.lsel = []; commit();
     DIAG.ev('azione', `Staccate dalla comitiva: ${done.map(x => `${x.r.cognome} ${x.r.nome} (da ${x.from})`).join(', ')}`);
-    toast(`${done.length === 1 ? `${done[0].r.cognome} ${done[0].r.nome} ora è una prenotazione a sé (staccata da ${done[0].from})` : `${done.length} persone staccate dalle loro comitive`}${done.some(x => x.paid) ? ' · attenzione: aveva già pagato la sua quota nella comitiva, controlla gli incassi' : ''}`);
+    toast(`${done.length === 1 ? `${done[0].r.cognome} ${done[0].r.nome} ora è una prenotazione a sé (staccata da ${done[0].from})${done[0].capo ? ` · il nuovo capogruppo è ${done[0].nuovo}: incassi e posti restano alla comitiva` : ''}` : `${done.length} persone staccate dalle loro comitive`}${done.some(x => x.paid) ? ' · attenzione: aveva già pagato la sua quota nella comitiva, controlla gli incassi' : ''}`);
   }
   // valore del cognome quando si entra nel campo (per capire se «x 3» è diventato «x 5»)
   const OLDC = {};
@@ -4792,6 +4834,10 @@
   document.addEventListener('dragover', e => {
     if (!drag || !e.target.closest) return;
     const st = e.target.closest('#mapwrap .seat[data-seat]'); const tb = e.target.closest('[data-dropbus]'); const dl = e.target.closest('[data-droplist]');
+    $$('.drop-b,.drop-a').forEach(x => x.classList.remove('drop-b', 'drop-a'));
+    // sopra una riga della lista: la persona (o la prenotazione) va lì, prima o dopo
+    const tr = (drag.bk || drag.p || drag.rows) && e.target.closest('.lsec tr[data-rowid]');
+    if (tr && !isEmptyRowEl(tr)) { e.preventDefault(); $$('.drop').forEach(x => x.classList.remove('drop')); const rc = tr.getBoundingClientRect(); tr.classList.add(e.clientY > rc.top + rc.height / 2 ? 'drop-a' : 'drop-b'); return; }
     $$('.drop').forEach(x => x !== st && x !== tb && x !== dl && x.classList.remove('drop'));
     if (st && !st.classList.contains('res')) { e.preventDefault(); st.classList.add('drop'); }
     else if (tb && (drag.bk || drag.p || drag.rows)) { e.preventDefault(); tb.classList.add('drop'); }
@@ -4800,7 +4846,8 @@
   document.addEventListener('drop', e => {
     const tgt = e.target.closest ? e.target : e.target.parentElement;
     const st = tgt.closest('#mapwrap .seat[data-seat]'); const dz = tgt.closest('#dropzone'); const tb = tgt.closest('[data-dropbus]'); const dl = tgt.closest('[data-droplist]');
-    $$('.drop').forEach(x => x.classList.remove('drop')); { const db = $('#dropbar'); if (db) setTimeout(() => db.remove(), 0); }
+    const rtr = tgt.closest('.lsec tr[data-rowid]'); const rAfter = rtr && rtr.classList.contains('drop-a');
+    $$('.drop').forEach(x => x.classList.remove('drop')); $$('.drop-b,.drop-a').forEach(x => x.classList.remove('drop-b', 'drop-a')); { const db = $('#dropbar'); if (db) setTimeout(() => db.remove(), 0); }
     if (dz) { e.preventDefault(); dz.classList.remove('on'); const f = e.dataTransfer.files && e.dataTransfer.files[0]; if (f) readImportFile(f); return; }
     const files = e.dataTransfer && e.dataTransfer.files;
     if (files && files.length && !$('#modal-root').innerHTML) {
@@ -4813,6 +4860,14 @@
     }
     if (!drag) return;
     e.preventDefault(); const t = trip(); const b = bus(); const dr = drag; drag = null;
+    if (rtr && (dr.bk || dr.p || dr.rows) && !isEmptyRowEl(rtr)) {
+      let ids = dr.rows || (dr.p ? [dr.p] : []); if (dr.bk) { const bk = deriveBookings(t).find(x => x.id === dr.bk); ids = bk ? bk.persone.map(p => p.id) : []; }
+      if (ids.includes(rtr.dataset.rowid)) return;
+      const n = moveRowsTo(t, ids, rtr.dataset.rowid, rAfter); if (dr.rows) UI.lsel = [];
+      if (n) { const r0 = rowById(t, ids[0]); const D = deriveBookings(t); const bk = D.find(b => b.persone.some(p => p.id === ids[0])); commit();
+        toast(`${dr.bk ? `${bkName(bk)} x ${bk.persone.length} spostata` : n === 1 ? `${String(r0.cognome).replace(RX, '$1').trim()} ${r0.nome} spostato` : `${n} persone spostate`}${dr.p && bk && bk.persone.length > 1 ? ` · resta nella comitiva ${bkName(bk)} (per staccarla: menu della riga › Stacca)` : ''}`); }
+      return;
+    }
     if (dl && /^L:/.test(dl.dataset.droplist) && (dr.bk || dr.p || dr.rows || dr.seat != null)) {
       const to = dl.dataset.droplist.slice(2); let ids = dr.rows || (dr.p ? [dr.p] : []);
       if (dr.bk) { const bk = deriveBookings(t).find(x => x.id === dr.bk); ids = bk ? bk.persone.map(p => p.id) : []; }
@@ -4840,7 +4895,8 @@
     }
     if (dl && dr.seat != null) { const a = b.seats[dr.seat]; if (a && a.pid) { const r = rowById(t, a.pid); unseatRow(t, r); delete r.bus; toast(`${String(r.cognome).replace(RX, '$1')} ${r.nome} tolto dal bus`); commit(); } }
   });
-  document.addEventListener('dragend', () => { drag = null; $$('.drop').forEach(x => x.classList.remove('drop')); const db = $('#dropbar'); if (db) db.remove(); });
+  const isEmptyRowEl = tr => { const t = trip(); const r = t && rowById(t, tr.dataset.rowid); return !r || isEmptyRow(r); };
+  document.addEventListener('dragend', () => { drag = null; $$('.drop').forEach(x => x.classList.remove('drop')); $$('.drop-b,.drop-a').forEach(x => x.classList.remove('drop-b', 'drop-a')); const db = $('#dropbar'); if (db) db.remove(); });
   document.addEventListener('dragenter', e => { const dz = e.target.closest && e.target.closest('#dropzone'); if (dz && e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files')) { e.preventDefault(); dz.classList.add('on'); } });
   window.addEventListener('dragover', e => {
     if (!(e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files'))) return;
