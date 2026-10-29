@@ -1,7 +1,7 @@
 VIAGGI IN PULLMAN · LA TERRA
 ============================
 
-Versione: 2.0
+Versione: 2.0.2
 Pacchetto creato il: 29/10/2026
 
 Come installarla o aggiornarla: vedi LEGGIMI.txt.
@@ -9,6 +9,29 @@ Aggiornamento: carica su GitHub TUTTI i file, config.js compreso (contiene già 
 
 MODIFICHE
 ---------
+
+VERSIONE 2.0.2 · 29/10/2026
+ELENCO DEI VIAGGI
+- Controllo apposta della scritta «EXTRA»: non tocca mai il riquadro colorato, il nome dell'hotel,
+  le iconcine (compreso il bus) e i contatori. Provato in automatico su schermi larghi 1920, 1728,
+  1512, 1440, 1366, 1280 e 1100 punti, anche con nomi d'hotel lunghissimi e viaggi con 3 bus.
+- Contatori dei posti liberi con più bus: compatti su una riga sola («liberi B1 19 B2 51 B3 51»),
+  così la riga non diventa più alta; passando sopra si legge il dettaglio di ogni bus. La loro
+  colonna è larga quanto serve, quindi non si avvicinano mai alle iconcine o ai pulsanti.
+
+VERSIONE 2.0.1 · 29/10/2026
+CORREZIONE
+- Elenco dei viaggi: nei viaggi senza codice (es. le date extra) il nome veniva tagliato dopo
+  poche lettere («Outl…», «Sav…»). La casella del codice ora resta sempre al suo posto anche quando
+  è vuota, quindi il nome è sempre nella sua colonna e si legge per intero.
+- Elenco dei viaggi: con un nome d'hotel lungo, «EXTRA» finiva sopra le iconcine dei servizi.
+  Ora ogni colonna ha il suo spazio garantito; se lo schermo è stretto si accorciano con «…» il nome
+  del viaggio e quello dell'hotel (passando sopra con il mouse si leggono per intero), mai le iconcine.
+- Schermi più stretti: sotto i 1600 punti i pulsanti Lista e Posti mostrano solo l'icona (il nome
+  compare passandoci sopra); sotto i 1460 punti il nome dell'hotel si legge passando il mouse sul
+  nome del viaggio, per lasciare spazio alle iconcine.
+- Controllato in automatico su schermi larghi 1728, 1512, 1440, 1366 e 1280 punti, su tutti i viaggi
+  dell'anno: nessuna scritta sopra un'altra e nessun nome tagliato.
 
 VERSIONE 2.0 · 29/10/2026
 CORREZIONI

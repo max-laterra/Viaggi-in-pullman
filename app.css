@@ -1414,8 +1414,6 @@ body:has(.selbar) #toast,body:has(.dropbar) #toast{bottom:92px}
 /* 2.0 · colonne del riquadro larghe quanto la scritta più lunga: la data non si sovrappone più al giorno */
 .months .t2-blk{grid-template-columns:var(--dw,max-content) var(--gw,max-content) var(--cw,max-content) var(--nw,auto);gap:14px;min-height:44px}
 .t2-d,.t2-g,.t2-c{white-space:nowrap;overflow:visible}
-.t2-c:empty{display:none}
-.months .t2-blk:has(.t2-c:empty){column-gap:14px}
 /* hotel fuori dal riquadro colorato (forma scelta più sotto) */
 .tl .trow.v2{grid-template-columns:auto var(--hw,0px) 64px minmax(0,1fr) 290px auto}
 .tl .trow.v2 .t2-h{grid-column:2;min-width:0}
@@ -1435,3 +1433,31 @@ body:has(.selbar) #toast,body:has(.dropbar) #toast{bottom:92px}
 .thead2.bigl .th-sec{flex:1 1 0}
 .hh span{display:block}
 .th-sep{grid-column:1/-1;height:1px;background:var(--line);margin:2px 0}
+/* 2.0.1 · la cella del codice resta sempre al suo posto, anche vuota: il nome non scivola nella colonna del codice */
+.months .t2-blk > .t2-c{display:block;min-width:0}
+.months .t2-blk > .t2-d{grid-column:1}.months .t2-blk > .t2-g{grid-column:2}.months .t2-blk > .t2-c{grid-column:3}.months .t2-blk > .t2-n{grid-column:4}
+@media (max-width:700px){.months .t2-blk > *{grid-column:auto!important}.months .t2-blk > .t2-n{grid-column:1/-1!important}}
+/* 2.0.1 · le colonne non si sovrappongono mai: le iconcine hanno sempre il loro spazio */
+.tl .trow.v2{grid-template-columns:max-content var(--hw,0px) 64px minmax(max-content,1fr) 236px auto}
+.tl .trow.v2 .t2-fc{justify-content:flex-end}
+@media (max-width:1250px){.tl .trow.v2{grid-template-columns:max-content var(--hw,0px) 60px minmax(0,1fr) 236px auto}}
+@media (max-width:1050px){.tl .trow.v2{grid-template-columns:minmax(0,1fr) auto auto}.tl .trow.v2 .t2-h,.tl .trow.v2 .t2-x{display:none}.tl .trow.v2 .t2-fc{grid-column:2}.tl .trow.v2 .tr-a{grid-column:3}}
+@media (max-width:700px){.tl .trow.v2{grid-template-columns:minmax(0,1fr)}.tl .trow.v2 .t2-fc,.tl .trow.v2 .tr-a{grid-column:1}}
+@media (max-width:1600px){.tl .trow.v2{grid-template-columns:max-content var(--hw,0px) 60px minmax(max-content,1fr) 210px auto}.svi{width:25px;height:25px}.svi .sv{width:23px;height:23px}.sv-i{gap:4px}}
+@media (max-width:1460px){.tl .trow.v2{grid-template-columns:max-content 60px minmax(max-content,1fr) 210px auto}.tl .trow.v2 .t2-h{display:none}.tl .trow.v2 .t2-x{grid-column:2}.tl .trow.v2 .t2-sv{grid-column:3}.tl .trow.v2 .t2-fc{grid-column:4}.tl .trow.v2 .tr-a{grid-column:5}}
+@media (max-width:1250px){.tl .trow.v2{grid-template-columns:max-content 60px minmax(0,1fr) 210px auto}.tl .trow.v2 .t2-sv{display:none}.tl .trow.v2 .t2-fc{grid-column:4}}
+@media (max-width:1600px){.tl .trow.v2 .tr-a .btn span{display:none}.tl .trow.v2 .tr-a .btn{padding:6px 9px}}
+@media (max-width:1320px){.tl .trow.v2{grid-template-columns:max-content 56px minmax(max-content,1fr) 180px auto;gap:10px}.sv-i{gap:2px}}
+@media (max-width:1250px){.tl .trow.v2{grid-template-columns:max-content 56px minmax(0,1fr) 180px auto}}
+/* più bus: contatori compatti su una riga («liberi  B1 19  B2 51  B3 51») */
+.tl .trow.v2 .t2-fc{flex-wrap:nowrap;align-items:center;gap:4px}
+.fc-l{font-size:11.5px;color:var(--ink-3);font-weight:600;margin-right:2px}
+.t2-fc .fc{padding:4px 8px 4px 7px;gap:4px}
+/* colonna dei posti liberi: larghezza misurata sui contatori (variabile --fw) */
+.tl .trow.v2{grid-template-columns:max-content var(--hw,0px) 64px minmax(max-content,1fr) var(--fw,236px) auto}
+@media (max-width:1600px){.tl .trow.v2{grid-template-columns:max-content var(--hw,0px) 60px minmax(max-content,1fr) var(--fw,210px) auto}}
+@media (max-width:1460px){.tl .trow.v2{grid-template-columns:max-content 60px minmax(max-content,1fr) var(--fw,210px) auto}}
+@media (max-width:1320px){.tl .trow.v2{grid-template-columns:max-content 56px minmax(max-content,1fr) var(--fw,180px) auto}}
+@media (max-width:1250px){.tl .trow.v2{grid-template-columns:max-content 56px minmax(0,1fr) var(--fw,180px) auto}}
+@media (max-width:1050px){.tl .trow.v2{grid-template-columns:minmax(0,1fr) auto auto}}
+@media (max-width:700px){.tl .trow.v2{grid-template-columns:minmax(0,1fr)}}

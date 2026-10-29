@@ -1,6 +1,6 @@
 (function () {
   'use strict';
-  const VERSION = '2.0';
+  const VERSION = '2.0.2';
   const LOGO = './logo.jpg';
   const KEY = 'laterra.prenotazioniPosti.v1';
   const $ = (s, r = document) => r.querySelector(s);
@@ -1750,13 +1750,13 @@
         <div class="t2-d">${dateL}</div>
         <div class="t2-g">${dayL}</div>
         <div class="t2-c">${t.code ? `<span class="tcode">${esc(t.code)}</span>` : ''}</div>
-        <div class="t2-n"><h3 title="${esc(t.nome)}">${esc(t.nome)}</h3></div>
+        <div class="t2-n"><h3 title="${esc(t.nome)}${t.quota && t.quota.hotel ? ' · Hotel ' + esc(t.quota.hotel) : ''}">${esc(t.nome)}</h3></div>
       </div>
       <div class="t2-h">${t.quota && t.quota.hotel && tripCat(t) !== 'biglietteria' ? `<span class="hh" title="Hotel scelto: ${esc(t.quota.hotel)}">${SERV.find(x => x[0] === 'hotel')[2]}<span>${esc(t.quota.hotel)}</span></span>` : ''}</div>
       <div class="t2-x">${t.extra ? '<span class="xtra">extra</span>' : ''}</div>
       <div class="t2-sv"><div class="sv-i">${servIcons(t)}</div></div>
       <div class="t2-fc sv-c">${freeCounters(t)}</div>
-      <div class="tr-a"><button class="btn sm" data-act="opentrip" data-id="${t.id}" data-sec="lista">${ICON.list} Lista</button>${c !== 'biglietteria' ? `<button class="btn sm" data-act="opentrip" data-id="${t.id}" data-sec="posti">${ICON.bus} Posti</button>` : ''}</div>
+      <div class="tr-a"><button class="btn sm" data-act="opentrip" data-id="${t.id}" data-sec="lista" title="Lista prenotazioni">${ICON.list}<span>Lista</span></button>${c !== 'biglietteria' ? `<button class="btn sm" data-act="opentrip" data-id="${t.id}" data-sec="posti" title="Posti sul bus">${ICON.bus}<span>Posti</span></button>` : ''}</div>
     </article>`;
   }
   // posti ancora liberi: uno per bus (con più bus ognuno ha la sua lista), contando anche i nomi che mancano nelle comitive
@@ -1765,8 +1765,8 @@
     const multi = multiBus(t);
     const one = (b, lk, lab) => { const cap = (multi ? [b] : t.buses).reduce((a, x) => a + LMAP[x.layout].info.cap - Object.values(x.seats || {}).filter(y => y.res).length, 0); const free = cap - listLoad(t, lk);
       const cls = free <= 0 ? 'full' : free <= 5 ? 'low' : 'ok';
-      return `<span class="fc ${cls}" title="${esc(lab)}: ${cap} posti${free >= 0 ? `, ${free} liberi` : `, ${-free} persone in più`}">${ICON.bus}${multi ? `<em>${esc(b.label.replace(/^Bus\s*/i, 'B'))}</em>` : ''}${free > 0 ? `<b>${free}</b> ${free === 1 ? 'libero' : 'liberi'}` : free === 0 ? '<b>pieno</b>' : `<b>+${-free}</b> in più`}</span>`; };
-    return multi ? t.buses.map(b => one(b, b.id, b.label)).join('') : one(t.buses[0], '', t.buses.length > 1 ? 'Bus' : t.buses[0].label);
+      return `<span class="fc ${cls}" title="${esc(lab)}: ${cap} posti${free >= 0 ? `, ${free} liberi` : `, ${-free} persone in più`}">${ICON.bus}${multi ? `<em>${esc(b.label.replace(/^Bus\s*/i, 'B'))}</em>` : ''}${free > 0 ? `<b>${free}</b>${multi ? '' : ` ${free === 1 ? 'libero' : 'liberi'}`}` : free === 0 ? '<b>pieno</b>' : `<b>+${-free}</b>${multi ? '' : ' in più'}`}</span>`; };
+    return multi ? `<span class="fc-l">liberi</span>${t.buses.map(b => one(b, b.id, b.label)).join('')}` : one(t.buses[0], '', t.buses.length > 1 ? 'Bus' : t.buses[0].label);
   }
   function busRow(t, b) {
     const L = LMAP[b.layout]; const st = busStats(b);
@@ -4336,13 +4336,24 @@
   }
   // elenco dei viaggi: tutti i riquadri colorati finiscono allo stesso punto, subito dopo il nome più lungo
   function alignBlocks() {
-    const box = $('.months'); if (!box) return; ['--nw', '--dw', '--gw', '--cw', '--hw'].forEach(v => box.style.removeProperty(v));
+    const box = $('.months'); if (!box) return; ['--nw', '--dw', '--gw', '--cw', '--hw', '--fw'].forEach(v => box.style.removeProperty(v));
     // ogni colonna è larga quanto la scritta più lunga (così la data non va mai sopra il giorno, anche con «24–26 Settembre»)
     const mx = (sel, f) => $$(sel).reduce((w, el) => Math.max(w, f ? f(el) : Math.max(el.scrollWidth, el.getBoundingClientRect().width)), 0);
     const dw = mx('.months .t2-d'), gw = mx('.months .t2-g'), cw = mx('.months .t2-c .tcode', el => el.getBoundingClientRect().width), nw = mx('.months .t2-n h3'), hw = mx('.months .t2-h .hh span', el => el.scrollWidth + 26);
     if (dw) box.style.setProperty('--dw', (dw + 4) + 'px'); if (gw) box.style.setProperty('--gw', (gw + 4) + 'px');
     box.style.setProperty('--cw', (cw ? cw + 2 : 0) + 'px'); if (nw) box.style.setProperty('--nw', Math.min(nw + 2, 300) + 'px');
-    box.style.setProperty('--hw', (hw ? Math.min(hw + 2, 260) : 0) + 'px');
+    // colonna dei posti liberi larga quanto i contatori più lunghi (così non toccano mai le iconcine)
+    const fw = $$('.months .t2-fc').reduce((w, el) => Math.max(w, [...el.children].reduce((a, c) => a + c.getBoundingClientRect().width + 4, 0)), 0); box.style.setProperty('--fw', Math.max(90, Math.ceil(fw)) + 'px');
+    let H = hw ? Math.min(hw + 2, window.innerWidth <= 1600 ? 180 : 220) : 0, N = nw ? Math.min(nw + 2, 300) : 0;
+    box.style.setProperty('--hw', H + 'px');
+    // se lo schermo è stretto, si accorciano nome e hotel (con «…») invece di far sovrapporre le colonne
+    const row = $('.months .trow.v2'); if (!row) return;
+    for (let k = 0; k < 6; k++) {
+      const over = row.scrollWidth - row.clientWidth; if (over <= 0) break;
+      if (N > 150) { N = Math.max(150, N - over - 4); box.style.setProperty('--nw', N + 'px'); }
+      else if (H > 100) { H = Math.max(100, H - over - 4); box.style.setProperty('--hw', H + 'px'); }
+      else break;
+    }
   }
   function commit() { save(); render(); }
   let toastT;
