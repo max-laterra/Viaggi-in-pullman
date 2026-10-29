@@ -1,6 +1,6 @@
 (function () {
   'use strict';
-  const VERSION = '1.9.1';
+  const VERSION = '1.9.8';
   const LOGO = './logo.jpg';
   const KEY = 'laterra.prenotazioniPosti.v1';
   const $ = (s, r = document) => r.querySelector(s);
@@ -48,7 +48,9 @@
     sel: I('<rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8.5 12.5l2.5 2.5 4.5-5"/>'),
     alert: I('<path d="M12 3L2 20h20zM12 10v4M12 17h.01"/>'),
     key: I('<rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/>'),
-    mouse: I('<rect x="6" y="3" width="12" height="18" rx="6"/><path d="M12 7v4"/>')
+    mouse: I('<rect x="6" y="3" width="12" height="18" rx="6"/><path d="M12 7v4"/>'),
+    unlink: I('<path d="M9 7l-1-3M15 17l1 3M7 9l-3-1M17 15l3 1M10.5 13.5l-2 2a3 3 0 0 1-4-4l2-2M13.5 10.5l2-2a3 3 0 0 1 4 4l-2 2"/>'),
+    link2: I('<path d="M10 14a3.5 3.5 0 0 0 5 0l3-3a3.5 3.5 0 0 0-5-5l-1 1M14 10a3.5 3.5 0 0 0-5 0l-3 3a3.5 3.5 0 0 0 5 5l1-1"/>')
   };
 
   // ---------- piantine ----------
@@ -617,12 +619,26 @@
     if (room && room.persone.length >= 3 && idx >= 2) return '3l';
     return 'ad';
   }
+  // supplemento per la fila a pagamento: vale per tutte le file che hanno un prezzo (1ª, 2ª… quante ne avete) e per la 2ª porta
   function supplOf(t, bk, p) {
-    const Q = t.quota, r = p.req && p.req.level === 'pagato' ? p.req : (bk.pref && bk.pref.level === 'pagato' ? bk.pref : null);
+    const Q = t.quota; const paidFila = x => x && ((x.fila >= 1 && Q.suppl[x.fila] != null) || (x.zone && x.zone.includes('porta2') && Q.suppl.p2 != null));
+    const r = paidFila(p.req) ? p.req : (bk.pref && bk.pref.level === 'pagato' && paidFila(bk.pref) ? bk.pref : null);
     if (!r) return 0;
-    if (r.fila >= 1 && r.fila <= 4 && Q.suppl[r.fila] != null) return Q.suppl[r.fila];
+    if (r.fila >= 1 && Q.suppl[r.fila] != null) return Q.suppl[r.fila];
     if (r.zone && r.zone.includes('porta2') && Q.suppl.p2 != null) return Q.suppl.p2;
     return 0;
+  }
+  // quante file a pagamento ha il viaggio (si aggiungono e tolgono nei riquadri sotto la lista)
+  function supplN(t) { const Q = t.quota || {}; if (Q.supplN) return +Q.supplN; const ks = Object.keys(Q.suppl || {}).filter(k => /^\d+$/.test(k) && Q.suppl[k] != null).map(Number); return Math.max(4, ...ks); }
+  // posti di una fila (sommati su tutti i bus del viaggio), quanti l'hanno chiesta e quanti ne restano
+  function filaInfo(t, D) {
+    D = D || deriveBookings(t); const N = supplN(t); const Q = t.quota;
+    const B = t.buses.length ? t.buses : [{ layout: '52', seats: {} }];
+    const capOf = test => B.reduce((a, b) => { const I = (LMAP[b.layout] || LMAP['52']).info; return a + I.all.filter(s => { const g = I.geo[s]; return g && !g.host && test(s, g, I) && !((b.seats || {})[s] || {}).res; }).length; }, 0);
+    const pers = D.flatMap(bk => bk.persone);
+    const rows = Array.from({ length: N }, (_, i) => { const k = i + 1; const cap = capOf((s, g) => g.side !== 'c' && g.fila === k); const sold = pers.filter(p => p.req && p.req.fila === k).length; return { k, label: `${k}ª fila`, price: Q.suppl[k], cap, sold, free: Math.max(0, cap - sold) }; });
+    const pcap = capOf((s, g, I) => I.porta2.has(s)); const psold = pers.filter(p => p.req && !(p.req.fila > 0) && (p.req.zone || []).includes('porta2')).length;
+    return { rows, porta: { k: 'p2', label: '2ª porta', price: Q.suppl.p2, cap: pcap, sold: psold, free: Math.max(0, pcap - psold) } };
   }
   function personPrice(t, bk, p, room, idx) {
     if (p.prezzo != null && p.prezzo !== '') return +p.prezzo;
@@ -1398,12 +1414,18 @@
     ix = ix || new Map(t.rows.map((r, i) => [r.id, i])); const out = []; let cur = null, left = 0, prevFila = '';
     rows.forEach(r => {
       const cg = String(r.cognome || '').trim(), nm = String(r.nome || '').trim();
-      if (!cg && !nm) return; if (pinned && pinned.has(r.id)) return;
-      const i = ix.get(r.id); const m = RX.exec(cg); const isHead = !!m || left === 0;
-      const note = String(r.note || '').trim(); const p = rowPerson(r, i, m, isHead, prevFila); prevFila = p._fila; delete p._fila;
-      if (m) { cur = { id: r.id, n: +m[2], persone: [p], ord: i + 1, pref: note ? reqFromNote(note) : null, head: r }; out.push(cur); left = Math.max(0, cur.n - 1 - ((pinCount && pinCount[r.id]) || 0)); }
-      else if (left > 0) { cur.persone.push(p); left--; }
-      else { cur = { id: r.id, n: 1, persone: [p], ord: i + 1, pref: note ? reqFromNote(note) : null, head: r }; out.push(cur); }
+      // riga vuota dentro una comitiva non ancora completa: è il posto riservato per chi manca (non fa entrare chi sta sotto)
+      if (!cg && !nm) { if (left > 0 && cur) { left--; cur.last = r.id; } return; }
+      if (pinned && pinned.has(r.id)) return;
+      const i = ix.get(r.id); const m = RX.exec(cg);
+      const note = String(r.note || '').trim();
+      // persona staccata dalla sua comitiva: prenotazione a sé, la comitiva sopra continua
+      if (r.solo && !m) { const p = rowPerson(r, i, null, true, ''); delete p._fila; out.push({ id: r.id, n: 1, persone: [p], ord: i + 1, pref: note ? reqFromNote(note) : null, head: r, last: r.id }); return; }
+      const isHead = !!m || left === 0;
+      const p = rowPerson(r, i, m, isHead, prevFila); prevFila = p._fila; delete p._fila;
+      if (m) { cur = { id: r.id, n: +m[2], persone: [p], ord: i + 1, pref: note ? reqFromNote(note) : null, head: r, last: r.id }; out.push(cur); left = Math.max(0, cur.n - 1 - ((pinCount && pinCount[r.id]) || 0)); }
+      else if (left > 0) { cur.persone.push(p); cur.last = r.id; left--; }
+      else { cur = { id: r.id, n: 1, persone: [p], ord: i + 1, pref: note ? reqFromNote(note) : null, head: r, last: r.id }; out.push(cur); }
     });
     return out;
   }
@@ -1540,6 +1562,74 @@
     return Object.keys(rooms).sort((a, c) => order.indexOf(a) - order.indexOf(c)).map(k => `${rooms[k]} ${rooms[k] > 1 ? (pl[k] || k) : k}`).join(' · ');
   }
 
+  // «Rossi x 3» diventa «Rossi x 5»: sotto la comitiva servono 2 righe in più; chi c'era sotto scende
+  function growGroup(t, r, oldV, nNew) {
+    const now = r.cognome; r.cognome = oldV || ''; let D0; try { D0 = deriveBookings(t); } finally { r.cognome = now; }
+    const bk = D0.find(b => b.id === r.id);
+    const lastId = bk ? (bk.last || bk.persone[bk.persone.length - 1].id) : r.id;
+    const slots = bk ? Math.max(bk.n, bk.persone.length) : 1;
+    let need = nNew - slots; if (need <= 0) return 0;
+    const lk = listKey(t, r); const rows = listRows(t, lk); let k = rows.findIndex(x => x.id === lastId) + 1;
+    while (need > 0 && k < rows.length && isEmptyRow(rows[k])) { need--; k++; }
+    if (need <= 0) return 0;
+    const at = t.rows.findIndex(x => x.id === lastId) + 1;
+    const add = Array.from({ length: need }, () => Object.assign(blankRow(), multiBus(t) && r.bus ? { bus: r.bus } : {}));
+    t.rows.splice(at, 0, ...add); return need;
+  }
+  // persone nella lista (o nel bus) contando anche i nomi che mancano nelle comitive
+  function listLoad(t, lk) {
+    const D = deriveBookings(t); let n = 0;
+    D.forEach(bk => { bk.persone.forEach(p => { if (listKey(t, p.row) === lk) n++; }); if (listKey(t, bk.head) === lk) n += Math.max(0, bk.n - bk.persone.length); });
+    return n;
+  }
+  // staccare una persona dalla sua comitiva (resta traccia sulla riga)
+  function detachRow(t, id, who) {
+    const D = deriveBookings(t); const bk = D.find(b => b.persone.some(p => p.id === id)); if (!bk || bk.id === id || bk.persone.length < 2) return null;
+    const r = rowById(t, id); const h = bk.head; const m = RX.exec(String(h.cognome || '').trim());
+    const from = `${bkName(bk)} x ${Math.max(bk.n, bk.persone.length)}`;
+    if (m) h.cognome = `${m[1].trim()} x ${Math.max(1, +m[2] - 1)}`;
+    r.solo = true; delete r.g; delete r.go;
+    r.stacc = { da: from, hid: bk.id, il: new Date().toISOString(), chi: who || '' };
+    return { from, bk };
+  }
+  // rimetterla nella comitiva da cui era stata staccata
+  function reattachRow(t, id) {
+    const r = rowById(t, id); if (!r || !r.stacc) return null; const h = rowById(t, r.stacc.hid); if (!h || isEmptyRow(h)) return null;
+    const m = RX.exec(String(h.cognome || '').trim()); if (m) h.cognome = `${m[1].trim()} x ${+m[2] + 1}`;
+    delete r.solo; r.g = h.id; delete r.go; const was = r.stacc.da; delete r.stacc; return was;
+  }
+
+  // ---------- servizi compresi nel viaggio (iconcine nell'elenco dei viaggi; si scelgono in «Modifica gita») ----------
+  // Colorate quando il servizio c'è, grigie e trasparenti quando non c'è. Non valgono per la biglietteria.
+  const SV = (body) => `<svg class="sv" viewBox="0 0 24 24" aria-hidden="true">${body}</svg>`;
+  const SERV = [
+    ['bus', 'Bus', SV('<rect x="2" y="5.5" width="20" height="11.5" rx="3" fill="#F5B83D"/><rect x="4" y="7.5" width="4" height="4" rx="1" fill="#3E86D8"/><rect x="9.5" y="7.5" width="4" height="4" rx="1" fill="#3E86D8"/><rect x="15" y="7.5" width="5" height="4" rx="1" fill="#3E86D8"/><rect x="2" y="13" width="20" height="1.4" fill="#E09A22"/><circle cx="7" cy="17.5" r="2.4" fill="#2B2B2B"/><circle cx="17" cy="17.5" r="2.4" fill="#2B2B2B"/><circle cx="7" cy="17.5" r="1" fill="#CFCFCF"/><circle cx="17" cy="17.5" r="1" fill="#CFCFCF"/>')],
+    ['guide', 'Guide', SV('<path d="M13.5 21v-3.2h1.8a1.6 1.6 0 0 0 1.6-1.6v-2.6l1.7-.6-1.8-3.3A6.7 6.7 0 1 0 6.4 15v6z" fill="#5E3E91"/><path d="M19.6 8.3l2-1.1M20.2 11.6h2.3M19.6 14.9l2 1.1" stroke="#5E3E91" stroke-width="1.6" stroke-linecap="round"/>')],
+    ['ristorante', 'Ristorante', SV('<ellipse cx="12" cy="16" rx="9.5" ry="4.6" fill="#E3DCC8"/><ellipse cx="12" cy="15.2" rx="6.6" ry="3" fill="#F3C64D"/><circle cx="10" cy="14.8" r="1.7" fill="#D2413C"/><circle cx="13.8" cy="15.6" r="1.5" fill="#D2413C"/><path d="M15.5 3v8.5M13.8 3v4.3a1.7 1.7 0 0 0 3.4 0V3" stroke="#9AA0A6" stroke-width="1.3" fill="none" stroke-linecap="round"/>')],
+    ['hotel', 'Hotel', SV('<rect x="4.5" y="4" width="15" height="17" rx="1.6" fill="#E5624A"/><path d="M10 6v4.4M14 6v4.4M10 8.2h4" stroke="#fff" stroke-width="1.5" stroke-linecap="round"/><rect x="6.5" y="12.3" width="2.6" height="2.2" rx=".4" fill="#FFE7A3"/><rect x="10.7" y="12.3" width="2.6" height="2.2" rx=".4" fill="#FFE7A3"/><rect x="14.9" y="12.3" width="2.6" height="2.2" rx=".4" fill="#FFE7A3"/><rect x="6.5" y="16" width="2.6" height="2.2" rx=".4" fill="#FFE7A3"/><rect x="14.9" y="16" width="2.6" height="2.2" rx=".4" fill="#FFE7A3"/><rect x="10.6" y="17" width="2.8" height="4" fill="#8A3424"/>')],
+    ['colazioni', 'Colazioni', SV('<path d="M2.5 15c0-5.3 4.3-9.5 9.5-9.5s9.5 4.2 9.5 9.5c-1.6 1.5-3.7 2-5.4 1.5-1-2.6-2.5-3.6-4.1-3.6s-3.1 1-4.1 3.6C6.2 17 4.1 16.5 2.5 15z" fill="#E9A44A"/><path d="M7.6 7.6l1.7 4.6M12 6v5.6M16.4 7.6l-1.7 4.6" stroke="#B9732A" stroke-width="1.3" stroke-linecap="round"/>')],
+    ['ingressi', 'Ingressi', SV('<path d="M2.5 6.5h19v3.3a2.2 2.2 0 0 0 0 4.4v3.3h-19v-3.3a2.2 2.2 0 0 0 0-4.4z" fill="#E1483C"/><path d="M15.5 7.8v8.4" stroke="#fff" stroke-width="1.2" stroke-dasharray="1.4 1.4"/><circle cx="9" cy="12" r="2.4" fill="none" stroke="#fff" stroke-width="1.4"/>')],
+    ['navigazione', 'Navigazione', SV('<rect x="12.6" y="3.5" width="2.2" height="3.2" rx=".4" fill="#C83848"/><rect x="8.8" y="6.6" width="6.8" height="3.2" rx=".6" fill="#AEB4C2"/><rect x="5.5" y="9.6" width="12.5" height="4" rx=".6" fill="#DADDE5"/><circle cx="8.5" cy="11.6" r=".75" fill="#4A5568"/><circle cx="11" cy="11.6" r=".75" fill="#4A5568"/><circle cx="13.5" cy="11.6" r=".75" fill="#4A5568"/><circle cx="16" cy="11.6" r=".75" fill="#4A5568"/><path d="M2.5 13.6h19l-2.6 4.6H5.3z" fill="#C83848"/><path d="M2 20.8c1.7 0 1.7-1 3.3-1s1.7 1 3.3 1 1.7-1 3.4-1 1.7 1 3.3 1 1.7-1 3.4-1 1.6 1 3.3 1" stroke="#3E86D8" stroke-width="1.4" fill="none" stroke-linecap="round"/>')],
+    ['copertura', 'Copertura', SV('<path d="M12 3.2a9 9 0 0 1 9 9H3a9 9 0 0 1 9-9z" fill="#8D69C9"/><path d="M7.5 12.2a4.5 9 0 0 1 9 0" fill="#A585DA"/><path d="M12 12.2v6.4a2 2 0 0 1-4 0" stroke="#4E3F6B" stroke-width="1.7" fill="none" stroke-linecap="round"/><path d="M12 1.8v1.6" stroke="#4E3F6B" stroke-width="1.5" stroke-linecap="round"/>')],
+    ['extra', 'Extra', SV('<path d="M12 2.3l2.7 5.6 6.1.8-4.5 4.2 1.2 6.1L12 16l-5.5 3 1.2-6.1-4.5-4.2 6.1-.8z" fill="#F2B90C"/><path d="M12 8.2v5.4M9.3 10.9h5.4" stroke="#fff" stroke-width="1.8" stroke-linecap="round"/>')],
+    ['accomp', 'Accompagnatore', SV('<path d="M5.5 21.5v-3a6.5 6.5 0 0 1 13 0v3z" fill="#EF7A3E"/><path d="M17.2 15.4l2.4-6.4" stroke="#EF7A3E" stroke-width="2.6" stroke-linecap="round"/><circle cx="20" cy="7.6" r="1.7" fill="#F6C66F"/><circle cx="12" cy="9.2" r="3.8" fill="#F6C66F"/><path d="M8.2 8.8a3.8 3.8 0 0 1 7.6 0c-1.1-.9-2.5-1.4-3.8-1.4s-2.7.5-3.8 1.4z" fill="#DC912A"/>')]
+  ];
+  // servizi del viaggio: quelli scelti; per i viaggi di prima, il bus se c'è e l'hotel se è un tour con hotel
+  function tripServ(t) {
+    if (Array.isArray(t.serv)) return t.serv;
+    const o = []; if ((t.buses || []).length) o.push('bus'); if (t.quota && t.quota.hotel) o.push('hotel'); return o;
+  }
+  function servIcons(t) {
+    if (tripCat(t) === 'biglietteria') return '';
+    const on = new Set(tripServ(t));
+    return SERV.map(([k, l, svg]) => `<span class="svi${on.has(k) ? ' on' : ''}" title="${esc(l)}${on.has(k) ? ' · compreso' : ' · non compreso'}">${svg}</span>`).join('');
+  }
+  // caselle da accendere/spegnere nella finestra «Modifica gita»
+  function servPicker(t) {
+    const on = new Set(t ? tripServ(t) : ['bus']);
+    return `<div class="svpick" role="group" aria-label="Servizi compresi">${SERV.map(([k, l, svg]) => `<button type="button" class="svp${on.has(k) ? ' on' : ''}" data-act="svtoggle" data-k="${k}" aria-pressed="${on.has(k)}">${svg}<span>${esc(l)}</span><i aria-hidden="true">${ICON.check}</i></button>`).join('')}</div>`;
+  }
+
   // ---------- viste ----------
   const listCols = (tour, bigl) => bigl
     ? [['cognome', 'cognome'], ['nome', 'nome'], ['tel', 'contatto'], ['note', 'note / mail'], ['pagato', '€']]
@@ -1617,25 +1707,32 @@
     const st = !T.pers ? '<span class="pill neutral">lista vuota</span>' : c === 'biglietteria' ? `<span class="pill neutral">${T.pers} biglietti</span>` : `<span class="pill ${T.seated === T.pers ? 'ok' : 'tbd'}">${T.pers} persone${T.seated < T.pers ? ` · ${T.pers - T.seated} senza posto` : ''}</span>`;
     const buses = t.buses.length ? `<span class="pill neutral">${ICON.bus} ${t.buses.length} bus · ${t.buses.reduce((a, b) => a + busStats(b).tot, 0)}/${T.cap}</span>` : '';
     const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
-    // data per esteso: «12 Gennaio 2027», per i tour «3–6 Gennaio 2027» o «30–2 Gen–Feb 2027»
+    // data grande, senza anno (l'anno si sceglie in alto): «10 Gennaio», per i tour «3–6 Gennaio» o «30 Dic – 2 Gen»
     const sameM = n <= 1 || (f.getMonth() === d.getMonth() && f.getFullYear() === d.getFullYear());
-    const dNum = n > 1 ? `${d.getDate()}–${f.getDate()}` : `${d.getDate()}`;
-    const dMon = sameM ? cap(MESI_L[d.getMonth()]) : `${cap(MESI[d.getMonth()])}–${cap(MESI[f.getMonth()])}`;
-    const dYr = n > 1 && f.getFullYear() !== d.getFullYear() ? `${d.getFullYear()}–${String(f.getFullYear()).slice(2)}` : `${d.getFullYear()}`;
-    const dateL = `<b>${dNum}</b> <span class="mo">${dMon}</span> <span class="yr">${dYr}</span>`;
+    const dateL = n <= 1 ? `<b>${d.getDate()}</b><span>${cap(MESI_L[d.getMonth()])}</span>` : sameM ? `<b>${d.getDate()}–${f.getDate()}</b><span>${cap(MESI_L[d.getMonth()])}</span>` : `<b>${d.getDate()}</b><span>${cap(MESI[d.getMonth()])}</span><em>–</em><b>${f.getDate()}</b><span>${cap(MESI[f.getMonth()])}</span>`;
     const dayL = GIORNI[d.getDay()].slice(0, 3).toUpperCase() + (n > 1 ? '–' + GIORNI[f.getDay()].slice(0, 3).toUpperCase() : '');
     const det = [n > 1 ? `${n} giorni` : '', t.quota && t.quota.hotel ? `Hotel ${esc(t.quota.hotel)}` : '', past ? 'già fatta' : ''].filter(Boolean);
-    return `<article class="trow c-${c}${t.extra ? ' extra' : ''}${past ? ' past' : ''}" data-droptrip="${t.id}" title="${esc(CAT_L[c])}">
-      <div class="tr-dt" data-act="opentrip" data-id="${t.id}">${dateL}</div>
-      <div class="tr-g" data-act="opentrip" data-id="${t.id}">${dayL}</div>
-      <div class="tr-c" data-act="opentrip" data-id="${t.id}">${t.code ? `<span class="tcode">${esc(t.code)}</span>` : ''}</div>
-      <div class="tr-b" data-act="opentrip" data-id="${t.id}">
-        <div class="tr-t"><h3>${esc(t.nome)}</h3>${t.extra ? '<span class="xtra">extra</span>' : ''}</div>
-        ${det.length ? `<div class="tr-m">${det.map(x => `<span>${x}</span>`).join('')}</div>` : ''}
+    return `<article class="trow v2 c-${c}${t.extra ? ' extra' : ''}${past ? ' past' : ''}" data-droptrip="${t.id}">
+      <div class="t2-blk" data-act="opentrip" data-id="${t.id}" title="${esc(CAT_L[c])}">
+        <div class="t2-d">${dateL}</div>
+        <div class="t2-g">${dayL}</div>
+        <div class="t2-c">${t.code ? `<span class="tcode">${esc(t.code)}</span>` : ''}</div>
+        <div class="t2-n"><h3 title="${esc(t.nome)}">${esc(t.nome)}</h3>${det.length ? `<div class="tr-m">${det.map(x => `<span>${x}</span>`).join('')}</div>` : ''}</div>
       </div>
-      <div class="tr-s">${buses}</div>
+      <div class="t2-x">${t.extra ? '<span class="xtra">extra</span>' : ''}</div>
+      <div class="t2-sv"><div class="sv-i">${servIcons(t)}</div></div>
+      <div class="t2-fc sv-c">${freeCounters(t)}</div>
       <div class="tr-a"><button class="btn sm" data-act="opentrip" data-id="${t.id}" data-sec="lista">${ICON.list} Lista</button>${c !== 'biglietteria' ? `<button class="btn sm" data-act="opentrip" data-id="${t.id}" data-sec="posti">${ICON.bus} Posti</button>` : ''}</div>
     </article>`;
+  }
+  // posti ancora liberi: uno per bus (con più bus ognuno ha la sua lista), contando anche i nomi che mancano nelle comitive
+  function freeCounters(t) {
+    if (tripCat(t) === 'biglietteria' || !t.buses.length) return '';
+    const multi = multiBus(t);
+    const one = (b, lk, lab) => { const cap = (multi ? [b] : t.buses).reduce((a, x) => a + LMAP[x.layout].info.cap - Object.values(x.seats || {}).filter(y => y.res).length, 0); const free = cap - listLoad(t, lk);
+      const cls = free <= 0 ? 'full' : free <= 5 ? 'low' : 'ok';
+      return `<span class="fc ${cls}" title="${esc(lab)}: ${cap} posti${free >= 0 ? `, ${free} liberi` : `, ${-free} persone in più`}">${ICON.bus}${multi ? `<em>${esc(b.label.replace(/^Bus\s*/i, 'B'))}</em>` : ''}${free > 0 ? `<b>${free}</b> ${free === 1 ? 'libero' : 'liberi'}` : free === 0 ? '<b>pieno</b>' : `<b>+${-free}</b> in più`}</span>`; };
+    return multi ? t.buses.map(b => one(b, b.id, b.label)).join('') : one(t.buses[0], '', t.buses.length > 1 ? 'Bus' : t.buses[0].label);
   }
   function busRow(t, b) {
     const L = LMAP[b.layout]; const st = busStats(b);
@@ -1678,30 +1775,38 @@
   }
 
   // ----- sezione 1: la lista prenotazioni, come il file Word -----
+  // testa della lista: prezzi, date e pagamenti, partenze, note (il nome del viaggio è già in alto e si cambia da «Modifica gita»)
+  const notesOf = t => Array.isArray(t.notes) ? t.notes : [t.note1, t.note2].filter(x => x && String(x).trim());
   function headBlock(t) {
     const Q = t.quota; const tour = isTourT(t); const cat = tripCat(t); const bigl = cat === 'biglietteria'; const tk = bigl || cat === 'evento';
-    const e = (k, ph = '') => `<input class="hc num" data-q="${k}" inputmode="decimal" value="${Q[k] != null ? esc(String(Q[k]).replace('.', ',')) : ''}" placeholder="${ph}">`;
-    const tx = (k, ph = '') => `<input class="hc" data-qt="${k}" value="${esc(Q[k] || '')}" placeholder="${ph}">`;
-    const tkRow = tk ? `<div class="wh-tkt"><b>${bigl ? 'Biglietto' : 'Biglietto dell\'evento (se lo vendete voi)'}</b><label>intero €${e('tkt1')}</label><label><input class="hc lab" data-qt="tkt2L" value="${esc(Q.tkt2L || 'ridotto')}" aria-label="Nome del ridotto"> €${e('tkt2')}</label><label>diritti € (a biglietto)${e('diritti')}</label><label>circuito<select class="hc" data-qt="circuito"><option value="">—</option>${CIRCUITI.map(c => `<option${Q.circuito === c ? ' selected' : ''}>${c}</option>`).join('')}</select></label></div>` : '';
-    // partenze: si scelgono tra i luoghi di Impostazioni › Luoghi di partenza (con l'ora)
+    const money = (k, l, ph = '') => `<label class="th-f"><span>${l}</span><span class="th-in eur"><input class="hc num" data-q="${k}" inputmode="decimal" value="${Q[k] != null ? esc(String(Q[k]).replace('.', ',')) : ''}" placeholder="${ph}" aria-label="${esc(String(l).replace(/<[^>]+>/g, ''))}"><i>€</i></span></label>`;
+    const lab = (k, def, aria) => `<input class="hc lab" data-qt="${k}" value="${esc(Q[k] || def)}" aria-label="${aria}">`;
+    const date = (attr, v, l) => `<label class="th-f"><span>${l}</span><span class="th-in"><input class="hc" type="date" ${attr} value="${esc(v || '')}" aria-label="${l}"></span></label>`;
     const LU = (S.cfg.luoghi || []).filter(l => l.code || l.citta);
-    const nDep = Math.min(6, Math.max(3, t.partenze.filter(d => d && (d.citta || d.luogo || d.code)).length + 1));
+    const nDep = Math.min(6, Math.max(2, t.partenze.filter(d => d && (d.citta || d.luogo || d.code)).length + 1));
     const deps = !LU.length
       ? Array.from({ length: 3 }, (_, i) => { const d = t.partenze[i] || {}; return `<div class="hdep"><input class="hc" data-dep2="${i}" data-k="citta" value="${esc(d.citta || '')}" placeholder="città"><input class="hc" data-dep2="${i}" data-k="luogo" value="${esc(d.luogo || '')}" placeholder="luogo"><input class="hc" data-dep2="${i}" data-k="ora" value="${esc(d.ora || '')}" placeholder="ora"></div>`; }).join('') + '<div class="small dephint">Per scegliere i luoghi da un elenco, aggiungili in Impostazioni › Luoghi di partenza.</div>'
-      : Array.from({ length: nDep }, (_, i) => { const d = t.partenze[i] || {}; const cur = depLuogo(d); return `<div class="hdep sel"><select class="hc" data-depsel="${i}" aria-label="Partenza ${i + 1}"><option value="">—</option>${LU.map((l, j) => `<option value="${j}"${cur === l ? ' selected' : ''}>${esc([l.code, l.citta, l.luogo].filter(Boolean).join(' · '))}</option>`).join('')}${!cur && (d.citta || d.luogo) ? `<option value="cur" selected>${esc([d.citta, d.luogo].filter(Boolean).join(' · '))} (non in elenco)</option>` : ''}</select><input class="hc" data-dep2="${i}" data-k="ora" value="${esc(d.ora || '')}" placeholder="ora" aria-label="Ora partenza ${i + 1}"></div>`; }).join('');    return `<div class="whead${bigl ? ' bigl' : ''}">
-      <div class="wh-title"><textarea class="hc big" data-tf="nome" rows="3" aria-label="Nome della gita">${esc(t.nome)}</textarea></div>
-      ${bigl ? '' : `<div class="wh-grid">
-        <label>Adulti €</label>${e('adulti')}${tour ? `<label>singola €</label>${e('singola')}` : '<span></span><span></span>'}
-        <label>Data</label><div class="hdates"><input class="hc" type="date" data-tf="data" value="${esc(t.data)}" aria-label="Partenza"><span>al</span><input class="hc" type="date" data-tf="fine" value="${esc(t.fine || '')}" aria-label="Rientro"></div>
-        <label><input class="hc lab" data-qt="bambiniL" value="${esc(Q.bambiniL || (tour ? '3/11 anni' : '4/11 anni'))}" aria-label="Età bambini"> €</label>${e('bambini')}${tour ? `<label>3° letto ad. €</label>${e('terzo')}` : '<span></span><span></span>'}
-        <label>acconto €</label>${e('acconto')}${tour ? `<label>${esc(Q.infantL || '0/2 anni')} €</label>${e('infant', '0')}` : '<span></span><span></span>'}
-        <label>saldo €</label><div class="hdates">${e('saldo')}<span>il</span><input class="hc" type="date" data-qt="saldoEntro" value="${esc(Q.saldoEntro || '')}" aria-label="Saldo entro il"></div>
-        ${tour ? `<label>Hotel</label><div class="span3">${tx('hotel', 'nome hotel, città')}</div>` : ''}
-      </div>`}${bigl ? `<div class="wh-grid"><label>Data</label><div class="hdates"><input class="hc" type="date" data-tf="data" value="${esc(t.data)}" aria-label="Data dell'evento"></div></div>` : ''}
-      ${tkRow}
-      ${bigl ? '' : `<div class="wh-deps"><b>Partenze</b>${deps}</div>`}
+      : Array.from({ length: nDep }, (_, i) => { const d = t.partenze[i] || {}; const cur = depLuogo(d); return `<div class="hdep sel"><select class="hc" data-depsel="${i}" aria-label="Partenza ${i + 1}"><option value="">${i ? '+ altra partenza' : 'Scegli il luogo'}</option>${LU.map((l, j) => `<option value="${j}"${cur === l ? ' selected' : ''}>${esc([l.code, l.citta, l.luogo].filter(Boolean).join(' · '))}</option>`).join('')}${!cur && (d.citta || d.luogo) ? `<option value="cur" selected>${esc([d.citta, d.luogo].filter(Boolean).join(' · '))} (non in elenco)</option>` : ''}</select><input class="hc" data-dep2="${i}" data-k="ora" value="${esc(d.ora || '')}" placeholder="ora" aria-label="Ora partenza ${i + 1}"></div>`; }).join('');
+    const tkSec = tk ? `<section class="th-sec"><div class="th-h">${bigl ? 'Biglietto' : 'Biglietto dell\'evento <small>se lo vendete voi</small>'}</div><div class="th-g" style="--c:4">
+        ${money('tkt1', 'Intero')}<label class="th-f"><span>${lab('tkt2L', 'ridotto', 'Nome del ridotto')}</span><span class="th-in eur"><input class="hc num" data-q="tkt2" inputmode="decimal" value="${Q.tkt2 != null ? esc(String(Q.tkt2).replace('.', ',')) : ''}" aria-label="Prezzo ridotto"><i>€</i></span></label>
+        ${money('diritti', 'Diritti <small>a biglietto</small>')}<label class="th-f"><span>Circuito</span><span class="th-in"><select class="hc" data-qt="circuito"><option value="">—</option>${CIRCUITI.map(c => `<option${Q.circuito === c ? ' selected' : ''}>${c}</option>`).join('')}</select></span></label></div></section>` : '';
+    const notes = notesOf(t);
+    return `<div class="thead2${bigl ? ' bigl' : ''}">
+      ${bigl ? `<section class="th-sec"><div class="th-h">Data</div><div class="th-g">${date('data-tf="data"', t.data, 'Data dell\'evento')}</div></section>` : `
+      <section class="th-sec"><div class="th-h">Quote</div><div class="th-g" style="--c:${tour ? 3 : 2}">
+        ${money('adulti', 'Adulti')}
+        <label class="th-f"><span>${lab('bambiniL', tour ? '3/11 anni' : '4/11 anni', 'Età bambini')}</span><span class="th-in eur"><input class="hc num" data-q="bambini" inputmode="decimal" value="${Q.bambini != null ? esc(String(Q.bambini).replace('.', ',')) : ''}" aria-label="Prezzo bambini"><i>€</i></span></label>
+        ${tour ? money('singola', 'Singola') + money('terzo', '3° letto adulto') + `<label class="th-f"><span>${lab('infantL', '0/2 anni', 'Età neonati')}</span><span class="th-in eur"><input class="hc num" data-q="infant" inputmode="decimal" value="${Q.infant != null ? esc(String(Q.infant).replace('.', ',')) : ''}" placeholder="0" aria-label="Prezzo neonati"><i>€</i></span></label>` : ''}
+      </div></section>
+      <section class="th-sec"><div class="th-h">Date e pagamenti</div><div class="th-g">
+        ${date('data-tf="data"', t.data, 'Partenza')}${date('data-tf="fine"', t.fine, 'Rientro')}
+        ${money('acconto', 'Acconto')}${money('saldo', 'Saldo')}${date('data-qt="saldoEntro"', Q.saldoEntro, 'Saldo entro il')}
+        ${tour ? `<label class="th-f wide"><span>Hotel</span><span class="th-in"><input class="hc" data-qt="hotel" value="${esc(Q.hotel || '')}" placeholder="nome hotel, città"></span></label>` : ''}
+      </div></section>`}
+      ${tkSec}
+      ${bigl ? '' : `<section class="th-sec deps"><div class="th-h">Partenze</div><div class="wh-deps">${deps}</div></section>`}
     </div>
-    <div class="wnotes"><label>Nota 1: <input class="hc" data-tf="note1" value="${esc(t.note1 || '')}"></label><label>Nota 2: <input class="hc" data-tf="note2" value="${esc(t.note2 || '')}"></label></div>`;
+    <div class="tnotes">${notes.map((n, i) => `<div class="tnote"><span>Nota ${i + 1}</span><input class="hc" data-note="${i}" value="${esc(n)}" placeholder="scrivi la nota" aria-label="Nota ${i + 1}"><button class="btn sm ghost" data-act="notedel" data-i="${i}" aria-label="Togli la nota ${i + 1}">${ICON.close}</button></div>`).join('')}<button class="btn sm ghost tn-add" data-act="noteadd">${ICON.plus} Aggiungi nota</button></div>`;
   }
   // il luogo predefinito che corrisponde a una partenza del viaggio (per codice, o per città e punto di salita)
   function depLuogo(d) {
@@ -1733,8 +1838,8 @@
     else if (x && r.bus) seatTxt = '<span class="pill tbd">da sistemare</span>';
     const tip = head && bk._m ? `Totale ${euro(bk._m.due)} · pagato ${euro(bk._m.paid)}${bk._m.rest ? ' · da pagare ' + euro(bk._m.rest) : ''}${bk.mancano ? ` · mancano ${bk.mancano} nomi` : ''}` : '';
     return `<tr class="${cls}" data-rowid="${r.id}"${fl ? ` title="Modificata adesso da ${esc(fl.by)}"` : xg ? ` title="${esc(xg.slice(3))}"` : ''}>
-      <td class="wn">${drag}<button class="rn" data-act="rowmenu" data-id="${r.id}" aria-label="Riga ${i + 1}: azioni${xg ? esc(xg) : ''}">${i + 1}</button>${xg ? '<i class="xg" aria-hidden="true">↗</i>' : ''}</td>
-      ${cols.filter(([f]) => f !== 'pagato').concat(bigl ? [] : [['posto', 'posto']], cols.filter(([f]) => f === 'pagato')).map(([f, l]) => f === 'posto' ? `<td class="wpos">${seatTxt}</td>` : f === 'hotel' ? `<td class="c-hotel">${roomSel(`data-r="${r.id}" data-f="hotel"`, r.hotel, 'Camera riga ' + (i + 1))}</td>` : f === 'part' && ctx.parts.length ? `<td class="c-part"><select class="wc wsel" data-r="${r.id}" data-f="part" aria-label="Partenza riga ${i + 1}"><option value=""></option>${ctx.parts.map(o => `<option value="${esc(o.code)}"${String(r.part || '').toUpperCase() === o.code ? ' selected' : ''} title="${esc(o.label)}">${esc(o.code)}</option>`).join('')}${r.part && !ctx.parts.some(o => o.code === String(r.part).toUpperCase()) ? `<option value="${esc(r.part)}" selected>${esc(r.part)}</option>` : ''}</select></td>` : head && f === 'pagato' ? `<td class="c-pagato"><button class="eurobtn${ok ? ' ok' : bk._m && bk._m.paid ? ' part' : ''}${UI.pay && UI.pay.bkId === bk.id ? ' on' : ''}" data-act="paypanel" data-id="${bk.id}" title="Incasso e documento (scontrino o fattura)" aria-label="Incasso e documento di ${esc(bkName(bk))}">${bk._m && bk._m.paid ? esc(fmtNum(bk._m.paid)) : '€'}</button></td>` : pm && f === 'pagato' ? `<td class="c-pagato"><button class="eurobtn pers${pm.rest === 0 && pm.paid > 0 ? ' ok' : pm.paid ? ' part' : ''}${UI.pay && UI.pay.pid === r.id ? ' on' : ''}" data-act="paypanel" data-id="${bk.id}" data-pid="${r.id}" title="Paga solo ${esc(r.cognome)} ${esc(r.nome)} (la sua quota)" aria-label="Incasso solo di ${esc(r.cognome)} ${esc(r.nome)}">${pm.paid ? esc(fmtNum(pm.paid)) : '€'}</button></td>` : `<td class="c-${f}${head && f === 'cognome' && bk.mancano ? ' miss' : ''}"${head && f === 'cognome' && tip ? ` title="${esc(tip)}"` : ''}><input class="wc" data-r="${r.id}" data-f="${f}" value="${esc(r[f] || '')}" aria-label="${esc(l)} riga ${i + 1}" autocomplete="off"></td>`).join('')}
+      <td class="wn">${drag}<button class="rn" data-act="rowmenu" data-id="${r.id}" aria-label="Riga ${i + 1}: azioni${xg ? esc(xg) : ''}">${i + 1}</button>${xg ? '<i class="xg" aria-hidden="true">↗</i>' : ''}${r.stacc ? `<i class="stc" title="Staccata da ${esc(r.stacc.da)} il ${esc(fmtDate(r.stacc.il.slice(0, 10)))}${r.stacc.chi ? ' da ' + esc(r.stacc.chi) : ''}">${ICON.unlink}</i>` : ''}</td>
+      ${cols.filter(([f]) => f !== 'pagato').concat(bigl ? [] : [['posto', 'posto']], cols.filter(([f]) => f === 'pagato')).map(([f, l]) => f === 'posto' ? `<td class="wpos">${seatTxt}</td>` : f === 'hotel' ? `<td class="c-hotel">${roomSel(`data-r="${r.id}" data-f="hotel"`, r.hotel, 'Camera riga ' + (i + 1))}</td>` : f === 'fila' && ctx.FI ? `<td class="c-fila">${filaSel(r, ctx.FI, i)}</td>` : f === 'part' && ctx.parts.length ? `<td class="c-part"><select class="wc wsel" data-r="${r.id}" data-f="part" aria-label="Partenza riga ${i + 1}"><option value=""></option>${ctx.parts.map(o => `<option value="${esc(o.code)}"${String(r.part || '').toUpperCase() === o.code ? ' selected' : ''} title="${esc(o.label)}">${esc(o.code)}</option>`).join('')}${r.part && !ctx.parts.some(o => o.code === String(r.part).toUpperCase()) ? `<option value="${esc(r.part)}" selected>${esc(r.part)}</option>` : ''}</select></td>` : head && f === 'pagato' ? `<td class="c-pagato"><button class="eurobtn${ok ? ' ok' : bk._m && bk._m.paid ? ' part' : ''}${UI.pay && UI.pay.bkId === bk.id ? ' on' : ''}" data-act="paypanel" data-id="${bk.id}" title="Incasso e documento (scontrino o fattura)" aria-label="Incasso e documento di ${esc(bkName(bk))}">${bk._m && bk._m.paid ? esc(fmtNum(bk._m.paid)) : '€'}</button></td>` : pm && f === 'pagato' ? `<td class="c-pagato"><button class="eurobtn pers${pm.rest === 0 && pm.paid > 0 ? ' ok' : pm.paid ? ' part' : ''}${UI.pay && UI.pay.pid === r.id ? ' on' : ''}" data-act="paypanel" data-id="${bk.id}" data-pid="${r.id}" title="Paga solo ${esc(r.cognome)} ${esc(r.nome)} (la sua quota)" aria-label="Incasso solo di ${esc(r.cognome)} ${esc(r.nome)}">${pm.paid ? esc(fmtNum(pm.paid)) : '€'}</button></td>` : `<td class="c-${f}${head && f === 'cognome' && bk.mancano ? ' miss' : ''}"${head && f === 'cognome' && tip ? ` title="${esc(tip)}"` : ''}><input class="wc" data-r="${r.id}" data-f="${f}" value="${esc(r[f] || '')}" aria-label="${esc(l)} riga ${i + 1}" autocomplete="off"></td>`).join('')}
 </tr>`;
   }
   // accompagnatore, autista e altro personale che dorme in hotel (vanno nella rooming list)
@@ -1744,19 +1849,50 @@
       ${st.map((s, i) => `<tr><td class="wn"><button class="rn" data-act="staffdel" data-i="${i}" aria-label="Togli">${i + 1}</button></td><td><input class="wc" data-st="${i}" data-k="ruolo" value="${esc(s.ruolo || '')}" aria-label="Ruolo"></td><td><input class="wc" data-st="${i}" data-k="nome" value="${esc(s.nome || '')}" placeholder="facoltativo" aria-label="Nome"></td><td>${roomSel(`data-st="${i}" data-k="camera"`, s.camera, 'Camera ' + (s.ruolo || ''))}</td><td><input class="wc" data-st="${i}" data-k="num" value="${esc(s.num || '')}" aria-label="Numero camera"></td></tr>`).join('')}
     </tbody></table></div><button class="btn sm ghost" data-act="staffadd">${ICON.plus} riga</button>`;
   }
+  // riquadri delle file a pagamento: prezzo, posti liberi; verde quando sono tutti liberi, rosso quando sono finiti
+  function supplBoxes(t, FI) {
+    const box = x => { const r = x.cap ? Math.min(1, x.sold / x.cap) : 0; const over = x.sold - x.cap;
+      return `<div class="sbox" style="--r:${r.toFixed(2)}"><div class="sb-t">${esc(x.label)}</div><label class="sb-p"><input class="hc num" data-qs="${x.k}" inputmode="decimal" value="${x.price != null ? esc(String(x.price).replace('.', ',')) : ''}" placeholder="0" aria-label="Prezzo ${esc(x.label)}"><i>€</i></label>
+        <div class="sb-a">${!x.cap ? 'nessun posto' : over > 0 ? `<b>esaurita</b> · ${over} in più` : x.free === 0 ? '<b>esaurita</b>' : `<b>${x.free}</b> ${x.free === 1 ? 'libero' : 'liberi'} su ${x.cap}`}</div><div class="sb-bar"><i style="width:${Math.round(r * 100)}%"></i></div></div>`; };
+    return `<div class="ws-h"><h3 class="wt">File a pagamento</h3><span class="small">Supplemento a persona. Si scelgono nella colonna «fila» della lista; i posti liberi sono contati su ${t.buses.length > 1 ? 'tutti i bus' : 'il bus'}.</span></div>
+      <div class="ws-g">${FI.rows.map(box).join('')}${box(FI.porta)}<div class="ws-add"><button class="btn sm" data-act="suppadd">${ICON.plus} Aggiungi fila</button>${FI.rows.length > 1 ? `<button class="btn sm ghost" data-act="suppdel">Togli la ${FI.rows.length}ª fila</button>` : ''}</div></div>`;
+  }
+  // tendina della colonna «fila»: file a pagamento (con prezzo e posti liberi, a sinistra o a destra) e richieste senza supplemento
+  function filaSel(r, FI, i) {
+    const cur = String(r.fila || '').trim(); let found = false;
+    const o = (v, l) => { const sel = cur && cur.toLowerCase() === v.toLowerCase(); if (sel) found = true; return `<option value="${esc(v)}"${sel ? ' selected' : ''}>${esc(l)}</option>`; };
+    const g = FI.rows.map(x => `<optgroup label="${esc(x.label)} · ${x.price != null ? esc(fmtNum(x.price)) + ' €' : 'senza prezzo'} · ${x.free ? x.free + (x.free === 1 ? ' libero' : ' liberi') : 'esaurita'}">${o(`${x.k} fila`, `${x.label}`)}${o(`${x.k} fila sx`, `${x.label} sx`)}${o(`${x.k} fila dx`, `${x.label} dx`)}</optgroup>`).join('')
+      + `<optgroup label="2ª porta · ${FI.porta.price != null ? esc(fmtNum(FI.porta.price)) + ' €' : 'senza prezzo'} · ${FI.porta.free ? FI.porta.free + ' liberi' : 'esaurita'}">${o('2° porta', '2ª porta')}</optgroup>`
+      + `<optgroup label="Senza supplemento">${o('Lato sx', 'Lato sinistro')}${o('Lato dx', 'Lato destro')}${o('Terzultima fila', 'Terzultima fila')}${o('Penultima fila', 'Penultima fila')}${o('Ultima fila', 'Ultima fila')}${o('No ultima fila', 'Non in ultima fila')}</optgroup>`;
+    return `<select class="wc wsel fila" data-r="${r.id}" data-f="fila" aria-label="Fila riga ${i + 1}"><option value=""></option>${!found && cur ? `<option value="${esc(cur)}" selected>${esc(cur)}</option>` : ''}${g}</select>`;
+  }
   // una tabella per lista (con più bus: una per bus, più «Senza bus» se c'è qualcuno senza bus)
+  // una tabella per lista (con più bus: una per bus, più «Senza bus» se c'è qualcuno senza bus)
+  // Con più bus, in alto: «Tutti i bus» (una sotto l'altra), «Bus 1», «Bus 2»… (solo quella) e «Affiancate» (compatte, una accanto all'altra)
   function listTables(t, cols, ctx, bigl, SI) {
     const multi = multiBus(t);
     const thead = `<thead><tr><th>N</th>${cols.filter(([f]) => f !== 'pagato').map(([f, l]) => `<th class="c-${f}">${esc(l)}</th>`).join('')}${bigl ? '' : '<th>posto</th>'}${cols.filter(([f]) => f === 'pagato').map(([f, l]) => `<th class="c-${f}">${esc(l)}</th>`).join('')}</tr></thead>`;
-    return tripLists(t).map(L => {
-      const rows = listRows(t, L.id); const full = rows.filter(r => !isEmptyRow(r));
-      if (multi && !L.id && !full.length) return '';
-      const seated = full.filter(r => SI[r.id]).length;
-      const cap = L.b ? LMAP[L.b.layout].info.cap : 0;
-      const hd = multi ? `<div class="lhead${L.id ? '' : ' nobus'}"><h3>${L.b ? ICON.bus : ICON.alert} ${esc(L.label)}</h3><span>${full.length} ${full.length === 1 ? 'persona' : 'persone'}${L.b ? ` · ${seated} con il posto · ${cap} posti${full.length > cap ? ` · <b class="neg">${full.length - cap} in più dei posti</b>` : ''}` : ' · da mettere su un bus'}</span></div>` : '';
-      return `<section class="lsec" data-list="${esc(L.id)}">${hd}<div class="wtw" data-droplist="${multi ? 'L:' + esc(L.id) : '1'}"><table class="wl">${thead}
-        <tbody>${rows.map((r, i) => wRow(t, r, i, cols, ctx, bigl)).join('')}</tbody></table></div></section>`;
-    }).join('');
+    const Ls = tripLists(t).map(L => { const rows = listRows(t, L.id); const full = rows.filter(r => !isEmptyRow(r)); return Object.assign({}, L, { rows, full }); }).filter(L => !(multi && !L.id && !L.full.length));
+    let view = multi ? (UI.lview || 'all') : 'all'; if (view !== 'all' && view !== 'side' && !t.buses.some(b => b.id === view)) view = UI.lview = 'all';
+    const head = L => { const seated = L.full.filter(r => SI[r.id]).length; const cap = L.b ? LMAP[L.b.layout].info.cap : 0;
+      return multi ? `<div class="lhead${L.id ? '' : ' nobus'}"><h3>${L.b ? ICON.bus : ICON.alert} ${esc(L.label)}</h3><span>${L.full.length} ${L.full.length === 1 ? 'persona' : 'persone'}${L.b ? ` · ${seated} con il posto · ${cap} posti${L.full.length > cap ? ` · <b class="neg">${L.full.length - cap} in più dei posti</b>` : ''}` : ' · da mettere su un bus'}</span></div>` : ''; };
+    const tabs = multi ? `<div class="lviews" role="tablist" aria-label="Liste dei bus"><button role="tab" data-act="lview" data-v="all" aria-selected="${view === 'all'}">${ICON.list} Tutti i bus</button>${t.buses.map(b => `<button role="tab" data-act="lview" data-v="${b.id}" aria-selected="${view === b.id}" data-droplist="L:${esc(b.id)}">${ICON.bus} Lista ${esc(b.label)} <small>${listRows(t, b.id).filter(r => !isEmptyRow(r)).length}</small></button>`).join('')}<button role="tab" data-act="lview" data-v="side" aria-selected="${view === 'side'}">${ICON.dock} Affiancate</button></div>` : '';
+    if (view === 'side') return tabs + `<div class="lside" style="--n:${Ls.length}">${Ls.map(L => `<section class="lsec lcol" data-list="${esc(L.id)}">${head(L)}<div class="wtw" data-droplist="L:${esc(L.id)}">${sideTable(t, L, ctx)}</div></section>`).join('')}</div>`;
+    const show = view === 'all' ? Ls : Ls.filter(L => L.id === view);
+    const nob = view !== 'all' && Ls.find(L => !L.id);
+    return tabs + show.map(L => `<section class="lsec" data-list="${esc(L.id)}">${head(L)}<div class="wtw" data-droplist="${multi ? 'L:' + esc(L.id) : '1'}"><table class="wl">${thead}
+        <tbody>${L.rows.map((r, i) => wRow(t, r, i, cols, ctx, bigl)).join('')}</tbody></table></div></section>`).join('')
+      + (nob ? `<div class="lnobus small">${ICON.alert} ${nob.full.length} ${nob.full.length === 1 ? 'persona non è' : 'persone non sono'} su nessun bus: le vedi in «Tutti i bus».</div>` : '');
+  }
+  // lista compatta per la vista «Affiancate»: numero, nome, posto
+  function sideTable(t, L, ctx) {
+    let n = 0;
+    return `<table class="wl wl-side"><thead><tr><th>N</th><th>cognome e nome</th><th>posto</th></tr></thead><tbody>${L.full.map(r => {
+      const x = ctx.byRow[r.id]; const bk = x && x.bk; const head = x && x.k === 0; const seat = ctx.SI[r.id]; n++;
+      let cls = head ? 'gh' : ''; if (bk && saldato(bk)) cls += ' paid'; if ((UI.lsel || []).includes(r.id)) cls += ' lsel';
+      const drag = x ? `<span class="dh" draggable="true" ${head ? `data-dragbk="${bk.id}" title="Trascina tutta la prenotazione"` : `data-dragp="${r.id}" title="Trascina solo questa persona"`}>${ICON.grip}</span>` : '';
+      return `<tr class="${cls}" data-rowid="${r.id}"><td class="wn">${drag}<button class="rn" data-act="rowmenu" data-id="${r.id}" aria-label="Riga ${n}: azioni">${n}</button></td><td class="sd-n">${head ? `<b>${esc(String(r.cognome).replace(RX, '$1').trim())}</b>${bk.persone.length > 1 || bk.n > 1 ? ` <small>x ${Math.max(bk.n, bk.persone.length)}</small>` : ''}` : esc(String(r.cognome || '').trim())} ${esc(r.nome || '')}</td><td class="wpos">${seat ? `<span class="pill ok">${esc(seat.b.label.replace(/^Bus\s*/i, 'B'))} · ${seat.s}</span>` : '<span class="pill tbd">da sistemare</span>'}</td></tr>`;
+    }).join('') || '<tr><td colspan="3" class="emptyrow">Nessuno: trascina qui le persone</td></tr>'}</tbody></table>`;
   }
   // barra in basso quando ci sono righe selezionate
   function selBar(t) {
@@ -1766,13 +1902,14 @@
     const to = multiBus(t) ? tripLists(t).filter(L => !(here.size === 1 && here.has(L.id))) : [];
     return `<div class="selbar" role="toolbar" aria-label="Righe selezionate"><b>${ids.length} ${ids.length === 1 ? 'persona selezionata' : 'persone selezionate'}</b><span class="small">${nbk} ${nbk === 1 ? 'prenotazione' : 'prenotazioni'}</span>
       ${to.length ? `<span class="sb-l">Sposta in</span>${to.map(L => `<button class="btn sm" data-act="lmove" data-to="${esc(L.id)}">${L.b ? ICON.bus : ''} ${esc(L.b ? L.b.label : L.label)}</button>`).join('')}` : multiBus(t) ? '' : '<span class="small">Con due o più bus potrai spostarle da una lista all\'altra</span>'}
+      ${ids.some(id => { const b = D.find(x => x.persone.some(p => p.id === id)); return b && b.id !== id && b.persone.length > 1; }) ? `<button class="btn sm" data-act="detach" title="Le persone selezionate (non i capigruppo) diventano prenotazioni a sé">${ICON.unlink} Stacca dalla comitiva</button>` : ''}
       <button class="btn sm ghost" data-act="lselclear">${ICON.close} Deseleziona</button></div>`;
   }
   function listaView(t, D, SI, T) {
     const bigl = tripCat(t) === 'biglietteria'; const tour = !bigl && isTourT(t); const cols = listCols(tour, bigl);
     const pp = UI.pay && UI.pay.tripId === t.id ? payPanelHTML(t) : ''; if (UI.pay && !pp) UI.pay = null;
     const byRow = {}; D.forEach((bk, gi) => bk.persone.forEach((p, k) => { byRow[p.id] = { bk, gi, k }; }));
-    const ctx = { byRow, SI, parts: partOpts(t) };
+    const ctx = { byRow, SI, parts: partOpts(t), FI: bigl ? null : filaInfo(t, D) };
     const Q = t.quota;
     const sup = (k, l) => `<td><span class="sl">${l}</span><input class="hc num" data-qs="${k}" inputmode="decimal" value="${Q.suppl[k] != null ? esc(String(Q.suppl[k]).replace('.', ',')) : ''}" placeholder="€"></td>`;
     const annTable = (k, title, dl = 'data di annullo') => {
@@ -1793,7 +1930,7 @@
       ${listTables(t, cols, ctx, bigl, SI)}
       <div class="whelp small">${bigl ? 'Una riga per cliente: «Rossi x 2» e i nomi sotto. Con il pulsante «€» si registra l\'incasso e si prepara lo scontrino.' : `Si scrive come in Word`}${bigl ? '' : `: «Rossi x 3» sulla prima riga e le altre persone sotto. Invio = riga sotto. Il numero a sinistra apre il menu della riga (anche con il tasto destro). ${gestHint()} Cognome <span class="pos">verde</span> = saldato. Per mettere i posti trascina ${ICON.grip} sulla piantina: dalla prima riga si sposta tutta la prenotazione, dalle altre la singola persona${multiBus(t) ? '; trascinando nell\'altra lista si cambia bus' : ''}. Il pulsante «€» della prima riga apre l'incasso di tutta la comitiva, quello delle altre righe l'incasso della singola persona.`}</div>
       ${selBar(t)}
-      ${bigl ? '' : `<div class="wsupp"><h3 class="wt">Supplementi per i posti assegnati</h3><table class="wl wl-s"><tr>${sup(1, '1ª fila')}${sup(2, '2ª fila')}${sup(3, '3ª fila')}${sup(4, '4ª fila')}${sup('p2', '2° porta')}</tr></table>
+      ${bigl ? '' : `<div class="wsupp2">${supplBoxes(t, ctx.FI)}
         <label class="chk"><input type="checkbox" data-tchk="guida"${t.guida ? ' checked' : ''}> ------- x guida e 2° autista (sul bus resta un posto per loro)</label></div>`}
       <h3 class="wt">Lista d'attesa</h3>
       <div class="wtw"><table class="wl wl-att"><thead><tr><th>N</th>${ATTC.map(([, l]) => `<th>${esc(l)}</th>`).join('')}</tr></thead><tbody>
@@ -1925,16 +2062,22 @@
     openModal(title, `<p style="margin:0">${text}</p>`, `<button class="btn" data-act="close">Annulla</button><button class="btn primary" data-act="doconfirm">${label}</button>`);
   }
   function tripModal(t) {
-    UI.modal = { kind: 'trip', id: t ? t.id : null };
-    openModal(t ? 'Modifica gita' : 'Nuova gita', `
-      <div class="field"><label for="t-nome">Nome della gita</label><input id="t-nome" value="${esc(t ? t.nome : '')}" placeholder="es. Notre Dame de Paris - Messina"></div>
-      <div class="grid2"><div class="field"><label for="t-data">Data di partenza</label><input id="t-data" type="date" value="${esc(t ? t.data : todayISO())}"></div>
-      <div class="field"><label for="t-fine">Data di rientro (se più giorni)</label><input id="t-fine" type="date" value="${esc(t ? t.fine || '' : '')}"></div></div>
-      <div class="grid3"><div class="field"><label for="t-cat">Tipo</label><select id="t-cat">${['gita', 'tour', 'evento', 'biglietteria'].map(c => `<option value="${c}"${(t ? tripCat(t) : 'gita') === c ? ' selected' : ''}>${CAT_L[c]}</option>`).join('')}</select></div>
-      <div class="field"><label for="t-code">Codice (es. G07, T08)</label><input id="t-code" value="${esc(t ? t.code || '' : '')}"></div>
-      <label class="chk" style="align-self:end"><input type="checkbox" id="t-extra"${t && t.extra ? ' checked' : ''}> Data extra (replica)</label></div>
-      <div class="field"><label for="t-danea">Codice prodotto Danea (per «Apri in Danea» nelle fatture)</label><input id="t-danea" value="${esc(t ? t.codDanea || '' : '')}" placeholder="es. 261018 boschi e zafferana 18/10/26"></div>
-      <div class="field"><label for="t-prog">Link al programma (PDF su Dropbox o pagina del sito)</label><input id="t-prog" value="${esc(t ? t.programma || '' : '')}" placeholder="https://www.laterra.it/..."></div>`,
+    UI.modal = { kind: 'trip', id: t ? t.id : null, serv: t ? tripServ(t).slice() : ['bus'] };
+    const cat = t ? tripCat(t) : 'gita';
+    openModal(t ? 'Modifica gita' : 'Nuova gita', `<div class="tm">
+      <div class="field"><label for="t-nome">Nome</label><input id="t-nome" class="tm-name" value="${esc(t ? t.nome : '')}" placeholder="es. Notre Dame de Paris - Messina"></div>
+      <div class="tm-row">
+        <div class="field"><label for="t-cat">Tipo</label><select id="t-cat">${['gita', 'tour', 'evento', 'biglietteria'].map(c => `<option value="${c}"${cat === c ? ' selected' : ''}>${CAT_L[c]}</option>`).join('')}</select></div>
+        <div class="field"><label for="t-data">Partenza</label><input id="t-data" type="date" value="${esc(t ? t.data : todayISO())}"></div>
+        <div class="field"><label for="t-fine">Rientro <small>se più giorni</small></label><input id="t-fine" type="date" value="${esc(t ? t.fine || '' : '')}"></div>
+        <div class="field"><label for="t-code">Codice</label><input id="t-code" value="${esc(t ? t.code || '' : '')}" placeholder="G07, T08"></div>
+      </div>
+      <label class="tm-extra"><input type="checkbox" id="t-extra"${t && t.extra ? ' checked' : ''}><span><b>Data extra</b> · replica di un viaggio già in programma</span></label>
+      <div id="t-servbox" class="tm-sec"${cat === 'biglietteria' ? ' hidden' : ''}><div class="tm-h">Servizi compresi <small>tocca per accendere o spegnere: si vedono nell'elenco dei viaggi</small></div>${servPicker(t)}</div>
+      <details class="tm-sec tm-more"${t && (t.codDanea || t.programma) ? ' open' : ''}><summary>Programma e Danea</summary>
+        <div class="field"><label for="t-prog">Link al programma <small>PDF su Dropbox o pagina del sito</small></label><input id="t-prog" value="${esc(t ? t.programma || '' : '')}" placeholder="https://www.laterra.it/..."></div>
+        <div class="field"><label for="t-danea">Codice prodotto Danea <small>per «Apri in Danea» nelle fatture</small></label><input id="t-danea" value="${esc(t ? t.codDanea || '' : '')}" placeholder="es. 261018 boschi e zafferana 18/10/26"></div>
+      </details></div>`,
       `${t ? `<button class="btn danger" data-act="deltrip" style="margin-right:auto">${ICON.trash} Elimina gita</button>` : ''}<button class="btn" data-act="close">Annulla</button><button class="btn primary" data-act="savetrip">${t ? 'Salva' : 'Crea'}</button>`);
   }
   function busModal(tripId, change) {
@@ -1995,15 +2138,15 @@
     const ann = k => t.annullati.filter(r => r.stato === k && !isEmptyRow(r));
     const annT = (k, title, dl = 'data di annullo') => ann(k).length ? `<h3 class="lt">${title}</h3><table class="lpt">${head}<th>${dl}</th></tr></thead><tbody>${ann(k).map((r, i) => tr(r, i, x => `<td>${esc(x.dataAnn || '')}</td>`)).join('')}</tbody></table>` : '';
     const att = t.attesa.filter(r => !isEmptyRow(r));
-    const sp = [1, 2, 3, 4].map(f => Q.suppl[f]); 
+    const sp = Array.from({ length: supplN(t) }, (_, i) => Q.suppl[i + 1]); 
     return `<div class="page lp">
       ${bigl ? `<table class="lph"><tr><td class="tt">${esc(t.nome)}</td><td>Data</td><td>${esc(fmtTripDate(t))}</td><td>intero</td><td>${euro(Q.tkt1)}</td><td>${esc(Q.tkt2L || 'ridotto')}</td><td>${euro(Q.tkt2)}</td><td>diritti</td><td>${euro(Q.diritti)}</td></tr></table>` : `<table class="lph"><tr><td class="tt" rowspan="3">${esc(t.nome)}</td><td>Adulti</td><td>${euro(Q.adulti)}</td>${tour ? `<td>singola</td><td>${euro(Q.singola)}</td>` : ''}<td rowspan="3" class="deps">${(t.partenze || []).map(d => `${esc(d.citta)} ${esc(d.luogo)} ${esc(d.ora)}`).join('<br>')}</td></tr>
         <tr><td>Data</td><td>${esc(fmtTripDate(t))}</td>${tour ? `<td>${esc(Q.bambiniL || '3/11 anni')}</td><td>${euro(Q.bambini)}</td>` : ''}</tr>
         <tr><td>${tour ? 'Hotel' : esc(Q.bambiniL || '4/11 anni')}</td><td>${tour ? esc(Q.hotel || '') : euro(Q.bambini)}</td>${tour ? `<td>acconto / saldo</td><td>${euro(Q.acconto)} / ${euro(Q.saldo)}${Q.saldoEntro ? ' il ' + esc(fmtDate(Q.saldoEntro)) : ''}</td>` : ''}</tr></table>`}
-      ${t.note1 ? `<div class="lnote">Nota 1: ${esc(t.note1)}</div>` : ''}${t.note2 ? `<div class="lnote">Nota 2: ${esc(t.note2)}</div>` : ''}
+      ${notesOf(t).filter(n => String(n).trim()).map((n, i) => `<div class="lnote">Nota ${i + 1}: ${esc(n)}</div>`).join('')}
       ${tripLists(t).map(L => { const fr = listRows(t, L.id).filter(r => !isEmptyRow(r)); if (multiBus(t) && !fr.length) return ''; return `${multiBus(t) ? `<h3 class="lt">${esc(L.label)}${L.b && L.b.mezzo ? ' · ' + esc(L.b.mezzo) : ''} · ${fr.length} persone</h3>` : ''}<table class="lpt">${head}${bigl ? '' : '<th>posto</th>'}</tr></thead><tbody>${fr.map((r, i) => tr(r, i, bigl ? null : x => `<td>${SI[x.id] ? esc(SI[x.id].b.label.replace(/^Bus\s*/i, 'B')) + ' · ' + SI[x.id].s : ''}</td>`)).join('')}</tbody></table>`; }).join('')}
       ${t.guida ? '<div class="lnote">------- x guida e 2° autista</div>' : ''}
-      ${sp.some(v => v != null) || Q.suppl.p2 != null ? `<h3 class="lt">Supplementi per i posti assegnati</h3><div class="lnote">1ª fila ${euro(sp[0])} · 2ª fila ${euro(sp[1])} · 3ª fila ${euro(sp[2])} · 4ª fila ${euro(sp[3])} · 2° porta ${euro(Q.suppl.p2)}</div>` : ''}
+      ${sp.some(v => v != null) || Q.suppl.p2 != null ? `<h3 class="lt">File a pagamento</h3><div class="lnote">${sp.map((v, i) => `${i + 1}ª fila ${euro(v)}`).join(' · ')} · 2ª porta ${euro(Q.suppl.p2)}</div>` : ''}
       ${att.length ? `<h3 class="lt">Lista d'attesa</h3><table class="lpt"><thead><tr><th>N</th>${ATTC.map(([, l]) => `<th>${esc(l)}</th>`).join('')}</tr></thead><tbody>${att.map((r, i) => `<tr><td>${i + 1}</td>${ATTC.map(([f]) => `<td>${esc(r[f] || '')}</td>`).join('')}</tr>`).join('')}</tbody></table>` : ''}
       ${bigl ? annT('vende', 'Vuole vendere il biglietto', 'data richiesta') : annT('da', 'Non partono più – da rimborsare') + annT('fatto', 'Non partono più – già rimborsati') + annT('no', 'Non partono più – hanno rinunciato senza avere rimborso')}
       <div class="pm-foot"><span>${full.length} righe</span><span>Stampato il ${fmtDate(todayISO())}</span></div></div>`;
@@ -3984,11 +4127,11 @@
   // ---------- gesti e scorciatoie (personali: ogni operatore sceglie i suoi in Impostazioni › Gesti e scorciatoie) ----------
   // Mouse e trackpad: cosa succede facendo clic sul numero della riga (da solo, doppio, con ⌘, Maiusc o ⌥) e con il tasto destro.
   // Tastiera: combinazioni per spostare la selezione tra le liste dei bus, selezionare, incassare, inserire righe.
-  const G_ACT = [['menu', 'Apre il menu della riga'], ['sel', 'Seleziona / deseleziona la riga'], ['selbk', 'Seleziona tutta la prenotazione'], ['range', 'Seleziona da… a… (intervallo)'], ['pay', 'Apre l\'incasso (€) della riga'], ['map', 'Mostra la prenotazione sulla piantina'], ['none', 'Niente']];
+  const G_ACT = [['menu', 'Apre il menu della riga'], ['sel', 'Seleziona / deseleziona la riga'], ['selbk', 'Seleziona tutta la prenotazione'], ['range', 'Seleziona da… a… (intervallo)'], ['pay', 'Apre l\'incasso (€) della riga'], ['map', 'Mostra la prenotazione sulla piantina'], ['detach', 'Stacca la persona dalla comitiva'], ['none', 'Niente']];
   const G_MOUSE = [['click', 'Clic sul numero della riga'], ['dbl', 'Doppio clic sul numero'], ['meta', '⌘ Cmd + clic sul numero'], ['shift', 'Maiusc + clic sul numero'], ['alt', '⌥ Opzione + clic sul numero'], ['right', 'Tasto destro sulla riga (sul trackpad: clic con due dita)']];
-  const G_KEYS = [['next', 'Sposta la selezione nella lista del bus dopo'], ['prev', 'Sposta la selezione nella lista del bus prima'], ['selrow', 'Seleziona / deseleziona la riga dove stai scrivendo'], ['selbk', 'Seleziona tutta la prenotazione della riga dove stai scrivendo'], ['pay', 'Apre l\'incasso (€) della riga dove stai scrivendo'], ['menu', 'Apre il menu della riga dove stai scrivendo'], ['insB', 'Inserisce una riga vuota sotto'], ['insA', 'Inserisce una riga vuota sopra'], ['map', 'Mostra sulla piantina la riga dove stai scrivendo']];
+  const G_KEYS = [['next', 'Sposta la selezione nella lista del bus dopo'], ['prev', 'Sposta la selezione nella lista del bus prima'], ['selrow', 'Seleziona / deseleziona la riga dove stai scrivendo'], ['selbk', 'Seleziona tutta la prenotazione della riga dove stai scrivendo'], ['pay', 'Apre l\'incasso (€) della riga dove stai scrivendo'], ['menu', 'Apre il menu della riga dove stai scrivendo'], ['insB', 'Inserisce una riga vuota sotto'], ['insA', 'Inserisce una riga vuota sopra'], ['map', 'Mostra sulla piantina la riga dove stai scrivendo'], ['detach', 'Stacca dalla comitiva la persona della riga dove stai scrivendo (o quelle selezionate)']];
   const G_DEF = () => ({ mouse: { click: 'menu', dbl: 'selbk', meta: 'sel', shift: 'range', alt: 'pay', right: 'menu' },
-    keys: { next: 'Ctrl+Alt+ArrowRight', prev: 'Ctrl+Alt+ArrowLeft', selrow: 'Ctrl+Alt+KeyS', selbk: 'Ctrl+Alt+KeyA', pay: 'Ctrl+Alt+KeyE', menu: 'Ctrl+Alt+KeyM', insB: 'Ctrl+Alt+ArrowDown', insA: 'Ctrl+Alt+ArrowUp', map: 'Ctrl+Alt+KeyP' }, dragSel: true });
+    keys: { next: 'Ctrl+Alt+ArrowRight', prev: 'Ctrl+Alt+ArrowLeft', selrow: 'Ctrl+Alt+KeyS', selbk: 'Ctrl+Alt+KeyA', pay: 'Ctrl+Alt+KeyE', menu: 'Ctrl+Alt+KeyM', insB: 'Ctrl+Alt+ArrowDown', insA: 'Ctrl+Alt+ArrowUp', map: 'Ctrl+Alt+KeyP', detach: 'Ctrl+Alt+KeyD' }, dragSel: true });
   const myUser = () => (ACC.sess && ACC.users()[ACC.sess.uid]) || null;
   function gest() {
     const d = G_DEF(); const u = myUser(); const g = (u && u.gest) || {};
@@ -4025,6 +4168,7 @@
         UI.lsel = [...new Set(UI.lsel.concat(rows.slice(i0, i1 + 1).filter(x => !isEmptyRow(x)).map(x => x.id)))]; return render();
       }
       case 'pay': if (!bk) return toast('Riga vuota: niente da incassare'); return payOpen(bk.id, bk.id === id ? '' : id);
+      case 'detach': return doDetach(t, (UI.lsel || []).includes(id) && UI.lsel.length > 1 ? UI.lsel.slice() : [id]);
       case 'map': if (!bk) return; UI.dock = true; UI.pay = null; UI.sel = bk.id; UI.selP = null; { const SI = seatIndex(t); const on = bk.persone.map(p => SI[p.id]).find(Boolean); if (on) UI.busId = on.b.id; else if (multiBus(t) && bk.head.bus) UI.busId = bk.head.bus; } return render();
     }
   }
@@ -4073,6 +4217,7 @@
       if (to === undefined) return toast(k === 'next' ? 'È già l\'ultima lista' : 'È già la prima lista');
       UI.lsel = []; return doListMove(t, ids, to);
     }
+    if (k === 'detach' && !cur && (UI.lsel || []).length) return doDetach(t, UI.lsel.slice());
     if (!cur) return toast('Metti il cursore in una riga della lista');
     const anchor = $(`[data-act="rowmenu"][data-id="${cur}"]`);
     if (k === 'selrow') return gAct('sel', cur);
@@ -4080,6 +4225,7 @@
     if (k === 'pay') return gAct('pay', cur);
     if (k === 'menu') return gAct('menu', cur, anchor);
     if (k === 'map') return gAct('map', cur);
+    if (k === 'detach') return gAct('detach', cur);
     if (k === 'insB' || k === 'insA') { const b = $(`[data-act="rowmenu"][data-id="${cur}"]`); if (!b) return; const i = t.rows.findIndex(r => r.id === cur); const ref = t.rows[i]; const nr = Object.assign(blankRow(), multiBus(t) && ref.bus ? { bus: ref.bus } : {}); t.rows.splice(i + (k === 'insB' ? 1 : 0), 0, nr); commit(); const inp = $(`[data-r="${nr.id}"][data-f="${e.target.dataset.f || 'cognome'}"]`); if (inp) inp.focus(); }
   }, true);
 
@@ -4107,13 +4253,13 @@
   });
 
   // ---------- render ----------
-  const FOCUS_KEYS = ['st', 'depsel', 'hq', 'aq', 'r', 'ar', 'nr', 'f', 'q', 'qs', 'qt', 'tf', 'dep2', 'dep', 'k', 'bind', 'cl', 'cfgag', 'cfgl', 'pf', 'pl', 'pff', 'pfm', 'usig'];
-  const ACT_PERM = { unew: 'users', unewm: 'tech', ureset: 'users', usave: 'users', resetall: 'tech', doresetall: 'tech', savekeys: 'tech', wipelocal: 'tech', lgf: 'tech', lexport: 'tech', diagexport: 'tech', lnew: 'settings', ldel: 'settings', savewa: 'settings', savetel: 'settings', savedanea: 'settings', export: 'settings', pay: 'cassa', paypanel: 'viaggi', paywho: 'viaggi', lmove: 'viaggi', lmove1: 'viaggi', pfsave: 'cassa', cashmov: 'cassa', cashsave: 'cassa', storno: 'cassa', cclose: 'cassa', ccsave: 'cassa', clnew: 'anag', cldel: 'anag', impgo: 'anag', newtrip: 'viaggi', deltrip: 'viaggi' };
+  const FOCUS_KEYS = ['note', 'st', 'depsel', 'hq', 'aq', 'r', 'ar', 'nr', 'f', 'q', 'qs', 'qt', 'tf', 'dep2', 'dep', 'k', 'bind', 'cl', 'cfgag', 'cfgl', 'pf', 'pl', 'pff', 'pfm', 'usig'];
+  const ACT_PERM = { unew: 'users', unewm: 'tech', ureset: 'users', usave: 'users', resetall: 'tech', doresetall: 'tech', savekeys: 'tech', wipelocal: 'tech', lgf: 'tech', lexport: 'tech', diagexport: 'tech', lnew: 'settings', ldel: 'settings', savewa: 'settings', savetel: 'settings', savedanea: 'settings', export: 'settings', pay: 'cassa', paypanel: 'viaggi', paywho: 'viaggi', lmove: 'viaggi', lmove1: 'viaggi', detach: 'viaggi', reattach: 'viaggi', noteadd: 'viaggi', notedel: 'viaggi', suppadd: 'viaggi', suppdel: 'viaggi', pfsave: 'cassa', cashmov: 'cassa', cashsave: 'cassa', storno: 'cassa', cclose: 'cassa', ccsave: 'cassa', clnew: 'anag', cldel: 'anag', impgo: 'anag', newtrip: 'viaggi', deltrip: 'viaggi' };
   const VIEW_PERM = { home: 'viaggi', models: 'viaggi', trip: 'viaggi', anag: 'anag', conta: 'conta', super: 'tech' };
   let lastNav = '', lastSess = '', lastGateHTML = '';
   function render() {
     const t0 = performance.now();
-    try { renderIn(); if (UI.pay) setTimeout(cfRecalc, 0); presenceBeat(false); presenceCheck(); } catch (e) { DIAG.ev('errore', 'Errore nel disegnare la pagina: ' + e.message, { stack: e.stack, vista: UI.view, sezione: UI.sec }); throw e; }
+    try { renderIn(); if (UI.view === 'home') alignBlocks(); if (UI.pay) setTimeout(cfRecalc, 0); presenceBeat(false); presenceCheck(); } catch (e) { DIAG.ev('errore', 'Errore nel disegnare la pagina: ' + e.message, { stack: e.stack, vista: UI.view, sezione: UI.sec }); throw e; }
     const ms = performance.now() - t0;
     const sk = ACC.sess ? `${ACC.sess.uid}|${ACC.sess.ag || ''}` : '';
     if (sk !== lastSess) { const me = ACC.me(); DIAG.ev('accesso', sk ? `Dentro come ${me ? me.name + ' (' + ROLE_L[me.role] + ')' : '?'}${ACC.sess.ag ? ' · ' + agName(ACC.sess.ag) : ''}` : 'Nessuno collegato (schermata di accesso)'); lastSess = sk; }
@@ -4151,6 +4297,12 @@
     window.scrollTo(0, y);
     if (fsel) { const el = $(fsel); if (el) { el.focus({ preventScroll: true }); try { if (fpos != null) el.selectionStart = el.selectionEnd = fpos; } catch (e) { /* campo data */ } } }
   }
+  // elenco dei viaggi: tutti i riquadri colorati finiscono allo stesso punto, subito dopo il nome più lungo
+  function alignBlocks() {
+    const box = $('.months'); if (!box) return; box.style.removeProperty('--nw');
+    let w = 0; $$('.months .t2-n').forEach(n => { const h = n.querySelector('h3'); const m = n.querySelector('.tr-m'); w = Math.max(w, h ? h.scrollWidth : 0, m ? m.scrollWidth : 0); });
+    if (w) box.style.setProperty('--nw', Math.min(w + 2, 300) + 'px');
+  }
   function commit() { save(); render(); }
   let toastT;
   function toast(msg) { DIAG.ev('avviso', msg); const el = $('#toast'); el.textContent = msg; el.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => { el.hidden = true; }, 3600); }
@@ -4173,6 +4325,8 @@
       if (ACC.can('cassa')) h += comit ? B('pay', ICON.euro, 'Incasso di tutta la comitiva', `data-id="${bk.id}"`) + (head ? '' : B('pay', ICON.euro, `Incasso solo di ${esc(P.nome || P.cognome)}`, `data-id="${bk.id}" data-pid="${id}"`)) : B('pay', ICON.euro, 'Incasso e documento', `data-id="${bk.id}"`);
       if (!bigl) h += B('selbk', ICON.pin, 'Mostra sulla piantina', `data-id="${bk.id}"`);
       if (others.length && !inSel) h += `<div class="pm-chips"><span>${head || !comit ? (comit ? 'Sposta la comitiva in' : 'Sposta in') : `Sposta solo ${esc(P.nome || P.cognome)} in`}</span>${others.map(L => `<button data-act="lmove1" data-id="${id}" data-whole="${head ? 1 : 0}" data-to="${esc(L.id)}">${esc(L.b ? L.b.label : L.label)}</button>`).join('')}</div>`;
+      if (comit && !head) h += B('detach', ICON.unlink, `Stacca ${esc(P.nome || P.cognome)} dalla comitiva <small>diventa una prenotazione a sé</small>`, `data-id="${id}"`);
+      if (r.stacc) h += B('reattach', ICON.link2, `Rimetti nella comitiva ${esc(r.stacc.da.replace(/ x \d+$/, ''))} <small>staccata il ${esc(fmtDate(r.stacc.il.slice(0, 10)).slice(0, 5))}${r.stacc.chi ? ' da ' + esc(r.stacc.chi) : ''}</small>`, `data-id="${id}"`);
       h += B('rsel', ICON.sel, (UI.lsel || []).includes(id) ? 'Togli dalla selezione' : 'Seleziona questa riga', `data-id="${id}"`);
       h += '</div>';
     }
@@ -4217,6 +4371,27 @@
     return { bk, rows };
   }
 
+  function doDetach(t, ids) {
+    const done = []; const me = (ACC.me() || {}).name || '';
+    ids.forEach(id => { const r = rowById(t, id); if (!r) return; const pid = (deriveBookings(t).find(b => b.persone.some(p => p.id === id)) || {}).id; const paid = pid ? pidPaid(t.id, pid, id) : 0; const x = detachRow(t, id, me); if (x) done.push({ r, from: x.from, paid }); });
+    if (!done.length) return toast('Si può staccare solo una persona che è dentro una comitiva (non la prima riga)');
+    UI.lsel = []; commit();
+    DIAG.ev('azione', `Staccate dalla comitiva: ${done.map(x => `${x.r.cognome} ${x.r.nome} (da ${x.from})`).join(', ')}`);
+    toast(`${done.length === 1 ? `${done[0].r.cognome} ${done[0].r.nome} ora è una prenotazione a sé (staccata da ${done[0].from})` : `${done.length} persone staccate dalle loro comitive`}${done.some(x => x.paid) ? ' · attenzione: aveva già pagato la sua quota nella comitiva, controlla gli incassi' : ''}`);
+  }
+  // valore del cognome quando si entra nel campo (per capire se «x 3» è diventato «x 5»)
+  const OLDC = {};
+  document.addEventListener('focusin', e => { const el = e.target; if (el && el.dataset && el.dataset.r && el.dataset.f === 'cognome' && !(el.dataset.r in OLDC)) OLDC[el.dataset.r] = el.value; });
+  // avviso quando una lista supera i posti del bus
+  function capCheck(t, lk, why) {
+    if (!t || tripCat(t) === 'biglietteria' || !t.buses.length) return;
+    const B = multiBus(t) ? t.buses.filter(b => b.id === lk) : t.buses; if (!B.length) return;
+    const cap = B.reduce((a, b) => a + LMAP[b.layout].info.cap - Object.values(b.seats || {}).filter(x => x.res).length, 0);
+    const n = listLoad(t, multiBus(t) ? lk : '');
+    if (n <= cap) return;
+    DIAG.ev('avviso', `Capienza superata: ${n} persone su ${cap} posti (${why})`);
+    openModal('Posti finiti', `<div class="capal">${ICON.alert}<div><b>Con ${esc(why)} ${multiBus(t) ? 'la ' + esc(listName(t, lk)) : 'la lista'} arriva a ${n} persone, ma ${B.length > 1 ? 'i bus hanno' : 'il bus ha'} ${cap} posti.</b><p>${n - cap === 1 ? 'C\'è 1 persona' : `Ci sono ${n - cap} persone`} in più. Puoi aggiungere un bus da «Posti sul bus» (pulsante «+»), spostare qualcuno ${multiBus(t) ? 'nella lista di un altro bus ' : ''}oppure mettere in lista d'attesa.</p></div></div>`, `<button class="btn primary" data-act="close">Ho capito</button>`);
+  }
   // sposta righe in un'altra lista (bus) e lo dice
   function doListMove(t, ids, to) {
     if (!t || !multiBus(t)) return toast('Aggiungi un secondo bus per avere una lista per ogni bus');
@@ -4260,7 +4435,7 @@
     if (replace) { t.rows = []; t.attesa = []; t.annullati = []; t.buses.forEach(b => { b.seats = {}; }); }
     const Q = res.quota || {}; Object.keys(Q).forEach(k => { if (k === 'suppl') Object.keys(Q.suppl).forEach(f => { if (Q.suppl[f] != null) t.quota.suppl[f] = Q.suppl[f]; }); else if (Q[k] != null && Q[k] !== '') t.quota[k] = Q[k]; });
     if ((res.partenze || []).length && (replace || !t.partenze.length)) t.partenze = res.partenze.slice(0, 3);
-    (res.note || []).forEach((n, i) => { const k = i === 0 ? 'note1' : 'note2'; if (replace || !t[k]) t[k] = n; });
+    if ((res.note || []).length) { const cur = replace ? [] : notesOf(t).slice(); (res.note || []).forEach(n => { if (n && !cur.includes(n)) cur.push(n); }); t.notes = cur; delete t.note1; delete t.note2; }
     const at = insertAt(t); t.rows.splice(at, 0, ...res.part.raw.map(pickRow));
     let ai = t.attesa.length; while (ai > 0 && isEmptyRow(t.attesa[ai - 1])) ai--;
     t.attesa.splice(ai, 0, ...(res.attesa || []).map(r => ({ ...blankAtt(), ...r })));
@@ -4375,6 +4550,9 @@
       case 'pay': case 'paypanel': closePop(); if (UI.pay && UI.pay.bkId === el.dataset.id && (UI.pay.pid || '') === (el.dataset.pid || '') && el.dataset.act === 'paypanel') payClose(); else payOpen(el.dataset.id, el.dataset.pid || ''); break;
       case 'paywho': payOpen(el.dataset.id, el.dataset.pid || ''); break;
       // liste dei bus: selezione e spostamenti
+      case 'detach': { closePop(); const ids = el.dataset.id ? [el.dataset.id] : (UI.lsel || []).slice(); doDetach(t, ids); break; }
+      case 'reattach': { closePop(); const was = reattachRow(t, el.dataset.id); if (was) { commit(); toast(`Rimessa nella comitiva ${was.replace(/ x \d+$/, '')}`); } else toast('La comitiva da cui era stata staccata non c\'è più'); break; }
+      case 'lview': UI.lview = el.dataset.v; render(); break;
       case 'lselclear': closePop(); UI.lsel = []; UI.lanchor = null; render(); break;
       case 'rsel': closePop(); gAct('sel', el.dataset.id); break;
       case 'lmove': { closePop(); const ids = (UI.lsel || []).slice(); doListMove(t, ids, el.dataset.to); UI.lsel = []; break; }
@@ -4404,16 +4582,17 @@
       case 'year': UI.year = el.dataset.v; render(); window.scrollTo(0, 0); break;
       case 'hcat': UI.cat = el.dataset.v; render(); break;
       case 'hidepast': UI.hidePast = el.checked; render(); break;
-      case 'opentrip': { UI.pay = null; UI.lsel = []; UI.view = 'trip'; UI.tripId = el.dataset.id; const tt = trip(); UI.busId = tt && tt.buses[0] ? tt.buses[0].id : null; UI.sel = UI.selP = null; UI.sec = el.dataset.sec || 'lista'; render(); window.scrollTo(0, 0); break; }
+      case 'opentrip': { UI.pay = null; UI.lsel = []; UI.lview = 'all'; UI.view = 'trip'; UI.tripId = el.dataset.id; const tt = trip(); UI.busId = tt && tt.buses[0] ? tt.buses[0].id : null; UI.sel = UI.selP = null; UI.sec = el.dataset.sec || 'lista'; render(); window.scrollTo(0, 0); break; }
       case 'openbus': UI.view = 'trip'; UI.tripId = el.dataset.trip; UI.busId = el.dataset.bus; UI.sel = UI.selP = null; UI.sec = 'posti'; render(); window.scrollTo(0, 0); break;
       case 'sec': UI.sec = el.dataset.v; UI.sel = UI.selP = null; UI.move = null; render(); window.scrollTo(0, 0); break;
       case 'tab': UI.busId = el.dataset.id; UI.move = null; render(); break;
       case 'dock': if (UI.pay) { UI.pay = null; UI.dock = true; } else UI.dock = !UI.dock; render(); break;
       case 'onlyfree': UI.onlyFree = el.checked; render(); break;
       case 'newtrip': tripModal(null); break;
+      case 'svtoggle': { const k = el.dataset.k; const L = UI.modal && UI.modal.serv; if (!L) break; const i = L.indexOf(k); if (i >= 0) L.splice(i, 1); else L.push(k); el.classList.toggle('on', i < 0); el.setAttribute('aria-pressed', String(i < 0)); break; }
       case 'edittrip': tripModal(t); break;
       case 'savetrip': {
-        const v = { nome: $('#t-nome').value.trim(), data: $('#t-data').value, fine: $('#t-fine').value, programma: $('#t-prog').value.trim(), cat: $('#t-cat').value, codDanea: ($('#t-danea') ? $('#t-danea').value.trim() : ''), code: $('#t-code').value.trim(), extra: $('#t-extra').checked };
+        const v = { nome: $('#t-nome').value.trim(), data: $('#t-data').value, fine: $('#t-fine').value, programma: $('#t-prog').value.trim(), cat: $('#t-cat').value, codDanea: ($('#t-danea') ? $('#t-danea').value.trim() : ''), code: $('#t-code').value.trim(), extra: $('#t-extra').checked, serv: SERV.map(x => x[0]).filter(k => (UI.modal.serv || []).includes(k)) };
         if (!v.nome) { toast('Scrivi il nome della gita'); $('#t-nome').focus(); break; }
         if (!v.data) { toast('Scegli la data di partenza'); break; }
         if (UI.modal.id) { Object.assign(S.trips.find(x => x.id === UI.modal.id), v); closeModal(); commit(); }
@@ -4474,6 +4653,10 @@
       case 'annmove': { const r = t.annullati.find(x => x.id === el.dataset.id); if (!r) { closePop(); break; } r.stato = el.dataset.k; closePop(); commit(); break; }
       case 'annrest': { const r = t.annullati.find(x => x.id === el.dataset.id); if (!r) { closePop(); break; } t.annullati = t.annullati.filter(x => x !== r); const o = { ...r }; delete o.stato; delete o.dataAnn; t.rows.splice(insertAt(t), 0, o); closePop(); commit(); break; }
       case 'anndel': t.annullati = t.annullati.filter(x => x.id !== el.dataset.id); closePop(); commit(); break;
+      case 'suppadd': { t.quota.supplN = supplN(t) + 1; commit(); const i = $(`[data-qs="${t.quota.supplN}"]`); if (i) i.focus(); break; }
+      case 'suppdel': { const N = supplN(t); delete t.quota.suppl[N]; t.quota.supplN = Math.max(1, N - 1); commit(); break; }
+      case 'noteadd': { t.notes = notesOf(t).slice(); t.notes.push(''); delete t.note1; delete t.note2; commit(); const ins = $$('[data-note]'); if (ins.length) ins[ins.length - 1].focus(); break; }
+      case 'notedel': { t.notes = notesOf(t).slice(); t.notes.splice(+el.dataset.i, 1); delete t.note1; delete t.note2; commit(); break; }
       case 'staffadd': { t.staff = (t.staff && t.staff.length ? t.staff : [{ ruolo: 'Accompagnatore' }, { ruolo: 'Autista' }]); t.staff.push({ ruolo: '' }); commit(); break; }
       case 'staffdel': { t.staff = (t.staff && t.staff.length ? t.staff : [{ ruolo: 'Accompagnatore' }, { ruolo: 'Autista' }]); t.staff.splice(+el.dataset.i, 1); commit(); break; }
       case 'annadd': t.annullati.push({ ...blankRow(), stato: el.dataset.k, dataAnn: '' }); commit(); break;
@@ -4531,6 +4714,7 @@
     if (d.tf && t) { if (d.tf !== 'nome' || el.value.trim()) t[d.tf] = el.type === 'date' ? el.value : el.value; save(); return; }
     if (d.depsel !== undefined && t) { const i = +d.depsel; const old = t.partenze[i] || {}; if (el.value === 'cur') return; if (el.value === '') { t.partenze[i] = { citta: '', luogo: '', ora: old.ora || '', code: '' }; } else { const l = (S.cfg.luoghi || [])[+el.value]; if (l) t.partenze[i] = { citta: l.citta || '', luogo: l.luogo || '', ora: old.ora || '', code: String(l.code || '').toUpperCase() }; } while (t.partenze.length && !(t.partenze[t.partenze.length - 1] || {}).citta && !(t.partenze[t.partenze.length - 1] || {}).ora) t.partenze.pop(); save(); later(); return; }
     if (d.st !== undefined && t) { if (!(t.staff && t.staff.length)) t.staff = [{ ruolo: 'Accompagnatore' }, { ruolo: 'Autista' }]; const s = t.staff[+d.st] = t.staff[+d.st] || {}; s[d.k] = el.value; save(); return; }
+    if (d.note !== undefined && t) { t.notes = notesOf(t).slice(); t.notes[+d.note] = el.value; delete t.note1; delete t.note2; save(); return; }
     if (d.dep2 !== undefined && t) { t.partenze[+d.dep2] = t.partenze[+d.dep2] || { citta: '', luogo: '', ora: '' }; t.partenze[+d.dep2][d.k] = el.value; save(); return; }
     if (d.bind && b) { b[d.bind] = el.value; save(); return; }
     if (d.dep !== undefined && b) { b.partenze[+d.dep][d.k] = d.k === 'code' ? el.value.toUpperCase() : el.value; save(); return; }
@@ -4540,7 +4724,12 @@
     const el = e.target; const t = trip(); const b = bus(); const d = el.dataset;
     if (d.impfile) { if (!ACC.can('anag') || ACC.can('readonly')) return; const f = el.files && el.files[0]; el.value = ''; if (f) impOpenFile(f); return; }
     if ((d.impc !== undefined || d.imph || d.impt) && UI.imp) { impInput(el); return; }
-    if (d.r && t) { const r = rowById(t, d.r); if (r && !AC.el) upsertFromRow(r); save(); later(); return; }
+    if (d.r && t) { const r = rowById(t, d.r); if (r && !AC.el) upsertFromRow(r);
+      if (r && d.f === 'cognome' && (d.r in OLDC)) { const oldV = OLDC[d.r]; delete OLDC[d.r]; const mo = RX.exec(String(oldV || '').trim()), mn = RX.exec(String(r.cognome || '').trim());
+        const nOld = mo ? +mo[2] : (String(oldV || '').trim() ? 1 : 0), nNew = mn ? +mn[2] : 0;
+        if (nNew > 1 && nNew > nOld) { const added = growGroup(t, r, oldV, nNew); if (added) toast(`${mn[1].trim()} x ${nNew}: ${added === 1 ? 'aggiunta 1 riga vuota' : `aggiunte ${added} righe vuote`} sotto la comitiva`); setTimeout(() => capCheck(t, listKey(t, r), `${mn[1].trim()} x ${nNew}`), 60); }
+      }
+      save(); later(); return; }
     if ((d.ar || d.nr || d.q || d.qs || d.qt || d.tf) && t) { later(); return; }
     if (d.cl) { later(); return; }
     if (d.clchk && UI.cl) { S.clients.clienti[UI.cl][d.clchk] = el.checked; save(); render(); return; }
@@ -4557,6 +4746,7 @@
     if (d.bind === 'label' || d.bind === 'accompagnatore') { later(); return; }
     if (d.tchk && t) { t[d.tchk] = el.checked; t.buses.forEach(x => { x.guida = el.checked; if (!el.checked) Object.keys(x.seats).forEach(k => { if (x.seats[k].res) delete x.seats[k]; }); else { syncAll(t); reserveGuide(x); } }); commit(); return; }
     if (d.bindchk && b) { b[d.bindchk] = el.checked; if (!el.checked) Object.keys(b.seats).forEach(k => { if (b.seats[k].res) delete b.seats[k]; }); else reserveGuide(b); commit(); return; }
+    if (el.id === 't-cat') { const sb = $('#t-servbox'); if (sb) sb.hidden = el.value === 'biglietteria'; return; }
     if (el.id === 'imp-file' && el.files[0]) readImportFile(el.files[0]);
     if (el.classList.contains('pdf-in') && el.files[0]) attachPdf(el.dataset.trip, el.files[0]);
     if (el.id === 's-restore' && el.files[0]) {

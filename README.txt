@@ -1,7 +1,7 @@
 VIAGGI IN PULLMAN · LA TERRA
 ============================
 
-Versione: 1.9.1
+Versione: 1.9.8
 Pacchetto creato il: 29/10/2026
 
 Come installarla o aggiornarla: vedi LEGGIMI.txt.
@@ -9,6 +9,81 @@ Aggiornamento: carica su GitHub TUTTI i file, config.js compreso (contiene già 
 
 MODIFICHE
 ---------
+
+VERSIONE 1.9.8 · 29/10/2026
+ELENCO DEI VIAGGI
+- I contatori dei posti liberi sono a destra, subito prima dei pulsanti Lista e Posti
+  (allineati sul bordo destro); le iconcine dei servizi restano al centro.
+
+VERSIONE 1.9.7 · 29/10/2026
+ELENCO DEI VIAGGI
+- A destra delle iconcine dei servizi: i posti ancora liberi. Con più bus un contatore per ogni bus
+  (B1, B2…), con un bus solo un contatore unico. Verde quando c'è posto, arancione da 5 posti liberi
+  in giù, rosso quando il bus è pieno o ci sono persone in più. Si contano anche i nomi che mancano
+  nelle comitive (es. «Rossi x 4» con 2 nomi scritti occupa 4 posti) e i posti riservati alla guida.
+  Al posto del vecchio riquadro grigio «2 bus · 12/130».
+
+VERSIONE 1.9.6 · 29/10/2026
+ELENCO DEI VIAGGI
+- Le iconcine dei servizi stanno al centro dello spazio libero tra la colonna «EXTRA» e i pulsanti
+  Lista / Posti, sempre allineate tra una riga e l'altra.
+
+VERSIONE 1.9.5 · 29/10/2026
+ELENCO DEI VIAGGI
+- Riquadri colorati più corti: data, giorno e codice più stretti e il nome al massimo di circa
+  35 caratteri; i nomi più lunghi finiscono con «…» (passando sopra con il mouse si legge tutto).
+  Tutti i riquadri finiscono sempre allo stesso punto.
+
+VERSIONE 1.9.4 · 29/10/2026
+ELENCO DEI VIAGGI
+- Tutti i riquadri colorati finiscono allo stesso punto, subito dopo il nome più lungo dell'elenco:
+  le righe sono ordinate e non più sfalsate. (I nomi lunghissimi vanno a capo con «…» oltre 560 punti.)
+
+VERSIONE 1.9.3 · 29/10/2026
+ELENCO DEI VIAGGI
+- Il riquadro colorato di ogni viaggio finisce subito dopo il nome dell'evento (prima arrivava fino
+  alla colonna «EXTRA»). «EXTRA», le iconcine dei servizi e i pulsanti restano allineati in colonna.
+
+VERSIONE 1.9.2 · 29/10/2026
+ELENCO DEI VIAGGI
+- Il riquadro colorato (giallo gite, verde tour, azzurro eventi, lilla biglietteria) va dalla data
+  fino alla fine del nome del viaggio.
+- Data più grande e senza anno (l'anno si sceglie in alto): «10 Gennaio», «3–6 Gennaio», «30 Dic – 2 Gen».
+- «EXTRA» ha una colonna tutta sua: le etichette sono una sotto l'altra, allineate.
+- Nello spazio centrale le iconcine dei servizi compresi: Bus, Guide, Ristorante, Hotel, Colazioni,
+  Ingressi, Navigazione, Copertura, Extra, Accompagnatore. Colorate se il servizio c'è, grigie e
+  trasparenti se non c'è (passando sopra con il mouse si legge il nome). Non per la biglietteria.
+MODIFICA GITA
+- Finestra ridisegnata: nome; tipo, partenza, rientro e codice su una riga; «Data extra»; le 10 caselle
+  dei servizi da accendere e spegnere con un tocco; programma e codice Danea raccolti in fondo.
+  Per i viaggi di prima: Bus acceso se il viaggio ha un bus, Hotel acceso se è un tour con hotel.
+TESTA DELLA LISTA
+- Tolto il riquadro a sinistra con il nome (resta in alto; si cambia da «Modifica gita»).
+- Prezzi, date e pagamenti, hotel e partenze in un unico riquadro compatto, con i campi ben separati.
+- Le note non ci sono più di serie: il pulsante «+ Aggiungi nota» ne aggiunge quante servono
+  (ognuna si toglie con la ×). Le note già scritte restano; anche la stampa le riporta tutte.
+COMITIVE
+- Se «Rossi x 3» diventa «Rossi x 5», sotto la comitiva compaiono da sole le 2 righe vuote che servono
+  e chi era sotto scende. Le righe vuote dentro una comitiva restano riservate a chi manca: chi è
+  scritto più sotto non finisce più per sbaglio dentro la comitiva.
+- Se con le persone in più la lista supera i posti del bus, compare un avviso con quante sono in più.
+- «Stacca dalla comitiva»: una persona della comitiva diventa una prenotazione a sé e la comitiva
+  scende (es. da x 3 a x 2). Sulla riga resta il segno ⛓ con da quale comitiva è stata staccata,
+  quando e da chi; dal menu della riga si può rimettere nella comitiva. Si fa dal menu della riga,
+  dalla barra delle righe selezionate o con la scorciatoia ⌃⌥D (si cambia in Gesti e scorciatoie,
+  dove c'è anche come azione per il mouse).
+LISTE DEI BUS
+- Con più bus, sopra le liste: «Tutti i bus» (una sotto l'altra), «Lista Bus 1», «Lista Bus 2»…
+  (solo quella) e «Affiancate» (liste compatte una accanto all'altra, da consultare; si può trascinare
+  da una colonna all'altra). Si può anche trascinare una persona sul pulsante di un bus.
+FILE A PAGAMENTO
+- I riquadri dei supplementi diventano «File a pagamento»: si aggiungono e tolgono file e si scrive il
+  prezzo di ognuna. Ogni riquadro dice quanti posti restano (contati sui bus del viaggio) e cambia colore:
+  verde quando sono tutti liberi, sempre più rosso man mano che si vendono, rosso quando è esaurita.
+- La colonna «fila» della lista è una tendina: per ogni fila prezzo e posti ancora liberi, con
+  lato sinistro o destro; in fondo le richieste senza supplemento (lato, ultime file). Le scritte già
+  presenti che non sono nell'elenco restano come sono.
+- Il supplemento vale per tutte le file che hanno un prezzo (non più solo le prime 4).
 
 VERSIONE 1.9.1 · 29/10/2026
 SICUREZZA
