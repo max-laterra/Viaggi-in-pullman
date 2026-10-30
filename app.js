@@ -1,6 +1,6 @@
 (function () {
   'use strict';
-  const VERSION = '2.0.2';
+  const VERSION = '2.1.1';
   const LOGO = './logo.jpg';
   const KEY = 'laterra.prenotazioniPosti.v1';
   const $ = (s, r = document) => r.querySelector(s);
@@ -619,27 +619,45 @@
     if (room && room.persone.length >= 3 && idx >= 2) return '3l';
     return 'ad';
   }
-  // supplemento per la fila a pagamento: vale per tutte le file che hanno un prezzo (1ª, 2ª… quante ne avete) e per la 2ª porta
+  // supplementi delle file: prezzario fisso in Impostazioni › Supplementi file (modificabile).
+  // Tour: a persona AL GIORNO (moltiplicato per i giorni del tour). Gite in giornata: a persona.
+  // Eventi e biglietteria: niente supplemento.
+  const SUPPL_DEF = () => ({ tour: { 1: 8, 2: 6, 3: 4, 4: 2, p2: 6 }, gita: { 1: 4, 2: 3, 3: 2, 4: 1, p2: 3 } });
+  const supplCfg = () => { const d = SUPPL_DEF(), c = (S && S.cfg && S.cfg.suppl) || {}; return { tour: Object.assign(d.tour, c.tour || {}), gita: Object.assign(d.gita, c.gita || {}) }; };
+  const tripDays = t => !t.fine || t.fine === t.data ? 1 : Math.round((parseD(t.fine) - parseD(t.data)) / 864e5) + 1;
+  // prezzi delle file per questo viaggio (già moltiplicati per i giorni nei tour); null se il viaggio non ha file a pagamento
+  function supplPrices(t) {
+    const c = tripCat(t); if (c !== 'tour' && c !== 'gita') return null;
+    const P = supplCfg()[c]; const k = c === 'tour' ? tripDays(t) : 1; const o = {};
+    [1, 2, 3, 4, 'p2'].forEach(x => { const v = +P[x]; o[x] = isNaN(v) ? 0 : Math.round(v * k * 100) / 100; });
+    return o;
+  }
   function supplOf(t, bk, p) {
-    const Q = t.quota; const paidFila = x => x && ((x.fila >= 1 && Q.suppl[x.fila] != null) || (x.zone && x.zone.includes('porta2') && Q.suppl.p2 != null));
+    const SP = supplPrices(t); if (!SP) return 0;
+    const paidFila = x => x && ((x.fila >= 1 && x.fila <= 4) || (x.zone && x.zone.includes('porta2')));
     const r = paidFila(p.req) ? p.req : (bk.pref && bk.pref.level === 'pagato' && paidFila(bk.pref) ? bk.pref : null);
     if (!r) return 0;
-    if (r.fila >= 1 && Q.suppl[r.fila] != null) return Q.suppl[r.fila];
-    if (r.zone && r.zone.includes('porta2') && Q.suppl.p2 != null) return Q.suppl.p2;
+    if (r.fila >= 1 && r.fila <= 4) return SP[r.fila] || 0;
+    if (r.zone && r.zone.includes('porta2')) return SP.p2 || 0;
     return 0;
   }
-  // quante file a pagamento ha il viaggio (si aggiungono e tolgono nei riquadri sotto la lista)
-  function supplN(t) { const Q = t.quota || {}; if (Q.supplN) return +Q.supplN; const ks = Object.keys(Q.suppl || {}).filter(k => /^\d+$/.test(k) && Q.suppl[k] != null).map(Number); return Math.max(4, ...ks); }
+  function supplN() { return 4; }
   // posti di una fila (sommati su tutti i bus del viaggio), quanti l'hanno chiesta e quanti ne restano
   function filaInfo(t, D) {
-    D = D || deriveBookings(t); const N = supplN(t); const Q = t.quota;
+    D = D || deriveBookings(t); const SP = supplPrices(t) || {};
     const B = t.buses.length ? t.buses : [{ layout: '52', seats: {} }];
     const capOf = test => B.reduce((a, b) => { const I = (LMAP[b.layout] || LMAP['52']).info; return a + I.all.filter(s => { const g = I.geo[s]; return g && !g.host && test(s, g, I) && !((b.seats || {})[s] || {}).res; }).length; }, 0);
     const pers = D.flatMap(bk => bk.persone);
-    const rows = Array.from({ length: N }, (_, i) => { const k = i + 1; const cap = capOf((s, g) => g.side !== 'c' && g.fila === k); const sold = pers.filter(p => p.req && p.req.fila === k).length; return { k, label: `${k}ª fila`, price: Q.suppl[k], cap, sold, free: Math.max(0, cap - sold) }; });
+    const rows = [1, 2, 3, 4].map(k => {
+      const cap = capOf((s, g) => g.side !== 'c' && g.fila === k), capSx = capOf((s, g) => g.side === 'sx' && g.fila === k), capDx = capOf((s, g) => g.side === 'dx' && g.fila === k);
+      const on = pers.filter(p => p.req && p.req.fila === k); const sold = on.length, sSx = on.filter(p => p.req.lato === 'sx').length, sDx = on.filter(p => p.req.lato === 'dx').length;
+      const free = Math.max(0, cap - sold);
+      return { k, label: `${k}ª fila`, price: SP[k], cap, sold, free, freeSx: Math.min(free, Math.max(0, capSx - sSx)), freeDx: Math.min(free, Math.max(0, capDx - sDx)) };
+    });
     const pcap = capOf((s, g, I) => I.porta2.has(s)); const psold = pers.filter(p => p.req && !(p.req.fila > 0) && (p.req.zone || []).includes('porta2')).length;
-    return { rows, porta: { k: 'p2', label: '2ª porta', price: Q.suppl.p2, cap: pcap, sold: psold, free: Math.max(0, pcap - psold) } };
+    return { rows, porta: { k: 'p2', label: '1ª fila 2ª porta', price: SP.p2, cap: pcap, sold: psold, free: Math.max(0, pcap - psold) }, days: tripCat(t) === 'tour' ? tripDays(t) : 1 };
   }
+
   function personPrice(t, bk, p, room, idx) {
     if (p.prezzo != null && p.prezzo !== '') return +p.prezzo;
     const Q = tripInit(t).quota; const tipo = p.tipo || autoTipo(t, p, room, idx);
@@ -1872,10 +1890,13 @@
     let seatTxt = '';
     if (seat) { const p = bk.persone.find(q => q.id === r.id); const bad = p && p.req && hasAny(p.req) && !reqOk(LMAP[seat.b.layout], seat.s, p.req); seatTxt = `<span class="pill ${bad ? 'warn' : 'ok'}" title="${bad ? 'Il posto non rispetta la richiesta' : ''}">${esc(seat.b.label.replace(/^Bus\s*/i, 'B'))} · ${seat.s}</span>`; }
     else if (x && r.bus) seatTxt = '<span class="pill tbd">da sistemare</span>';
+    // anteprima di quanto paga la persona di questa riga (quota + supplemento fila)
+    const quotaTxt = (() => { if (!bk) return ''; const m = bk._m || bkMoney(t, bk); const k = bk.persone.findIndex(p => p.id === r.id); const pv = m.per[k]; if (!pv || pv.v == null) return '<span class="q-na" title="Mancano i prezzi in testa alla lista">—</span>'; const P = bk.persone[k]; const sup = supplOf(t, bk, P);
+      return `<span title="${esc(`${TIPI[pv.tipo] || ''}${sup ? ` · ${fmtNum(pv.v - sup)} € + fila ${fmtNum(sup)} €` : ''}`)}">${sup ? '<small>fila</small>' : ''}${esc(fmtNum(pv.v))} €</span>`; })();
     const tip = head && bk._m ? `Totale ${euro(bk._m.due)} · pagato ${euro(bk._m.paid)}${bk._m.rest ? ' · da pagare ' + euro(bk._m.rest) : ''}${bk.mancano ? ` · mancano ${bk.mancano} nomi` : ''}` : '';
     return `<tr class="${cls}" data-rowid="${r.id}"${fl ? ` title="Modificata adesso da ${esc(fl.by)}"` : xg ? ` title="${esc(xg.slice(3))}"` : ''}>
       <td class="wn">${drag}<button class="rn" data-act="rowmenu" data-id="${r.id}" aria-label="Riga ${i + 1}: azioni${xg ? esc(xg) : ''}">${i + 1}</button>${xg ? '<i class="xg" aria-hidden="true">↗</i>' : ''}${r.stacc ? `<i class="stc" title="Staccata da ${esc(r.stacc.da)} il ${esc(fmtDate(r.stacc.il.slice(0, 10)))}${r.stacc.chi ? ' da ' + esc(r.stacc.chi) : ''}">${ICON.unlink}</i>` : ''}</td>
-      ${cols.filter(([f]) => f !== 'pagato').concat(bigl ? [] : [['posto', 'posto']], cols.filter(([f]) => f === 'pagato')).map(([f, l]) => f === 'posto' ? `<td class="wpos">${seatTxt}</td>` : f === 'hotel' ? `<td class="c-hotel">${roomSel(`data-r="${r.id}" data-f="hotel"`, r.hotel, 'Camera riga ' + (i + 1))}</td>` : f === 'fila' && ctx.FI ? `<td class="c-fila">${filaSel(r, ctx.FI, i)}</td>` : f === 'part' && ctx.parts.length ? `<td class="c-part"><select class="wc wsel" data-r="${r.id}" data-f="part" aria-label="Partenza riga ${i + 1}"><option value=""></option>${ctx.parts.map(o => `<option value="${esc(o.code)}"${String(r.part || '').toUpperCase() === o.code ? ' selected' : ''} title="${esc(o.label)}">${esc(o.code)}</option>`).join('')}${r.part && !ctx.parts.some(o => o.code === String(r.part).toUpperCase()) ? `<option value="${esc(r.part)}" selected>${esc(r.part)}</option>` : ''}</select></td>` : head && f === 'pagato' ? `<td class="c-pagato"><button class="eurobtn${ok ? ' ok' : bk._m && bk._m.paid ? ' part' : ''}${UI.pay && UI.pay.bkId === bk.id ? ' on' : ''}" data-act="paypanel" data-id="${bk.id}" title="Incasso e documento (scontrino o fattura)" aria-label="Incasso e documento di ${esc(bkName(bk))}">${bk._m && bk._m.paid ? esc(fmtNum(bk._m.paid)) : '€'}</button></td>` : pm && f === 'pagato' ? `<td class="c-pagato"><button class="eurobtn pers${pm.rest === 0 && pm.paid > 0 ? ' ok' : pm.paid ? ' part' : ''}${UI.pay && UI.pay.pid === r.id ? ' on' : ''}" data-act="paypanel" data-id="${bk.id}" data-pid="${r.id}" title="Paga solo ${esc(r.cognome)} ${esc(r.nome)} (la sua quota)" aria-label="Incasso solo di ${esc(r.cognome)} ${esc(r.nome)}">${pm.paid ? esc(fmtNum(pm.paid)) : '€'}</button></td>` : `<td class="c-${f}${head && f === 'cognome' && bk.mancano ? ' miss' : ''}"${head && f === 'cognome' && tip ? ` title="${esc(tip)}"` : ''}><input class="wc" data-r="${r.id}" data-f="${f}" value="${esc(r[f] || '')}" aria-label="${esc(l)} riga ${i + 1}" autocomplete="off"></td>`).join('')}
+      ${cols.filter(([f]) => f !== 'pagato').concat(bigl ? [] : [['posto', 'posto']], [['quota', 'quota']], cols.filter(([f]) => f === 'pagato')).map(([f, l]) => f === 'posto' ? `<td class="wpos">${seatTxt}</td>` : f === 'quota' ? `<td class="c-quota">${quotaTxt}</td>` : f === 'hotel' ? `<td class="c-hotel">${roomSel(`data-r="${r.id}" data-f="hotel"`, r.hotel, 'Camera riga ' + (i + 1))}</td>` : f === 'fila' && ctx.FI ? `<td class="c-fila">${filaSel(r, ctx.FI, i)}</td>` : f === 'part' && ctx.parts.length ? `<td class="c-part"><select class="wc wsel" data-r="${r.id}" data-f="part" aria-label="Partenza riga ${i + 1}"><option value=""></option>${ctx.parts.map(o => `<option value="${esc(o.code)}"${String(r.part || '').toUpperCase() === o.code ? ' selected' : ''} title="${esc(o.label)}">${esc(o.code)}</option>`).join('')}${r.part && !ctx.parts.some(o => o.code === String(r.part).toUpperCase()) ? `<option value="${esc(r.part)}" selected>${esc(r.part)}</option>` : ''}</select></td>` : head && f === 'pagato' ? `<td class="c-pagato"><button class="eurobtn${ok ? ' ok' : bk._m && bk._m.paid ? ' part' : ''}${UI.pay && UI.pay.bkId === bk.id ? ' on' : ''}" data-act="paypanel" data-id="${bk.id}" title="Incasso e documento (scontrino o fattura)" aria-label="Incasso e documento di ${esc(bkName(bk))}">${bk._m && bk._m.paid ? esc(fmtNum(bk._m.paid)) : '€'}</button></td>` : pm && f === 'pagato' ? `<td class="c-pagato"><button class="eurobtn pers${pm.rest === 0 && pm.paid > 0 ? ' ok' : pm.paid ? ' part' : ''}${UI.pay && UI.pay.pid === r.id ? ' on' : ''}" data-act="paypanel" data-id="${bk.id}" data-pid="${r.id}" title="Paga solo ${esc(r.cognome)} ${esc(r.nome)} (la sua quota)" aria-label="Incasso solo di ${esc(r.cognome)} ${esc(r.nome)}">${pm.paid ? esc(fmtNum(pm.paid)) : '€'}</button></td>` : `<td class="c-${f}${head && f === 'cognome' && bk.mancano ? ' miss' : ''}"${head && f === 'cognome' && tip ? ` title="${esc(tip)}"` : ''}><input class="wc" data-r="${r.id}" data-f="${f}" value="${esc(r[f] || '')}" aria-label="${esc(l)} riga ${i + 1}" autocomplete="off"></td>`).join('')}
 </tr>`;
   }
   // accompagnatore, autista e altro personale che dorme in hotel (vanno nella rooming list)
@@ -1885,29 +1906,24 @@
       ${st.map((s, i) => `<tr><td class="wn"><button class="rn" data-act="staffdel" data-i="${i}" aria-label="Togli">${i + 1}</button></td><td><input class="wc" data-st="${i}" data-k="ruolo" value="${esc(s.ruolo || '')}" aria-label="Ruolo"></td><td><input class="wc" data-st="${i}" data-k="nome" value="${esc(s.nome || '')}" placeholder="facoltativo" aria-label="Nome"></td><td>${roomSel(`data-st="${i}" data-k="camera"`, s.camera, 'Camera ' + (s.ruolo || ''))}</td><td><input class="wc" data-st="${i}" data-k="num" value="${esc(s.num || '')}" aria-label="Numero camera"></td></tr>`).join('')}
     </tbody></table></div><button class="btn sm ghost" data-act="staffadd">${ICON.plus} riga</button>`;
   }
-  // riquadri delle file a pagamento: prezzo, posti liberi; verde quando sono tutti liberi, rosso quando sono finiti
-  function supplBoxes(t, FI) {
-    const box = x => { const r = x.cap ? Math.min(1, x.sold / x.cap) : 0; const over = x.sold - x.cap;
-      return `<div class="sbox" style="--r:${r.toFixed(2)}"><div class="sb-t">${esc(x.label)}</div><label class="sb-p"><input class="hc num" data-qs="${x.k}" inputmode="decimal" value="${x.price != null ? esc(String(x.price).replace('.', ',')) : ''}" placeholder="0" aria-label="Prezzo ${esc(x.label)}"><i>€</i></label>
-        <div class="sb-a">${!x.cap ? 'nessun posto' : over > 0 ? `<b>esaurita</b> · ${over} in più` : x.free === 0 ? '<b>esaurita</b>' : `<b>${x.free}</b> ${x.free === 1 ? 'libero' : 'liberi'} su ${x.cap}`}</div><div class="sb-bar"><i style="width:${Math.round(r * 100)}%"></i></div></div>`; };
-    return `<div class="ws-h"><h3 class="wt">File a pagamento</h3><span class="small">Supplemento a persona. Si scelgono nella colonna «fila» della lista; i posti liberi sono contati su ${t.buses.length > 1 ? 'tutti i bus' : 'il bus'}.</span></div>
-      <div class="ws-g">${FI.rows.map(box).join('')}${box(FI.porta)}<div class="ws-add"><button class="btn sm" data-act="suppadd">${ICON.plus} Aggiungi fila</button>${FI.rows.length > 1 ? `<button class="btn sm ghost" data-act="suppdel">Togli la ${FI.rows.length}ª fila</button>` : ''}</div></div>`;
-  }
-  // tendina della colonna «fila»: file a pagamento (con prezzo e posti liberi, a sinistra o a destra) e richieste senza supplemento
+  // colonna «fila»: un pulsante che mostra la scelta e apre il menu delle file (solo tour e gite)
+  const filaLabel = v => { v = String(v || '').trim(); let m;
+    if ((m = /^(\d)\s*fila(?:\s+(sx|dx))?$/i.exec(v))) return `${m[1]}ª fila${m[2] ? ' ' + m[2].toLowerCase() : ''}`;
+    if (/^2\s*°?\s*porta$/i.test(v)) return '1ª fila 2ª porta';
+    // scritte delle liste Word (es. «1° f. sx»): se si capisce la fila, si mostra in modo uniforme
+    const P = v ? reqFromFila(v) : null; if (P && P.fila >= 1 && P.fila <= 4) return `${P.fila}ª fila${P.lato ? ' ' + P.lato : ''}`; if (P && (P.zone || []).includes('porta2') && !P.fila) return '1ª fila 2ª porta';
+    return v; };
   function filaSel(r, FI, i) {
-    const cur = String(r.fila || '').trim(); let found = false;
-    const o = (v, l) => { const sel = cur && cur.toLowerCase() === v.toLowerCase(); if (sel) found = true; return `<option value="${esc(v)}"${sel ? ' selected' : ''}>${esc(l)}</option>`; };
-    const g = FI.rows.map(x => `<optgroup label="${esc(x.label)} · ${x.price != null ? esc(fmtNum(x.price)) + ' €' : 'senza prezzo'} · ${x.free ? x.free + (x.free === 1 ? ' libero' : ' liberi') : 'esaurita'}">${o(`${x.k} fila`, `${x.label}`)}${o(`${x.k} fila sx`, `${x.label} sx`)}${o(`${x.k} fila dx`, `${x.label} dx`)}</optgroup>`).join('')
-      + `<optgroup label="2ª porta · ${FI.porta.price != null ? esc(fmtNum(FI.porta.price)) + ' €' : 'senza prezzo'} · ${FI.porta.free ? FI.porta.free + ' liberi' : 'esaurita'}">${o('2° porta', '2ª porta')}</optgroup>`
-      + `<optgroup label="Senza supplemento">${o('Lato sx', 'Lato sinistro')}${o('Lato dx', 'Lato destro')}${o('Terzultima fila', 'Terzultima fila')}${o('Penultima fila', 'Penultima fila')}${o('Ultima fila', 'Ultima fila')}${o('No ultima fila', 'Non in ultima fila')}</optgroup>`;
-    return `<select class="wc wsel fila" data-r="${r.id}" data-f="fila" aria-label="Fila riga ${i + 1}"><option value=""></option>${!found && cur ? `<option value="${esc(cur)}" selected>${esc(cur)}</option>` : ''}${g}</select>`;
+    const v = String(r.fila || '').trim();
+    if (!v && isEmptyRow(r)) return `<button class="fsel" data-act="filapick" data-id="${r.id}" aria-label="Fila riga ${i + 1}"></button>`;
+    return `<button class="fsel${v ? ' on' : ''}" data-act="filapick" data-id="${r.id}" aria-label="Fila riga ${i + 1}: ${esc(v ? filaLabel(v) : 'nessuna')}" title="${esc(v)}">${v ? esc(filaLabel(v)) : '<span>—</span>'}</button>`;
   }
   // una tabella per lista (con più bus: una per bus, più «Senza bus» se c'è qualcuno senza bus)
   // una tabella per lista (con più bus: una per bus, più «Senza bus» se c'è qualcuno senza bus)
   // Con più bus, in alto: «Tutti i bus» (una sotto l'altra), «Bus 1», «Bus 2»… (solo quella) e «Affiancate» (compatte, una accanto all'altra)
   function listTables(t, cols, ctx, bigl, SI) {
     const multi = multiBus(t);
-    const thead = `<thead><tr><th>N</th>${cols.filter(([f]) => f !== 'pagato').map(([f, l]) => `<th class="c-${f}">${esc(l)}</th>`).join('')}${bigl ? '' : '<th>posto</th>'}${cols.filter(([f]) => f === 'pagato').map(([f, l]) => `<th class="c-${f}">${esc(l)}</th>`).join('')}</tr></thead>`;
+    const thead = `<thead><tr><th>N</th>${cols.filter(([f]) => f !== 'pagato').map(([f, l]) => `<th class="c-${f}">${esc(l)}</th>`).join('')}${bigl ? '' : '<th class="c-posto">posto</th>'}<th class="c-quota" title="Quanto paga la persona di questa riga">quota</th>${cols.filter(([f]) => f === 'pagato').map(([f, l]) => `<th class="c-${f}">${esc(l)}</th>`).join('')}</tr></thead>`;
     const Ls = tripLists(t).map(L => { const rows = listRows(t, L.id); const full = rows.filter(r => !isEmptyRow(r)); return Object.assign({}, L, { rows, full }); }).filter(L => !(multi && !L.id && !L.full.length));
     let view = multi ? (UI.lview || 'all') : 'all'; if (view !== 'all' && view !== 'side' && !t.buses.some(b => b.id === view)) view = UI.lview = 'all';
     const head = L => { const seated = L.full.filter(r => SI[r.id]).length; const cap = L.b ? LMAP[L.b.layout].info.cap : 0;
@@ -1945,7 +1961,7 @@
     const bigl = tripCat(t) === 'biglietteria'; const tour = !bigl && isTourT(t); const cols = listCols(tour, bigl);
     const pp = UI.pay && UI.pay.tripId === t.id ? payPanelHTML(t) : ''; if (UI.pay && !pp) UI.pay = null;
     const byRow = {}; D.forEach((bk, gi) => bk.persone.forEach((p, k) => { byRow[p.id] = { bk, gi, k }; }));
-    const ctx = { byRow, SI, parts: partOpts(t), FI: bigl ? null : filaInfo(t, D) };
+    const ctx = { byRow, SI, parts: partOpts(t), FI: supplPrices(t) ? filaInfo(t, D) : null };
     const Q = t.quota;
     const sup = (k, l) => `<td><span class="sl">${l}</span><input class="hc num" data-qs="${k}" inputmode="decimal" value="${Q.suppl[k] != null ? esc(String(Q.suppl[k]).replace('.', ',')) : ''}" placeholder="€"></td>`;
     const annTable = (k, title, dl = 'data di annullo') => {
@@ -1966,7 +1982,7 @@
       ${listTables(t, cols, ctx, bigl, SI)}
       <div class="whelp small">${bigl ? 'Una riga per cliente: «Rossi x 2» e i nomi sotto. Con il pulsante «€» si registra l\'incasso e si prepara lo scontrino.' : `Si scrive come in Word`}${bigl ? '' : `: «Rossi x 3» sulla prima riga e le altre persone sotto. Invio = riga sotto. Il numero a sinistra apre il menu della riga (anche con il tasto destro). ${gestHint()} Cognome <span class="pos">verde</span> = saldato. Per mettere i posti trascina ${ICON.grip} sulla piantina: dalla prima riga si sposta tutta la prenotazione, dalle altre la singola persona${multiBus(t) ? '; trascinando nell\'altra lista si cambia bus' : ''}. Il pulsante «€» della prima riga apre l'incasso di tutta la comitiva, quello delle altre righe l'incasso della singola persona.`}</div>
       ${selBar(t)}
-      ${bigl ? '' : `<div class="wsupp2">${supplBoxes(t, ctx.FI)}
+      ${bigl ? '' : `<div class="wsupp2">
         <label class="chk"><input type="checkbox" data-tchk="guida"${t.guida ? ' checked' : ''}> ------- x guida e 2° autista (sul bus resta un posto per loro)</label></div>`}
       <h3 class="wt">Lista d'attesa</h3>
       <div class="wtw"><table class="wl wl-att"><thead><tr><th>N</th>${ATTC.map(([, l]) => `<th>${esc(l)}</th>`).join('')}</tr></thead><tbody>
@@ -2076,9 +2092,9 @@
 
   // ---------- menu a comparsa ----------
   function closePop() { const p = $('#pop'); if (p) p.remove(); }
-  function openPop(anchor, html) {
+  function openPop(anchor, html, cls) {
     closePop();
-    const p = document.createElement('div'); p.className = 'pop'; p.id = 'pop'; p.innerHTML = html; document.body.appendChild(p);
+    const p = document.createElement('div'); p.className = 'pop' + (cls ? ' ' + cls : ''); p.id = 'pop'; p.innerHTML = html; document.body.appendChild(p);
     const r = anchor.getBoundingClientRect(); const pw = p.offsetWidth, ph = p.offsetHeight;
     let x = Math.min(r.left, window.innerWidth - pw - 12); let yy = r.bottom + 6;
     if (yy + ph > window.innerHeight - 12) yy = Math.max(12, r.top - ph - 6);
@@ -2174,7 +2190,7 @@
     const ann = k => t.annullati.filter(r => r.stato === k && !isEmptyRow(r));
     const annT = (k, title, dl = 'data di annullo') => ann(k).length ? `<h3 class="lt">${title}</h3><table class="lpt">${head}<th>${dl}</th></tr></thead><tbody>${ann(k).map((r, i) => tr(r, i, x => `<td>${esc(x.dataAnn || '')}</td>`)).join('')}</tbody></table>` : '';
     const att = t.attesa.filter(r => !isEmptyRow(r));
-    const sp = Array.from({ length: supplN(t) }, (_, i) => Q.suppl[i + 1]); 
+    const SP = supplPrices(t); 
     return `<div class="page lp">
       ${bigl ? `<table class="lph"><tr><td class="tt">${esc(t.nome)}</td><td>Data</td><td>${esc(fmtTripDate(t))}</td><td>intero</td><td>${euro(Q.tkt1)}</td><td>${esc(Q.tkt2L || 'ridotto')}</td><td>${euro(Q.tkt2)}</td><td>diritti</td><td>${euro(Q.diritti)}</td></tr></table>` : `<table class="lph"><tr><td class="tt" rowspan="3">${esc(t.nome)}</td><td>Adulti</td><td>${euro(Q.adulti)}</td>${tour ? `<td>singola</td><td>${euro(Q.singola)}</td>` : ''}<td rowspan="3" class="deps">${(t.partenze || []).map(d => `${esc(d.citta)} ${esc(d.luogo)} ${esc(d.ora)}`).join('<br>')}</td></tr>
         <tr><td>Data</td><td>${esc(fmtTripDate(t))}</td>${tour ? `<td>${esc(Q.bambiniL || '3/11 anni')}</td><td>${euro(Q.bambini)}</td>` : ''}</tr>
@@ -2182,7 +2198,7 @@
       ${notesOf(t).filter(n => String(n).trim()).map((n, i) => `<div class="lnote">Nota ${i + 1}: ${esc(n)}</div>`).join('')}
       ${tripLists(t).map(L => { const fr = listRows(t, L.id).filter(r => !isEmptyRow(r)); if (multiBus(t) && !fr.length) return ''; return `${multiBus(t) ? `<h3 class="lt">${esc(L.label)}${L.b && L.b.mezzo ? ' · ' + esc(L.b.mezzo) : ''} · ${fr.length} persone</h3>` : ''}<table class="lpt">${head}${bigl ? '' : '<th>posto</th>'}</tr></thead><tbody>${fr.map((r, i) => tr(r, i, bigl ? null : x => `<td>${SI[x.id] ? esc(SI[x.id].b.label.replace(/^Bus\s*/i, 'B')) + ' · ' + SI[x.id].s : ''}</td>`)).join('')}</tbody></table>`; }).join('')}
       ${t.guida ? '<div class="lnote">------- x guida e 2° autista</div>' : ''}
-      ${sp.some(v => v != null) || Q.suppl.p2 != null ? `<h3 class="lt">File a pagamento</h3><div class="lnote">${sp.map((v, i) => `${i + 1}ª fila ${euro(v)}`).join(' · ')} · 2ª porta ${euro(Q.suppl.p2)}</div>` : ''}
+      ${SP ? `<h3 class="lt">Supplementi file${tripCat(t) === 'tour' ? ` (${tripDays(t)} giorni)` : ''}</h3><div class="lnote">${[1, 2, 3, 4].map(k => `${k}ª fila ${euro(SP[k])}`).join(' · ')} · 1ª fila 2ª porta ${euro(SP.p2)}</div>` : ''}
       ${att.length ? `<h3 class="lt">Lista d'attesa</h3><table class="lpt"><thead><tr><th>N</th>${ATTC.map(([, l]) => `<th>${esc(l)}</th>`).join('')}</tr></thead><tbody>${att.map((r, i) => `<tr><td>${i + 1}</td>${ATTC.map(([f]) => `<td>${esc(r[f] || '')}</td>`).join('')}</tr>`).join('')}</tbody></table>` : ''}
       ${bigl ? annT('vende', 'Vuole vendere il biglietto', 'data richiesta') : annT('da', 'Non partono più – da rimborsare') + annT('fatto', 'Non partono più – già rimborsati') + annT('no', 'Non partono più – hanno rinunciato senza avere rimborso')}
       <div class="pm-foot"><span>${full.length} righe</span><span>Stampato il ${fmtDate(todayISO())}</span></div></div>`;
@@ -3190,7 +3206,7 @@
     const items = Object.entries(clients()).filter(([id, x]) => { const k = ckey(id, x); return k.c.startsWith(cgq) && (!nmq || k.n.startsWith(nmq)); })
       .sort((a, b) => (AC.cnt[b[0]] || 0) - (AC.cnt[a[0]] || 0) || ckey(a[0], a[1]).cn.localeCompare(ckey(b[0], b[1]).cn)).slice(0, 6);
     if (!items.length || (items.length === 1 && r.cid === items[0][0] && nk(r.nome) === nk(items[0][1].nome))) return acClose();
-    AC.items = items; AC.i = 0; AC.rowId = r.id; AC.f = f;
+    AC.items = items; AC.i = -1; AC.rowId = r.id; AC.f = f;
     if (!AC.el) { AC.el = document.createElement('div'); AC.el.className = 'acbox'; AC.el.setAttribute('role', 'listbox'); AC.el.setAttribute('aria-label', 'Clienti già in anagrafica'); document.body.appendChild(AC.el); }
     const rc = input.getBoundingClientRect();
     AC.el.style.left = `${Math.max(8, Math.min(rc.left + window.scrollX, window.scrollX + window.innerWidth - 480))}px`; AC.el.style.top = `${rc.bottom + window.scrollY + 4}px`;
@@ -3198,7 +3214,7 @@
   }
   function acPaint() {
     if (!AC.el) return;
-    AC.el.innerHTML = `<div class="ac-h">Già in anagrafica</div>${AC.items.map(([id, x], i) => `<div class="ac-i${i === AC.i ? ' on' : ''}" role="option" aria-selected="${i === AC.i}" data-act="acpick" data-id="${id}"><span class="av">${esc(((x.nome || '')[0] || '') + ((x.cognome || '')[0] || ''))}</span><span class="ac-t"><b>${esc(x.cognome)} ${esc(x.nome)}</b><span>${esc([x.nascita ? `${/a$/i.test(x.nome || '') ? 'nata' : 'nato'} il ${x.nascita}` : '', x.tel, x.part ? 'parte da ' + x.part : ''].filter(Boolean).join(' · '))}</span></span><span class="ac-n">${AC.cnt[id] ? `${AC.cnt[id]} ${AC.cnt[id] === 1 ? 'viaggio' : 'viaggi'}` : 'nuovo'}</span></div>`).join('')}<div class="ac-f">Invio compila la riga · Esc per scrivere un cliente nuovo</div>`;
+    AC.el.innerHTML = `<div class="ac-h">Già in anagrafica <span>↓ per scegliere, Invio per compilare la riga · se non serve continua a scrivere</span></div>${AC.items.map(([id, x], i) => `<div class="ac-i${i === AC.i ? ' on' : ''}" role="option" aria-selected="${i === AC.i}" data-act="acpick" data-id="${id}"><span class="av">${esc(((x.nome || '')[0] || '') + ((x.cognome || '')[0] || ''))}</span><span class="ac-t"><b>${esc(x.cognome)} ${esc(x.nome)}</b><span>${esc([x.nascita ? `${/a$/i.test(x.nome || '') ? 'nata' : 'nato'} il ${x.nascita}` : '', x.tel, x.part ? 'parte da ' + x.part : ''].filter(Boolean).join(' · '))}</span></span><span class="ac-n">${AC.cnt[id] ? `${AC.cnt[id]} ${AC.cnt[id] === 1 ? 'viaggio' : 'viaggi'}` : 'nuovo'}</span></div>`).join('')}<div class="ac-f">Invio compila la riga · Esc per scrivere un cliente nuovo</div>`;
   }
   function acPick(id) {
     const t = trip(); const r = t && rowById(t, AC.rowId); const x = clients()[id]; if (!r || !x) return acClose();
@@ -3212,9 +3228,12 @@
   }
   function acKey(e) {
     if (!AC.el || !AC.items.length) return false;
+    // nessun cliente è scelto da solo: si sceglie con le frecce e poi Invio, oppure con un clic.
+    // Invio, Tab e Maiusc senza aver scelto un cliente lasciano la riga com'è scritta (si chiude solo l'elenco).
     if (e.key === 'ArrowDown') { AC.i = (AC.i + 1) % AC.items.length; acPaint(); return true; }
-    if (e.key === 'ArrowUp') { AC.i = (AC.i - 1 + AC.items.length) % AC.items.length; acPaint(); return true; }
-    if (e.key === 'Enter' || e.key === 'Tab') { if (e.key === 'Tab' && e.shiftKey) return false; acPick(AC.items[AC.i][0]); return true; }
+    if (e.key === 'ArrowUp') { if (AC.i <= 0) { AC.i = -1; acPaint(); return AC.i !== -1; } AC.i = AC.i - 1; acPaint(); return true; }
+    if (e.key === 'Enter' && AC.i >= 0 && !e.shiftKey) { acPick(AC.items[AC.i][0]); return true; }
+    if (e.key === 'Enter' || e.key === 'Tab') { acClose(); return false; }
     if (e.key === 'Escape') { acClose(); return true; }
     return false;
   }
@@ -3481,7 +3500,7 @@
     if (allMovs().some(x => x.storno === id)) return toast('Questo incasso è già stato stornato');
     confirmBox('Storna incasso', `Annullo l'incasso di <b>${money(m.tot)}</b> di ${esc(m.cliente)}? Nel resoconto resta segnato, con un movimento uguale e contrario${m.doc === 'scontrino' ? ' (nota di credito dello scontrino)' : m.doc === 'fattura' ? ' (nota di credito della fattura)' : ''}.`, 'Storna', () => {
       const t = S.trips.find(x => x.id === m.tripId);
-      addMov({ tripId: m.tripId, tripN: m.tripN, tripD: m.tripD, bkId: m.bkId, pid: m.pid, pnome: m.pnome, cliente: m.cliente, tipo: 'storno', storno: id, ag: m.ag, cassa: m.cassa, doc: m.doc === 'fattura' ? 'ncfattura' : m.doc === 'scontrino' ? 'ncscontrino' : m.doc, docStato: m.doc === 'fattura' || m.doc === 'scontrino' ? 'da_emettere' : '', cat: m.cat, desc: m.desc, circuito: m.circuito, lines: (m.lines || []).map(l => Object.assign({}, l, { q: -l.q })), suppl: -(m.suppl || 0), dir: m.dir, docTot: -(m.docTot || 0), agenzia: -(m.agenzia || 0), biglietti: -(m.biglietti || 0), parts: m.parts.map(p => ({ m: p.m, a: -p.a })), note: `storno dell'incasso del ${fmtDate(m.day)}${ACC.sess.ag && ACC.sess.ag !== m.ag ? ' (fatto da ' + agName(ACC.sess.ag) + ')' : ''}` });
+      addMov({ tripId: m.tripId, tripN: m.tripN, tripD: m.tripD, bkId: m.bkId, pid: m.pid, pnome: m.pnome, rtRif: m.doc === 'scontrino' ? Object.assign({ chiusura: '', numero: '', dataOra: '', matricola: '' }, m.rt || {}, { mov: m.id }) : undefined, cliente: m.cliente, tipo: 'storno', storno: id, ag: m.ag, cassa: m.cassa, doc: m.doc === 'fattura' ? 'ncfattura' : m.doc === 'scontrino' ? 'ncscontrino' : m.doc, docStato: m.doc === 'fattura' || m.doc === 'scontrino' ? 'da_emettere' : '', cat: m.cat, desc: m.desc, circuito: m.circuito, lines: (m.lines || []).map(l => Object.assign({}, l, { q: -l.q })), suppl: -(m.suppl || 0), dir: m.dir, docTot: -(m.docTot || 0), agenzia: -(m.agenzia || 0), biglietti: -(m.biglietti || 0), parts: m.parts.map(p => ({ m: p.m, a: -p.a })), note: `storno dell'incasso del ${fmtDate(m.day)}${ACC.sess.ag && ACC.sess.ag !== m.ag ? ' (fatto da ' + agName(ACC.sess.ag) + ')' : ''}` });
       ACC.tlog('avviso', `Storno ${money(m.tot)} · ${m.cliente} · ${m.tripN}`);
       commit(); if (UI.pay) payRefresh(); toast('Incasso stornato');
     });
@@ -3691,6 +3710,7 @@
         <div class="pp-g3">${f.bigl ? '' : `<label>Suppl. fila €${nIn('suppl', f.suppl)}</label>`}${tkOn ? `<label>Diritti € (per biglietto)${nIn('dir', f.dir)}</label><label>Circuito<select data-pf="circuito"><option value="">—</option>${CIRCUITI.map(c => `<option${c === f.circuito ? ' selected' : ''}>${c}</option>`).join('')}</select></label>` : ''}</div>
         ${tkOn ? `<div class="pp-g2"><label>Emissione biglietti<input type="date" data-pf="emis" value="${esc(f.emis)}"></label><label class="chk pp-chk"><input type="checkbox" data-pfc="ant"${f.ant ? ' checked' : ''}> Emissione anticipata</label></div>` : ''}
         <div class="pp-tot" id="pp-tot">${payTotHTML(T, f.bigl)}</div>
+        <div id="pp-rt">${rtPreviewHTML(f)}</div>
         <div class="pp-sec"><span class="pp-l">Incassato adesso</span><input id="pf-imp" class="pf-in num pay-imp" data-pf="imp" inputmode="decimal" value="${f.imp === '' ? '' : esc(fmtNum(+f.imp))}" placeholder="0,00" autocomplete="off"><span class="pay-warn" id="pp-warn" role="status">${payWarnTxt(f, m)}</span></div>
         <div class="pay-met" role="radiogroup" aria-label="Metodo di pagamento">${[...METODI, ['misto', 'Misto (es. contanti + POS)']].map(([k, l]) => `<button type="button" role="radio" aria-checked="${f.met === k}" data-act="pfmet" data-k="${k}">${l}</button>`).join('')}</div>
         ${f.met === 'misto' ? mixHTML(f) : ''}
@@ -3699,7 +3719,7 @@
         ${P ? '' : `<label class="pp-1">Pagato prima, fuori dall'app (come nella lista Word)<input data-pf="legacy" class="num" inputmode="decimal" value="${esc(f.legacy)}" placeholder="0"></label>`}
         <div class="small">${canPay ? `Registrato da <b>${esc(ACC.me().name)}</b> · <b>${esc(agName(ACC.sess.ag))}</b> · ${esc(cassaName(ACC.sess.ag))}` : 'Per incassare scegli l\'agenzia in cui lavori (in alto).'}</div>
         ${canPay ? `<div class="pp-act"><button class="btn primary big" data-act="pfsave">${f.doc === 'scontrino' ? ICON.print + ' ' : ''}${mainBtn}${+f.imp ? ' · ' + money(+f.imp) : ''}</button></div>` : ''}
-        ${hist.length ? `<div class="pp-sec"><span class="pp-l">Incassi registrati</span><div class="pay-hist">${hist.map(x => `<div class="${x.tipo === 'storno' ? 'neg' : ''}${storn.has(x.id) ? ' gone' : ''}"><span>${esc(fmtDate(x.day).slice(0, 5))} · ${esc(x.who)}${x.pid && !pid ? ` · <b>${esc(pName(x.pid) || x.pnome || '')}</b>` : ''}<br>${docPill(x)}</span><span>${(x.parts || []).map(p => `<span class="mpill ${MET_C[p.m] || 'm-alt'}">${esc(MET_L[p.m] || p.m)}</span>`).join(' ')}</span><b>${money(x.tot)}</b>${x.doc === 'fattura' && x.tipo !== 'storno' && !storn.has(x.id) ? `<button class="btn sm${x.danea ? '' : ' primary'}" data-act="danea1" data-id="${x.id}" title="Scarica la fattura per Danea">${x.danea ? 'Di nuovo in Danea' : 'Apri in Danea'}</button>` : ''}${x.tipo !== 'storno' && !storn.has(x.id) && ACC.can('cassa') && (ACC.can('cassaAll') || (x.uid === ACC.sess.uid && x.day === todayISO())) ? `<button class="btn sm ghost" data-act="storno" data-id="${x.id}">Storna</button>` : ''}</div>`).join('')}</div></div>` : ''}
+        ${hist.length ? `<div class="pp-sec"><span class="pp-l">Incassi registrati</span><div class="pay-hist">${hist.map(x => `<div class="${x.tipo === 'storno' ? 'neg' : ''}${storn.has(x.id) ? ' gone' : ''}"><span>${esc(fmtDate(x.day).slice(0, 5))} · ${esc(x.who)}${x.pid && !pid ? ` · <b>${esc(pName(x.pid) || x.pnome || '')}</b>` : ''}<br>${docPill(x)}${rtInfo(x) ? `<br><small class="rt-num">${esc(rtInfo(x))}</small>` : ''}</span><span>${(x.parts || []).map(p => `<span class="mpill ${MET_C[p.m] || 'm-alt'}">${esc(MET_L[p.m] || p.m)}</span>`).join(' ')}</span><b>${money(x.tot)}</b>${x.doc === 'fattura' && x.tipo !== 'storno' && !storn.has(x.id) ? `<button class="btn sm${x.danea ? '' : ' primary'}" data-act="danea1" data-id="${x.id}" title="Scarica la fattura per Danea">${x.danea ? 'Di nuovo in Danea' : 'Apri in Danea'}</button>` : ''}${x.tipo !== 'storno' && !storn.has(x.id) && ACC.can('cassa') && (ACC.can('cassaAll') || (x.uid === ACC.sess.uid && x.day === todayISO())) ? `<button class="btn sm ghost" data-act="storno" data-id="${x.id}">Storna</button>` : ''}</div>`).join('')}</div></div>` : ''}
       </div></section>`;
   }
   // dati per la fattura, con il calcolo del codice fiscale
@@ -3749,6 +3769,7 @@
     // contanti + POS: l'altro si riempie con il resto finché non lo tocchi
     else if (MIX_MAIN.includes(k)) { const o = MIX_MAIN.find(x => x !== k); if (!f.mixT[o]) { const rest = r2(+f.imp - METODI.filter(([x]) => x !== o).reduce((a, [x]) => a + (+f.mix[x] || 0), 0)); f.mix[o] = rest > 0 ? rest : 0; const i = $(`[data-pfm="${o}"]`); if (i) i.value = f.mix[o] ? fmtNum(f.mix[o]) : ''; } }
     const el = $('#pp-mixsum'); if (el) el.innerHTML = mixSumTxt(f);
+    const rt = $('#pp-rt'); if (rt) rt.innerHTML = rtPreviewHTML(f);
   }
   function mixRest(k) {
     const f = UI.pay.f; const rest = r2(+f.imp - METODI.filter(([x]) => x !== k).reduce((a, [x]) => a + (+f.mix[x] || 0), 0));
@@ -3765,6 +3786,7 @@
   function payRecalc() {
     const f = UI.pay && UI.pay.f; if (!f) return; const T = payTotals(f); const el = $('#pp-tot'); if (el) el.innerHTML = payTotHTML(T, f.bigl);
     f.lines.forEach((l, i) => { const c = $('#pl-t' + i); if (c) c.textContent = l.q ? money((+l.q) * ((+l.bus || 0) + (+l.tkt || 0))) : ''; });
+    const rt = $('#pp-rt'); if (rt) rt.innerHTML = rtPreviewHTML(f);
     const t = trip(); const bk = t && deriveBookings(t).find(x => x.id === UI.pay.bkId); const w = $('#pp-warn'); if (w && bk) { bk._m = bkMoney(t, bk); w.textContent = payWarnTxt(f, payMoney(t, bk, UI.pay.pid || '')); }
   }
   function payInput(el) {
@@ -3777,8 +3799,6 @@
     if (d.pfc) { f[d.pfc] = el.checked; return true; }
     return false;
   }
-  // collegamento al registratore telematico: si attiva quando scegliete la stampante
-  function fiscalPrint(mv) { return { ok: false, msg: 'stampante non ancora collegata' }; }
   function paySave() {
     const t = trip(); const D = deriveBookings(t); const bk = D.find(x => x.id === UI.pay.bkId); if (!bk) return payClose();
     if (!ACC.sess.ag) return toast('Scegli prima l\'agenzia in cui lavori (in alto)');
@@ -3798,15 +3818,16 @@
     const agz = T.tot > 0 ? r2(imp * T.agenzia / T.tot) : imp;
     const mv = addMov({ tripId: t.id, tripN: t.nome, tripD: t.data, bkId: bk.id, pid: pid || undefined, pnome: P ? `${P.cognome} ${P.nome}`.trim() : undefined, cliente: f.cliente || (P ? `${P.cognome} ${P.nome}` : `${bkName(bk)} x ${bk.persone.length}`), tel: (P && P.tel) || (bk.persone.find(p => p.tel) || {}).tel || '', tipo, parts,
       doc: f.doc, docStato: f.doc === 'scontrino' || f.doc === 'fattura' ? 'da_emettere' : '', cat: f.cat, desc: f.desc, circuito: T.tkt ? f.circuito : '', emis: T.tkt ? f.emis : '', ant: !!f.ant,
+      rt: f.doc === 'scontrino' ? { chiusura: '', numero: '', dataOra: '', matricola: '', esito: '' } : undefined,
       lines: f.lines.filter(l => +l.q).map(l => ({ l: l.l, q: +l.q, bus: +l.bus || 0, tkt: +l.tkt || 0 })), suppl: T.sup, dir: +f.dir || 0, nT: T.nT, docTot: T.tot, agenzia: agz, biglietti: r2(imp - agz),
       pratica: f.pratica, canale: f.met === 'contanti' || f.met === 'pos' ? '' : f.canale, dataPag: f.met === 'contanti' || f.met === 'pos' ? '' : f.dataPag, pagante: f.pagante, note: f.note, fatt: f.doc === 'fattura' ? Object.assign({}, f.fatt) : null, sigla: sigla(ACC.sess.uid, ACC.me().name) });
     const hc = P ? P.row.cid : bk.head.cid;
     if (f.doc === 'fattura' && hc && S.clients.clienti[hc]) { const c = S.clients.clienti[hc]; Object.assign(c, { cf: f.fatt.cf, sdi: f.fatt.sdi, cap: f.fatt.cap, citta: f.fatt.citta }); if (f.fatt.sesso) c.sesso = f.fatt.sesso; if (f.fatt.nascita) c.nascita = CF.itFromIso(f.fatt.nascita); if (f.fatt.natoA) c.natoA = f.fatt.natoA; if (f.fatt.ind) c.indirizzo = f.fatt.ind; save(); }
     ACC.tlog('info', `Incasso ${money(mv.tot)} (${parts.map(p => MET_L[p.m]).join(' + ')}) · ${DOC_L[f.doc]} · ${mv.cliente}${P ? ' (solo la sua quota, comitiva ' + bkName(bk) + ')' : ''} · ${t.nome}`);
     let msg = `Incasso registrato: ${money(mv.tot)} · ${tipo}`;
-    if (f.doc === 'scontrino') { const r = fiscalPrint(mv); msg += r.ok ? ' · scontrino stampato' : ` · scontrino di ${money(agz)} da emettere (${r.msg})`; }
     if (f.doc === 'fattura') msg += ' · fattura pronta: premi «Apri in Danea» qui sotto';
-    UI.pay.f = payDraft(t, deriveBookings(t).find(x => x.id === bk.id) || bk, pid); commit(); toast(msg);
+    UI.pay.f = payDraft(t, deriveBookings(t).find(x => x.id === bk.id) || bk, pid); commit();
+    if (f.doc === 'scontrino') fiscalPrint(mv).then(r => toast(msg + (r.ok ? ' · scontrino emesso' : ` · scontrino di ${money(agz)} da emettere (${r.msg})`))); else toast(msg);
   }
 
   // ---------- prelievi e apporti di contanti ----------
@@ -3876,7 +3897,7 @@
     return `${contaTabs()}<div class="pagehead"><div><h1>Resoconto del ${esc(fmtDate(day))}</h1><div class="sub">${esc(fmtDate(day, true))} · ${inc.length} ${inc.length === 1 ? 'incasso' : 'incassi'}${ag !== 'tutte' ? ' · ' + esc(agName(ag)) : ' · tutte le agenzie'}</div></div>
         <div class="hbtns"><div class="seg" role="group" aria-label="Agenzia">${[['tutte', 'Tutte'], ...S.cfg.agenzie.map(a => [a.id, a.nome])].map(([k, l]) => `<button data-act="gag" data-v="${k}" aria-pressed="${ag === k}">${esc(l)}</button>`).join('')}</div>
           <button class="btn" data-act="gday" data-v="${dayISO(prev)}">‹</button><input type="date" class="btn" data-gdate="1" value="${esc(day)}" aria-label="Giorno"><button class="btn" data-act="gday" data-v="${dayISO(next)}">›</button>
-          ${inc.some(m => m.doc === 'fattura') ? '<button class="btn" data-act="daneaday">Fatture del giorno per Danea</button>' : ''}<button class="btn" data-act="gexport">Scarica per Excel (foglio CASSA)</button></div></div>
+          ${inc.some(m => m.doc === 'fattura') ? '<button class="btn" data-act="daneaday">Fatture del giorno per Danea</button>' : ''}${rtCfg().daneaScontrini && inc.some(m => m.doc === 'scontrino') ? '<button class="btn" data-act="daneascon">Scontrini del giorno per Danea</button>' : ''}<button class="btn" data-act="gexport">Scarica per Excel (foglio CASSA)</button></div></div>
       <div class="tiles"><div class="tile dark"><span>Incassato</span><b>${money(tot)}</b><small>${inc.length} movimenti</small></div>${METG.map(([k, l]) => `<div class="tile"><span><i class="mdot ${MET_C[k]}"></i>${l}</span><b>${money(per[k] || 0)}</b>${k === 'altro' && Object.keys(altri).length ? `<small>${Object.entries(altri).map(([x, v]) => `${esc(MET_L[x] || x)} ${esc(fmtNum(v))}`).join(' · ')}</small>` : ''}</div>`).join('')}</div>
       <div class="three">
         <section class="box form"><h3>Cassa contanti</h3><div class="kv"><span>Inizio giornata</span><b>${money(sal.inizio)}</b></div><div class="kv"><span>Contanti incassati</span><b>${money(sal.inc)}</b></div>${sal.prel ? `<div class="kv"><span>Prelievi</span><b>− ${money(sal.prel)}</b></div>` : ''}${sal.app ? `<div class="kv"><span>Apporti</span><b>+ ${money(sal.app)}</b></div>` : ''}<div class="kv tot"><span>Fine giornata</span><b>${money(sal.fine)}</b></div>${ch && ch.contati && ch.contati.contanti != null ? `<div class="kv"><span>Contati alla chiusura</span><b>${money(ch.contati.contanti)} ${Math.abs(ch.contati.contanti - (per.contanti || 0)) < 0.01 ? '<span class="pill ok">quadra</span>' : ''}</b></div>` : ''}</section>
@@ -3885,7 +3906,7 @@
       <section class="box tablecard"><h2 class="ch">Per categoria</h2><div class="tscroll"><table class="rt"><thead><tr><th>Categoria</th><th class="r">Incassi</th><th class="r">Totale</th><th class="r">Parte agenzia</th><th class="r">Biglietti</th></tr></thead><tbody>${Object.entries(byCat).map(([k, o]) => `<tr><td>${esc(k)}</td><td class="r">${o.n}</td><td class="r">${money(o.tot)}</td><td class="r">${money(o.ag)}</td><td class="r">${money(o.tk)}</td></tr>`).join('') || '<tr><td colspan="5" class="emptyrow">Nessun incasso.</td></tr>'}</tbody></table></div></section>
       <section class="box tablecard"><h2 class="ch">Movimenti del giorno</h2><div class="tscroll"><table class="rt xl"><thead><tr><th>Ora</th><th>Op.</th><th>Doc.</th><th>Categoria</th><th>Cognome e nome</th><th>Descrizione</th><th>Circuito</th><th class="r">Q</th><th class="r">€ bus</th><th class="r">€ tkt</th><th class="r">Suppl.</th><th class="r">Diritti</th><th class="r">Totale</th><th class="r">Cash</th><th class="r">POS</th><th class="r">Altro</th><th class="r">Danea</th><th class="r">Saldo</th><th>Agenzia</th></tr></thead><tbody>
         ${movs.map(m => { const c = (m.parts || []).filter(p => p.m === 'contanti').reduce((a, p) => a + p.a, 0); run = r2(run + c); const x = xlRow(m, run); const L = m.lines || [];
-          return `<tr class="${m.tipo === 'storno' || m.tipo === 'prelievo' ? 'neg' : ''}"><td>${esc(hm(m.at))}</td><td>${esc(x[1])}</td><td>${esc(x[2])}${m.docStato === 'da_emettere' ? '<br><small>da emettere</small>' : ''}</td><td>${esc(x[5])}</td><td>${esc(x[6])}</td><td>${esc(x[7])}</td><td>${esc(m.circuito || '')}</td><td class="r">${L.reduce((a, l) => a + l.q, 0) || ''}</td><td class="r">${L.length ? money(L.reduce((a, l) => a + l.q * l.bus, 0)) : ''}</td><td class="r">${L.some(l => l.tkt) ? money(L.reduce((a, l) => a + l.q * l.tkt, 0)) : ''}</td><td class="r">${m.suppl ? money(m.suppl) : ''}</td><td class="r">${x[38] ? money(x[38]) : ''}</td><td class="r"><b>${isInc(m) ? money(x[23]) : ''}</b></td><td class="r">${x[25] ? money(x[25]) : ''}</td><td class="r">${x[26] ? money(x[26]) : ''}</td><td class="r">${x[27] ? money(x[27]) + '<br><small>' + esc(x[28]) + '</small>' : ''}</td><td class="r">${isInc(m) ? money(x[33]) : ''}</td><td class="r">${money(run)}</td><td>${esc(x[42])}</td></tr>`; }).join('') || '<tr><td colspan="19" class="emptyrow">Nessun movimento.</td></tr>'}
+          return `<tr class="${m.tipo === 'storno' || m.tipo === 'prelievo' ? 'neg' : ''}"><td>${esc(hm(m.at))}</td><td>${esc(x[1])}</td><td>${esc(x[2])}${m.docStato === 'da_emettere' ? '<br><small>da emettere</small>' : ''}${rtInfo(m) ? `<br><small class="rt-num">${esc(rtInfo(m))}</small>` : ''}</td><td>${esc(x[5])}</td><td>${esc(x[6])}</td><td>${esc(x[7])}</td><td>${esc(m.circuito || '')}</td><td class="r">${L.reduce((a, l) => a + l.q, 0) || ''}</td><td class="r">${L.length ? money(L.reduce((a, l) => a + l.q * l.bus, 0)) : ''}</td><td class="r">${L.some(l => l.tkt) ? money(L.reduce((a, l) => a + l.q * l.tkt, 0)) : ''}</td><td class="r">${m.suppl ? money(m.suppl) : ''}</td><td class="r">${x[38] ? money(x[38]) : ''}</td><td class="r"><b>${isInc(m) ? money(x[23]) : ''}</b></td><td class="r">${x[25] ? money(x[25]) : ''}</td><td class="r">${x[26] ? money(x[26]) : ''}</td><td class="r">${x[27] ? money(x[27]) + '<br><small>' + esc(x[28]) + '</small>' : ''}</td><td class="r">${isInc(m) ? money(x[33]) : ''}</td><td class="r">${money(run)}</td><td>${esc(x[42])}</td></tr>`; }).join('') || '<tr><td colspan="19" class="emptyrow">Nessun movimento.</td></tr>'}
       </tbody></table></div></section>`;
   }
 
@@ -3963,6 +3984,123 @@
     S.cfg.danea = { iva: ($('#dn-iva').value || '').trim() || '74ter', pag }; save(); toast('Impostazioni di Danea salvate');
   }
 
+  // ---------- registratore telematico: preparazione allo scontrino diretto (2.1) ----------
+  // L'invio vero al registratore sta nel file registratore.js (per ora non collegato).
+  // Qui: impostazioni (tipi di pagamento e reparti del registratore), anteprima nel riquadro dell'incasso,
+  // dati dello scontrino emesso sul movimento, file Danea degli scontrini del giorno.
+  const RT_PARTS = [['bus', 'Quota viaggio / bus'], ['suppl', 'Supplemento fila'], ['dir', 'Diritti di prevendita']];
+  const RT_DEF = () => ({ pag: {}, rep: {}, daneaScontrini: false });
+  const rtCfg = () => { const c = Object.assign(RT_DEF(), S.cfg.rt || {}); c.pag = c.pag || {}; c.rep = c.rep || {}; return c; };
+  const rtRep = (cat, k) => { const R = rtCfg().rep; return String(((R[cat] || {})[k]) || ((R['*'] || {})[k]) || '').trim(); };
+  const rtPag = m => { const p = rtCfg().pag[m] || {}; return { n: String(p.n || '').trim(), d: String(p.d || '').trim() }; };
+  const rr2 = v => Math.round((+v || 0) * 100) / 100;
+  // cosa andrà sul registratore: righe della parte agenzia (bus, supplemento fila, diritti) e tipi di pagamento.
+  // Se si incassa solo una parte del documento (acconto o saldo di quanto già pagato prima), sul registratore va una riga sola «Pagamento parziale» con l'importo della parte agenzia.
+  function rtDraft(m) {
+    const L = (m.lines || []).filter(l => +l.q); const cat = m.cat || '';
+    const bus = rr2(L.reduce((a, l) => a + (+l.q) * (+l.bus || 0), 0)); const sup = rr2(+m.suppl || 0); const nT = +m.nT || L.reduce((a, l) => a + (+l.tkt ? +l.q : 0), 0); const dirT = rr2(nT * (+m.dir || 0));
+    const full = rr2(bus + sup + dirT); const ag = rr2(m.agenzia != null ? m.agenzia : full);
+    let righe = [];
+    if (full > 0 && Math.abs(ag - full) < 0.01) {
+      L.filter(l => +l.bus).forEach(l => righe.push({ part: 'bus', desc: `${m.desc || 'Viaggio'}${L.length > 1 || l.l !== 'Intero' ? ' · ' + l.l : ''}`, q: +l.q, prezzo: rr2(l.bus), reparto: rtRep(cat, 'bus') }));
+      if (sup) righe.push({ part: 'suppl', desc: 'Supplemento fila', q: 1, prezzo: sup, reparto: rtRep(cat, 'suppl') });
+      if (dirT) righe.push({ part: 'dir', desc: 'Diritti di prevendita', q: nT, prezzo: rr2(m.dir), reparto: rtRep(cat, 'dir') });
+    } else if (ag > 0) righe.push({ part: 'bus', desc: `Pagamento parziale · ${m.desc || 'Viaggio'}`, q: 1, prezzo: ag, reparto: rtRep(cat, 'bus'), acconto: true });
+    const totale = rr2(righe.reduce((a, r) => a + r.q * r.prezzo, 0));
+    // pagamenti in proporzione alla parte agenzia (i biglietti del circuito restano fuori dallo scontrino)
+    const parts = (m.parts || []).filter(p => +p.a); const tp = rr2(parts.reduce((a, p) => a + (+p.a), 0));
+    let rest = totale; const pagamenti = parts.map((p, i) => { const imp = i === parts.length - 1 ? rr2(rest) : rr2(tp ? totale * p.a / tp : 0); rest = rr2(rest - imp); const P = rtPag(p.m); return { metodo: p.m, n: P.n, d: P.d, importo: imp }; });
+    const avvisi = [];
+    const used = new Set(righe.map(r => r.part));
+    RT_PARTS.forEach(([k, l]) => { if (used.has(k) && !rtRep(cat, k)) avvisi.push(k === 'dir' ? 'Reparto dei diritti non impostato' : k === 'suppl' ? 'Reparto del supplemento fila non impostato' : 'Reparto della quota viaggio (bus) non impostato'); });
+    pagamenti.forEach(p => { if (!p.n) avvisi.push(`Tipo di pagamento del registratore per «${MET_L[p.metodo] || p.metodo}» non impostato`); });
+    return { righe, pagamenti, totale, avvisi };
+  }
+  // anteprima nel riquadro dell'incasso (solo per lo scontrino)
+  function rtPreviewHTML(f) {
+    if (!f || f.doc !== 'scontrino') return '';
+    const T = payTotals(f); const imp = rr2(+f.imp || 0);
+    const parts = f.met === 'misto' ? METODI.map(([k]) => ({ m: k, a: rr2(f.mix[k] || 0) })).filter(p => p.a > 0) : (imp ? [{ m: f.met, a: imp }] : []);
+    const ag = imp > 0 && T.tot > 0 ? rr2(imp * T.agenzia / T.tot) : T.agenzia;
+    const d = rtDraft({ lines: f.lines, suppl: T.sup, dir: f.dir, nT: T.nT, cat: f.cat, desc: f.desc, agenzia: ag, parts });
+    if (!d.righe.length) return '';
+    return `<div class="pp-rt"><div class="pp-rt-h">${ICON.print} Cosa andrà sul registratore</div>
+      <table><thead><tr><th>Descrizione</th><th class="r">Q</th><th class="r">Prezzo</th><th class="r">Reparto</th></tr></thead><tbody>
+      ${d.righe.map(r => `<tr><td>${esc(r.desc)}</td><td class="r">${r.q}</td><td class="r">${esc(money(r.prezzo))}</td><td class="r">${r.reparto ? esc(r.reparto) : '<span class="rt-miss">—</span>'}</td></tr>`).join('')}
+      <tr class="tot"><td>Totale scontrino</td><td></td><td class="r">${esc(money(d.totale))}</td><td></td></tr></tbody></table>
+      ${d.pagamenti.length ? `<div class="pp-rt-p">Pagamento: ${d.pagamenti.map(p => `<b>${esc(MET_L[p.metodo] || p.metodo)}</b> ${esc(money(p.importo))} → ${p.n ? `<span class="rt-ok">${esc(p.n)} ${esc(p.d)}</span>` : '<span class="rt-miss">—</span>'}`).join(' · ')}</div>` : ''}
+      ${d.avvisi.length ? `<div class="rt-warn">${ICON.alert}<div>${d.avvisi.map(esc).join('<br>')}<br><small>Si imposta in Impostazioni › Registratore telematico.</small></div></div>` : ''}</div>`;
+  }
+  // emissione: chiede a registratore.js e scrive nel registro l'esito (per ora sempre «non ancora collegato»)
+  async function fiscalPrint(mv) {
+    const ag = S.cfg.agenzie.find(a => a.id === mv.ag) || {}; const d = rtDraft(mv);
+    let r;
+    try { r = window.VIP_REGISTRATORE && VIP_REGISTRATORE.emettiScontrino ? await VIP_REGISTRATORE.emettiScontrino(mv, { agenzia: { id: ag.id, nome: ag.nome, rtIp: ag.rtIp || '', rtMatricola: ag.rtMatricola || '' }, scontrino: d }) : { ok: false, msg: 'file registratore.js mancante' }; }
+    catch (e) { r = { ok: false, msg: 'errore: ' + (e && e.message || e) }; }
+    r = r || { ok: false, msg: 'nessuna risposta' };
+    ACC.tlog(r.ok ? 'info' : 'avviso', `Registratore ${agName(mv.ag)}${ag.rtIp ? ' (' + ag.rtIp + ')' : ''}: scontrino di ${money(d.totale)} · ${mv.cliente} · esito: ${r.ok ? 'emesso' + (r.numero ? ' n. ' + r.numero : '') : r.msg}`);
+    DIAG.ev(r.ok ? 'azione' : 'avviso', `Scontrino ${r.ok ? 'emesso' : 'non emesso'}: ${r.msg || ''}`, { mov: mv.id, totale: d.totale });
+    if (r.ok) movPatch(mv.id, { docStato: 'emesso', rt: { chiusura: r.chiusura || '', numero: r.numero || '', dataOra: r.dataOra || new Date().toISOString(), matricola: r.matricola || ag.rtMatricola || '', esito: 'emesso' } });
+    else movPatch(mv.id, { rt: Object.assign({ chiusura: '', numero: '', dataOra: '', matricola: '' }, mv.rt || {}, { esito: r.msg || 'non emesso' }) });
+    return r;
+  }
+  // dati dello scontrino emesso (quando ci sono): «Scontrino n. 0012-0034 · chiusura 0012 · 29/10 16:30»
+  function rtInfo(m) {
+    const x = m.rt && m.rt.numero ? m.rt : null; const rif = m.rtRif && m.rtRif.numero ? m.rtRif : null; if (!x && !rif) return '';
+    const dt = v => { const d = new Date(v); return isNaN(d) ? '' : `${fmtDate(dayISO(d)).slice(0, 5)} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
+    return x ? `Scontrino n. ${x.numero}${x.chiusura ? ' · chiusura ' + x.chiusura : ''}${x.dataOra ? ' · ' + dt(x.dataOra) : ''}${x.matricola ? ' · ' + x.matricola : ''}` : `Storno dello scontrino n. ${rif.numero}${rif.chiusura ? ' (chiusura ' + rif.chiusura + ')' : ''}`;
+  }
+
+  // ---- Impostazioni › Registratore telematico ----
+  function rtSettingsHTML() {
+    const C = rtCfg(); const rep = (key, k) => `<input class="rt-in" data-rtrep="${esc(key)}" data-k="${k}" value="${esc(((C.rep[key] || {})[k]) || '')}" inputmode="numeric" placeholder="${key === '*' ? 'n°' : 'come sopra'}" aria-label="Reparto ${esc(key)} ${k}">`;
+    return `<h2>Registratore telematico</h2><p class="sub">Preparazione allo scontrino diretto dall'app (Custom Q3X-F, uno per agenzia). L'indirizzo e la matricola di ogni registratore si scrivono in Impostazioni › Agenzie e casse. Per ora l'app non manda nulla al registratore: gli scontrini restano «da emettere» come prima.</p>
+      <div class="box form"><h3>Tipi di pagamento del registratore</h3><div class="small">Per ogni metodo dell'app, il numero e la descrizione del pagamento come sono programmati sul registratore (es. 1 Contanti, 8 Bancomat).</div>
+        <table class="rt rt-tab"><thead><tr><th>Metodo nell'app</th><th>N° sul registratore</th><th>Descrizione sul registratore</th></tr></thead><tbody>
+        ${METODI.map(([k, l]) => `<tr><td>${esc(l)}</td><td><input class="rt-in" data-rtpag="${k}" data-k="n" value="${esc((C.pag[k] || {}).n || '')}" inputmode="numeric" placeholder="n°" aria-label="Numero pagamento ${esc(l)}"></td><td><input class="rt-in wide" data-rtpag="${k}" data-k="d" value="${esc((C.pag[k] || {}).d || '')}" placeholder="es. ${k === 'contanti' ? 'Contanti' : k === 'pos' ? 'Bancomat' : l}" aria-label="Descrizione pagamento ${esc(l)}"></td></tr>`).join('')}
+        </tbody></table>
+        <div class="rt-note">${ICON.alert}<span>Bonifico, PayPal, Buono regalo e Voucher: da verificare con il commercialista.</span></div></div>
+      <div class="box form"><h3>Reparti del registratore</h3><div class="small">Il numero del reparto per ogni parte dello scontrino. La prima riga vale per tutte le categorie; nelle righe sotto si scrive solo dove una categoria usa un reparto diverso (vuoto = come la prima riga).</div>
+        <table class="rt rt-tab"><thead><tr><th>Categoria</th>${RT_PARTS.map(([, l]) => `<th>${esc(l)}</th>`).join('')}</tr></thead><tbody>
+        <tr class="rt-all"><td><b>Tutte le categorie</b></td>${RT_PARTS.map(([k]) => `<td>${rep('*', k)}</td>`).join('')}</tr>
+        ${CATS.map(c => `<tr><td>${esc(c)}</td>${RT_PARTS.map(([k]) => `<td>${rep(c, k)}</td>`).join('')}</tr>`).join('')}
+        </tbody></table></div>
+      <div class="box form"><h3>File Danea degli scontrini</h3>
+        <label class="kv"><span><b>Pulsante «Scontrini del giorno per Danea»</b> nel resoconto giornaliero<br><small>Accendilo solo dopo la prova di importazione: Danea deve registrare gli scontrini senza rimandarli al registratore.</small></span><input type="checkbox" class="sw" id="rt-dan"${C.daneaScontrini ? ' checked' : ''}></label></div>
+      <div><button class="btn primary" data-act="savert">Salva</button></div>`;
+  }
+  function rtSave() {
+    const C = { pag: {}, rep: {}, daneaScontrini: !!($('#rt-dan') && $('#rt-dan').checked) };
+    $$('[data-rtpag]').forEach(i => { const v = i.value.trim(); if (!v) return; (C.pag[i.dataset.rtpag] = C.pag[i.dataset.rtpag] || {})[i.dataset.k] = v; });
+    $$('[data-rtrep]').forEach(i => { const v = i.value.trim(); if (!v) return; (C.rep[i.dataset.rtrep] = C.rep[i.dataset.rtrep] || {})[i.dataset.k] = v; });
+    S.cfg.rt = C; save(); ACC.tlog('info', `Impostazioni del registratore salvate (pagamenti: ${Object.keys(C.pag).length}, reparti: ${Object.keys(C.rep).length}, file Danea scontrini: ${C.daneaScontrini ? 'acceso' : 'spento'})`); toast('Impostazioni del registratore salvate'); render();
+  }
+
+  // ---- Danea: scontrini del giorno come «Vendita al banco» ----
+  function daneaScontrini(movs, name) {
+    const st = new Set(movs.filter(x => x.storno).map(x => x.storno));
+    const scon = movs.filter(m => m.doc === 'scontrino' && m.tipo !== 'storno');
+    const ok = scon.filter(m => !st.has(m.id)); const fuori = scon.filter(m => st.has(m.id));
+    if (!ok.length && !fuori.length) return toast('Nessuno scontrino in questo giorno');
+    const C = daneaCfg();
+    const doc = m => { const d = rtDraft(m); const t = S.trips.find(x => x.id === m.tripId);
+      const rows = d.righe.map(r => `<Row>${xt('Code', (r.part === 'bus' && t && t.codDanea) || '')}${xt('Description', r.desc)}<Qty>${r.q}</Qty><Price>${n2(r.prezzo)}</Price><VatCode>${xq(C.iva)}</VatCode></Row>`).join('');
+      const pays = d.pagamenti.map(p => `<Payment><Advance>false</Advance><Date>${m.day}</Date><Amount>${n2(p.importo)}</Amount><Paid>true</Paid></Payment>`).join('');
+      const met = (m.parts || [])[0] ? m.parts[0].m : ''; const pn = (C.pag || {})[met] || MET_L[met] || '';
+      const note = [`Viaggi in Pullman · scontrino del ${fmtDate(m.day)} ${hm(m.at)}`, rtInfo(m), `${(m.parts || []).map(p => MET_L[p.m] || p.m).join(' + ')} · ${m.who} · ${agName(m.ag)}`].filter(Boolean).join(' · ');
+      return `<Document><DocumentType>B</DocumentType><Date>${m.day}</Date>${xt('CustomerName', m.cliente)}<PricesIncludeVat>true</PricesIncludeVat>${xt('PaymentName', pn)}${xt('InternalComment', note)}<Rows>${rows}</Rows><Payments>${pays}</Payments></Document>`; };
+    if (ok.length) {
+      const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<EasyfattDocuments AppVersion="2" Creator="Viaggi in Pullman ${xq(VERSION)}"><Documents>${ok.map(doc).join('')}</Documents></EasyfattDocuments>\n`;
+      const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([xml], { type: 'application/xml' })); a.download = name.replace(/[\\/:*?"<>|]+/g, ' ').trim() + '.DefXml';
+      document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+      ok.forEach(m => movPatch(m.id, { danea: new Date().toISOString(), daneaBy: ACC.me().name }));
+    }
+    ACC.tlog('info', `Danea: file degli scontrini «${name}» · ${ok.length} scontrini${fuori.length ? ` · ${fuori.length} stornati lasciati fuori` : ''}`);
+    if (fuori.length) openModal('Scontrini stornati', `<div class="warnbox">${ok.length ? `Nel file ci sono ${ok.length} scontrini. ` : 'Nessuno scontrino nel file. '}Questi scontrini sono stati stornati e <b>non</b> sono nel file: vanno sistemati a mano in Danea.</div>
+      <table class="rt"><thead><tr><th>Ora</th><th>Cliente</th><th class="r">Importo</th><th>Scontrino</th></tr></thead><tbody>${fuori.map(m => `<tr><td>${esc(hm(m.at))}</td><td>${esc(m.cliente)}</td><td class="r">${money(m.agenzia != null ? m.agenzia : m.tot)}</td><td>${esc(rtInfo(m) || 'da emettere')}</td></tr>`).join('')}</tbody></table>`, `<button class="btn primary" data-act="close">Ho capito</button>`);
+    else toast(`File per Danea scaricato: ${ok.length} scontrini (aprilo con un doppio clic)`);
+  }
+
   // ---------- impostazioni a sezioni ----------
   const SSEC = [
     ['account', 'Il mio account', 'A', '#6E6E73', null],
@@ -3972,6 +4110,8 @@
     ['luoghi', 'Luoghi di partenza e mappe', 'M', '#0A6CD6', 'settings'],
     ['whatsapp', 'WhatsApp ai clienti', 'W', '#1FA855', 'settings'],
     ['danea', 'Danea Easyfatt', 'D', '#E07B00', 'settings'],
+    ['registratore', 'Registratore telematico', 'R', '#5B6B7F', 'settings'],
+    ['suppl', 'Supplementi file', 'F', '#C2410C', 'settings'],
     ['sync', 'Sincronizzazione', 'S', '#2B2F33', null],
     ['backup', 'Copia di sicurezza', 'C', '#6E6E73', 'settings']
   ];
@@ -4003,7 +4143,7 @@
         <div class="two"><div class="box form"><h3>Cosa può fare ogni ruolo</h3><ul class="small ul"><li><b>Operatore</b>: liste, posti sul bus, anagrafica, incassi e resoconto della sua agenzia, messaggi ai clienti.</li><li><b>Master</b>: tutto quello dell'operatore, più contabilità, impostazioni e account.</li><li><b>Contabilità</b>: vede cassa e contabilità di tutte le agenzie, senza modificare.</li></ul></div>
         <div class="box form"><h3>Password dimenticata</h3><div class="small">Premi «Reimposta password»: scegli una password provvisoria e dilla alla persona. Al primo accesso l'app le chiede di sceglierne una nuova.</div></div></div>`;
     } else if (sec === 'agenzie') body = `<h2>Agenzie e casse</h2><p class="sub">Ogni agenzia ha la sua cassa: gli incassi vanno nella cassa dell'agenzia scelta all'accesso.</p>
-      ${S.cfg.agenzie.map((a, i) => `<div class="box form agf"><div class="grid3"><label>Agenzia<input data-cfgag="${i}" data-k="nome" value="${esc(a.nome)}"></label><label>Nome della cassa<input data-cfgag="${i}" data-k="cassa" value="${esc(a.cassa || '')}"></label><label>Indirizzo<input data-cfgag="${i}" data-k="indirizzo" value="${esc(a.indirizzo || '')}" placeholder="via, numero, città"></label></div><div class="grid3"><label>Contanti in cassa all'inizio (riporto) €<input data-cfgag="${i}" data-k="cassaIniziale" inputmode="decimal" value="${esc(a.cassaIniziale || '')}" placeholder="0"></label><span class="small" style="grid-column:span 2;align-self:end">Il fondo cassa da cui parte il conto dei contanti nel resoconto giornaliero (colonna «Saldo» del foglio CASSA).</span></div></div>`).join('')}`;
+      ${S.cfg.agenzie.map((a, i) => `<div class="box form agf"><div class="grid3"><label>Agenzia<input data-cfgag="${i}" data-k="nome" value="${esc(a.nome)}"></label><label>Nome della cassa<input data-cfgag="${i}" data-k="cassa" value="${esc(a.cassa || '')}"></label><label>Indirizzo<input data-cfgag="${i}" data-k="indirizzo" value="${esc(a.indirizzo || '')}" placeholder="via, numero, città"></label></div><div class="grid3"><label>Contanti in cassa all'inizio (riporto) €<input data-cfgag="${i}" data-k="cassaIniziale" inputmode="decimal" value="${esc(a.cassaIniziale || '')}" placeholder="0"></label><span class="small" style="grid-column:span 2;align-self:end">Il fondo cassa da cui parte il conto dei contanti nel resoconto giornaliero (colonna «Saldo» del foglio CASSA).</span></div><div class="grid3"><label>Indirizzo del registratore telematico<input data-cfgag="${i}" data-k="rtIp" value="${esc(a.rtIp || '')}" placeholder="es. 192.168.1.50" inputmode="decimal" autocomplete="off"></label><label>Matricola del registratore (facoltativa)<input data-cfgag="${i}" data-k="rtMatricola" value="${esc(a.rtMatricola || '')}" placeholder="es. 99MEY012345" autocomplete="off"></label><span class="small" style="align-self:end">Custom Q3X-F collegato al router dell'agenzia. Per ora l'app non lo usa: serve per il collegamento diretto.</span></div></div>`).join('')}`;
     else if (sec === 'luoghi') body = `<div class="sh"><div><h2>Luoghi di partenza e mappe</h2><p class="sub">Per ogni punto di salita incolla il link di Google Maps: nel messaggio WhatsApp il cliente lo tocca e trova il punto preciso. Il codice è quello della colonna «part» della lista (es. RG, MD).</p></div><button class="btn primary" data-act="lnew">${ICON.plus} Aggiungi luogo</button></div>
       <div class="box tablecard"><div class="tscroll"><table class="rt luoghi"><thead><tr><th>Codice</th><th>Città</th><th>Punto di salita</th><th>Link Google Maps</th><th></th></tr></thead><tbody>
       ${(S.cfg.luoghi || []).map((l, i) => `<tr><td><input data-cfgl="${i}" data-k="code" value="${esc(l.code || '')}" placeholder="RG" aria-label="Codice" class="code-in"></td><td><input data-cfgl="${i}" data-k="citta" value="${esc(l.citta || '')}" placeholder="Ragusa" aria-label="Città"></td><td><input data-cfgl="${i}" data-k="luogo" value="${esc(l.luogo || '')}" placeholder="es. Palazama" aria-label="Punto di salita"></td><td><input data-cfgl="${i}" data-k="maps" value="${esc(l.maps || '')}" placeholder="https://maps.app.goo.gl/…" aria-label="Link Google Maps"></td>
@@ -4021,6 +4161,13 @@
         <div class="kv"><span>Ultima sincronizzazione</span><b>${st.last ? esc(st.last.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' })) : '—'}</b></div><div class="kv"><span>Questo computer</span><b>${esc(STORE.device.id)}</b></div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">${st.linked ? '<button class="btn" data-act="syncnow">Sincronizza adesso</button>' : st.hasKey ? '<button class="btn primary" data-act="glink">Collega Dropbox</button>' : ''}</div></div>`; }
     else if (sec === 'danea') body = daneaSettingsHTML();
+    else if (sec === 'registratore') body = rtSettingsHTML();
+    else if (sec === 'suppl') { const C = supplCfg(); const row = (k, l) => `<tr><td>${l}</td>${['tour', 'gita'].map(c => `<td><span class="sp-in"><input class="rt-in" data-spc="${c}" data-k="${k}" inputmode="decimal" value="${esc(String(C[c][k] ?? '').replace('.', ','))}" aria-label="${l} ${c}"><i>€</i></span></td>`).join('')}</tr>`;
+      body = `<h2>Supplementi file</h2><p class="sub">Il prezzario fisso dei posti nelle prime file. Vale per tutti i tour e le gite in giornata (non per eventi e biglietteria); nella lista la fila si sceglie dalla colonna «fila» e il supplemento entra da solo nel prezzo della persona.</p>
+        <div class="box form"><table class="rt rt-tab sp-tab"><thead><tr><th>Posto</th><th>Tour <small>a persona, al giorno</small></th><th>Gite in giornata <small>a persona</small></th></tr></thead><tbody>
+        ${row(1, '1ª fila')}${row(2, '2ª fila')}${row(3, '3ª fila')}${row(4, '4ª fila')}${row('p2', '1ª fila 2ª porta')}</tbody></table>
+        <div class="small">Esempio: tour di 3 giorni in 1ª fila = 3 × ${esc(fmtNum(C.tour[1]))} € = ${esc(fmtNum(3 * C.tour[1]))} € a persona.</div>
+        <div><button class="btn primary" data-act="savesuppl">Salva</button></div></div>`; }
     else if (sec === 'backup') body = `<h2>Copia di sicurezza</h2><p class="sub">Dropbox tiene già tutto, anche le versioni precedenti dei file. Qui puoi scaricare una copia completa o recuperare i dati della versione di prova.</p>
       <div class="box form"><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" data-act="export">Scarica una copia</button><label class="btn" for="s-restore">Recupera da una copia (anche della versione OnBoard)<input id="s-restore" type="file" accept=".json,application/json" hidden></label></div>
       <div class="small">Recuperando una copia, i viaggi si aggiungono a quelli che ci sono già: se un viaggio dell'elenco 2027 è ancora vuoto, la lista della copia ci entra dentro.</div></div>`;
@@ -4291,7 +4438,7 @@
 
   // ---------- render ----------
   const FOCUS_KEYS = ['note', 'st', 'depsel', 'hq', 'aq', 'r', 'ar', 'nr', 'f', 'q', 'qs', 'qt', 'tf', 'dep2', 'dep', 'k', 'bind', 'cl', 'cfgag', 'cfgl', 'pf', 'pl', 'pff', 'pfm', 'usig'];
-  const ACT_PERM = { unew: 'users', unewm: 'tech', ureset: 'users', usave: 'users', resetall: 'tech', doresetall: 'tech', savekeys: 'tech', wipelocal: 'tech', lgf: 'tech', lexport: 'tech', diagexport: 'tech', lnew: 'settings', ldel: 'settings', savewa: 'settings', savetel: 'settings', savedanea: 'settings', export: 'settings', pay: 'cassa', paypanel: 'viaggi', paywho: 'viaggi', lmove: 'viaggi', lmove1: 'viaggi', detach: 'viaggi', reattach: 'viaggi', noteadd: 'viaggi', notedel: 'viaggi', suppadd: 'viaggi', suppdel: 'viaggi', pfsave: 'cassa', cashmov: 'cassa', cashsave: 'cassa', storno: 'cassa', cclose: 'cassa', ccsave: 'cassa', clnew: 'anag', cldel: 'anag', impgo: 'anag', newtrip: 'viaggi', deltrip: 'viaggi' };
+  const ACT_PERM = { unew: 'users', unewm: 'tech', ureset: 'users', usave: 'users', resetall: 'tech', doresetall: 'tech', savekeys: 'tech', wipelocal: 'tech', lgf: 'tech', lexport: 'tech', diagexport: 'tech', lnew: 'settings', ldel: 'settings', savewa: 'settings', savetel: 'settings', savedanea: 'settings', savert: 'settings', savesuppl: 'settings', filaset: 'viaggi', export: 'settings', pay: 'cassa', paypanel: 'viaggi', paywho: 'viaggi', lmove: 'viaggi', lmove1: 'viaggi', detach: 'viaggi', reattach: 'viaggi', noteadd: 'viaggi', notedel: 'viaggi', suppadd: 'viaggi', suppdel: 'viaggi', pfsave: 'cassa', cashmov: 'cassa', cashsave: 'cassa', storno: 'cassa', cclose: 'cassa', ccsave: 'cassa', clnew: 'anag', cldel: 'anag', impgo: 'anag', newtrip: 'viaggi', deltrip: 'viaggi' };
   const VIEW_PERM = { home: 'viaggi', models: 'viaggi', trip: 'viaggi', anag: 'anag', conta: 'conta', super: 'tech' };
   let lastNav = '', lastSess = '', lastGateHTML = '';
   function render() {
@@ -4387,7 +4534,26 @@
     if (bk && head && !bigl) h += `<div class="pm-sec">${B('abituale', ICON.star, 'Cliente abituale <small>precedenza nelle prime file</small>', `data-id="${bk.id}"`, 'tg' + (bk.head.abituale ? ' on' : ''))}${B('saldato', ICON.check, 'Saldato <small>anche se il prezzo è diverso</small>', `data-id="${bk.id}"`, 'tg' + (bk.head.saldato ? ' on' : ''))}</div>`;
     if (bk) h += `<div class="pm-sec">${B('toatt', ICON.clock, comit ? 'Tutta la comitiva in lista d\'attesa' : 'In lista d\'attesa', `data-id="${bk.id}"`)}${bigl ? B('toann', ICON.xcirc, 'Vuole vendere il biglietto', `data-id="${bk.id}" data-k="vende"`) : `<details class="pm-det"><summary>${ICON.xcirc}<span>Non parte più…</span></summary>${B('toann', '', 'da rimborsare', `data-id="${bk.id}" data-k="da"`)}${B('toann', '', 'già rimborsato', `data-id="${bk.id}" data-k="fatto"`)}${B('toann', '', 'senza rimborso', `data-id="${bk.id}" data-k="no"`)}</details>`}</div>`;
     h += `<div class="pm-sec">${B('rowdel', ICON.trash, 'Elimina questa riga', `data-id="${id}"`, 'danger')}</div>`;
-    openPop(el, h); const p = $('#pop'); if (p) p.classList.add('rmenu');
+    openPop(el, h, 'rmenu');
+  }
+  // menu della colonna «fila»: le file a pagamento con prezzo e posti liberi (le file finite non compaiono),
+  // lato sinistro o destro; in fondo, a scomparsa, le richieste senza supplemento
+  function filaMenu(id, el) {
+    const t = trip(); const r = rowById(t, id); if (!r) return; const FI = filaInfo(t); const cur = String(r.fila || '').trim().toLowerCase();
+    const D = deriveBookings(t); const bk = D.find(b => b.persone.some(p => p.id === id)); const P = bk && bk.persone.find(p => p.id === id);
+    const tour = tripCat(t) === 'tour'; const pr = v => v ? `+${fmtNum(v)} €${tour ? ` <small>(${fmtNum(v / FI.days)} € × ${FI.days} giorni)</small>` : ''}` : '<small>senza prezzo</small>';
+    const B = (v, l, n) => `<button class="fm-b${cur === v.toLowerCase() ? ' on' : ''}" data-act="filaset" data-id="${id}" data-v="${esc(v)}">${l}${n != null ? `<i>${n}</i>` : ''}</button>`;
+    const rows = FI.rows.map(x => { const mine = cur.startsWith(x.k + ' fila'); if (!x.free && !mine) return '';
+      return `<div class="fm-r"><div class="fm-l"><b>${x.label}</b><span>${pr(x.price)}</span></div><div class="fm-o">${B(`${x.k} fila`, 'Qualsiasi', x.free)}${x.freeSx || cur === `${x.k} fila sx` ? B(`${x.k} fila sx`, 'Sx', x.freeSx) : ''}${x.freeDx || cur === `${x.k} fila dx` ? B(`${x.k} fila dx`, 'Dx', x.freeDx) : ''}</div></div>`; }).join('');
+    const pmine = /porta/.test(cur);
+    const porta = FI.porta.free || pmine ? `<div class="fm-r"><div class="fm-l"><b>${FI.porta.label}</b><span>${pr(FI.porta.price)}</span></div><div class="fm-o">${B('2° porta', 'Scegli', FI.porta.free)}</div></div>` : '';
+    const full = FI.rows.filter(x => !x.free).map(x => x.label).concat(FI.porta.free ? [] : [FI.porta.label]);
+    const free = [['Lato sx', 'Lato sinistro'], ['Lato dx', 'Lato destro'], ['Terzultima fila', 'Terzultima fila'], ['Penultima fila', 'Penultima fila'], ['Ultima fila', 'Ultima fila'], ['No ultima fila', 'Non in ultima fila']];
+    const freeOn = free.some(([v]) => v.toLowerCase() === cur);
+    openPop(el, `<div class="ph"><b>Fila${P ? ` di ${esc(P.cognome)} ${esc(P.nome)}` : ''}</b><span>Supplemento a persona · in verde i posti ancora liberi</span></div>
+      <div class="fm">${rows}${porta}${full.length ? `<div class="fm-full">Esaurite: ${full.map(esc).join(', ')}</div>` : ''}
+        <details class="fm-more"${freeOn ? ' open' : ''}><summary>Richieste senza supplemento</summary><div class="fm-free">${free.map(([v, l]) => B(v, l)).join('')}</div></details>
+        ${cur ? `<button class="fm-none" data-act="filaset" data-id="${id}" data-v="">${ICON.close} Togli la fila</button>` : ''}</div>`, 'fmenu');
   }
   function attMenu(id, el) {
     openPop(el, `<div class="ph"><b>Lista d'attesa</b><span>Quando si libera il posto</span></div>
@@ -4555,7 +4721,7 @@
   document.addEventListener('click', e => {
     const seatEl = e.target.closest('#mapwrap .seat[data-seat]');
     const el = e.target.closest('[data-act]');
-    if (!e.target.closest('#pop') && !(el && ['rowmenu', 'attmenu', 'annmenu', 'memenu'].includes(el.dataset.act))) closePop();
+    if (!e.target.closest('#pop') && !(el && ['rowmenu', 'attmenu', 'annmenu', 'memenu', 'filapick'].includes(el.dataset.act))) closePop();
     if (!e.target.closest('.acbox') && !e.target.closest('input.wc')) acClose();
     if (seatEl && !el) return onSeat(+seatEl.dataset.seat, seatEl);
     if (!el) return;
@@ -4584,6 +4750,11 @@
       case 'ldel': S.cfg.luoghi.splice(+el.dataset.i, 1); save(); render(); break;
       case 'savewa': S.cfg.waTemplate = $('#s-wa').value; save(); toast('Testo del messaggio salvato'); break;
       case 'savedanea': daneaSave(); break;
+      case 'savert': rtSave(); break;
+      case 'savesuppl': { const C = supplCfg(); $$('[data-spc]').forEach(i => { const v = parseEuro(i.value); C[i.dataset.spc][i.dataset.k] = v == null ? 0 : v; }); S.cfg.suppl = C; save(); ACC.tlog('info', 'Supplementi file aggiornati'); toast('Supplementi file salvati'); render(); break; }
+      case 'filapick': e.stopPropagation(); filaMenu(el.dataset.id, el); break;
+      case 'filaset': { const r = rowById(t, el.dataset.id); if (!r) break; r.fila = el.dataset.v; closePop(); commit(); break; }
+      case 'daneascon': { if (!(ACC.can('cassa') || ACC.can('conta'))) break; const g = giornoData(); daneaScontrini(g.movs, `Scontrini ${g.day}${g.ag !== 'tutte' ? ' ' + agName(g.ag) : ''}`); break; }
       case 'danea1': { if (!(ACC.can('cassa') || ACC.can('conta'))) break; const m = allMovs().find(x => x.id === el.dataset.id); if (m) daneaDownload([m], `Fattura ${m.cliente} ${m.day}`); break; }
       case 'daneaday': { if (!(ACC.can('cassa') || ACC.can('conta'))) break; const g = giornoData(); const st = new Set(g.movs.filter(x => x.storno).map(x => x.storno)); daneaDownload(g.movs.filter(x => x.doc === 'fattura' && x.tipo !== 'storno' && !st.has(x.id)), `Fatture ${g.day}${g.ag !== 'tutte' ? ' ' + agName(g.ag) : ''}`); break; }
       case 'savetel': S.cfg.telAgenzia = ($('#s-tel').value || '').trim(); save(); toast('Telefono salvato'); break;

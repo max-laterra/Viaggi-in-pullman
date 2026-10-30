@@ -1,7 +1,7 @@
 VIAGGI IN PULLMAN · LA TERRA
 ============================
 
-Versione: 2.0.2
+Versione: 2.1.1
 Pacchetto creato il: 29/10/2026
 
 Come installarla o aggiornarla: vedi LEGGIMI.txt.
@@ -9,6 +9,64 @@ Aggiornamento: carica su GitHub TUTTI i file, config.js compreso (contiene già 
 
 MODIFICHE
 ---------
+
+VERSIONE 2.1.1 · 29/10/2026
+LISTE, SUPPLEMENTI FILE E ANAGRAFICA
+1. Anagrafica nelle liste: la riga NON si compila più da sola (né con Maiusc/Shift, né con Invio,
+   né con Tab). Mentre scrivi il cognome compaiono i suggerimenti «Già in anagrafica», ma nessuno è
+   scelto: per compilare la riga dall'anagrafica premi ↓ e poi Invio, oppure fai clic sul nome.
+   Se non ti serve continua a scrivere: la riga resta come l'hai scritta tu.
+2. Supplementi file con prezzario fisso: Impostazioni › nuova sezione «Supplementi file».
+   Valgono solo per i tour e le gite in giornata (non per biglietteria e solo bus). Prezzi di partenza:
+   · Tour (al giorno, a persona): 1ª fila 8 €, 2ª fila 6 €, 3ª fila 4 €, 4ª fila 2 €,
+     1ª fila della 2ª porta 6 €. Nel tour il prezzo si moltiplica per i giorni del viaggio.
+   · Gite in giornata (a persona): 1ª fila 4 €, 2ª fila 3 €, 3ª fila 2 €, 4ª fila 1 €,
+     1ª fila della 2ª porta 3 €.
+   I prezzi si possono cambiare e salvare. Tolti i riquadri dei supplementi sotto la lista.
+3. Nuovo menu della fila (clic sulla casella «fila»): per ogni fila il supplemento (nel tour anche il
+   calcolo, es. «+32 € (8 € × 4 giorni)»), pulsanti «Qualsiasi», «Sx», «Dx» con i posti ancora liberi
+   in verde. Le file esaurite non compaiono (sono riassunte in «Esaurite: …»). Le richieste senza
+   supplemento sono in una parte a scomparsa «Richieste senza supplemento». C'è anche «Togli la fila».
+4. Liste più ordinate: colonne a larghezza fissa e regolare, righe più compatte, date sempre intere
+   (anche nella testa della lista), niente spazio sprecato.
+5. Nuova colonna «quota» tra «posto» e «€»: mostra quanto paga il cliente di quella riga
+   (quota + eventuale supplemento fila, con la scritta arancione FILA quando c'è).
+
+VERSIONE 2.1 · 29/10/2026
+PREPARAZIONE ALLO SCONTRINO DIRETTO (senza Danea)
+In questa versione si prepara tutto, ma NON si manda nulla al registratore: lo scontrino resta
+«da emettere» come prima. Per chi lavora al banco non cambia niente.
+1. File separato registratore.js: contiene solo la funzione «emetti scontrino», che riceve il
+   movimento e restituisce l'esito. Per ora risponde sempre «registratore non ancora collegato».
+   Più avanti l'app per Mac lo sostituirà con il collegamento vero (protocollo XML Custom).
+2. Impostazioni › Agenzie e casse: per ogni agenzia «Indirizzo del registratore telematico»
+   (es. 192.168.1.50) e «Matricola del registratore» (facoltativa). Vuoti di partenza.
+3. Impostazioni › nuova sezione «Registratore telematico» (solo Master):
+   · tabella dei pagamenti: per ogni metodo dell'app (Contanti, POS, Bonifico, PostePay, PayPal,
+     Assegno, Buono regalo, Voucher) numero e descrizione del pagamento sul registratore, con la nota
+     «Bonifico, PayPal, Buono regalo e Voucher: da verificare con il commercialista»;
+   · tabella dei reparti: numero del reparto per quota viaggio/bus, supplemento fila e diritti,
+     per tutte le categorie e, se serve, diverso per categoria (Gita, SoloBus, BusEdiritti…);
+   · interruttore «File Danea degli scontrini» (spento di partenza).
+   Tutti i campi sono vuoti: si compilano dopo gli scontrini di prova e la stampa della
+   programmazione del tecnico.
+4. Riquadro dell'incasso, solo per «Scontrino»: il riquadro «Cosa andrà sul registratore» mostra
+   righe (parte agenzia: quota/bus, supplemento fila, diritti), quantità, prezzo, reparto e tipo di
+   pagamento. Se si incassa solo una parte (acconto, o saldo di quanto pagato prima) c'è una riga sola
+   «Pagamento parziale» con l'importo della parte agenzia incassato adesso.
+   Se manca un abbinamento compare un avviso arancione (es. «Reparto dei diritti non impostato»).
+5. Movimenti con scontrino: nuovi campi per la risposta del registratore (numero di chiusura,
+   numero del documento es. 0012-0034, data e ora, matricola, esito). Quando ci sono si vedono negli
+   incassi della prenotazione e nel resoconto giornaliero. Lo storno di uno scontrino conserva il
+   riferimento allo scontrino originale. Per ora restano vuoti (l'esito dice «non ancora collegato»).
+6. Contabilità › Resoconto giornaliero: pulsante «Scontrini del giorno per Danea» (accanto a «Fatture
+   del giorno per Danea»), visibile solo con l'interruttore acceso. Crea un file Easyfatt-Xml con gli
+   scontrini del giorno come «Vendita al banco» (DocumentType B): uno per scontrino, con cliente,
+   righe della parte agenzia e metodo di pagamento. Gli scontrini stornati non entrano nel file e
+   compaiono in un avviso, da sistemare a mano in Danea. Dopo il download ogni scontrino è segnato
+   «preparato per Danea». Da accendere solo dopo la prova di importazione in Danea.
+7. Registro del Super Master: ogni tentativo di emettere uno scontrino (con l'esito) e ogni file
+   Danea degli scontrini creato.
 
 VERSIONE 2.0.2 · 29/10/2026
 ELENCO DEI VIAGGI

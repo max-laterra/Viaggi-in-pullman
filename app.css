@@ -1461,3 +1461,85 @@ body:has(.selbar) #toast,body:has(.dropbar) #toast{bottom:92px}
 @media (max-width:1250px){.tl .trow.v2{grid-template-columns:max-content 56px minmax(0,1fr) var(--fw,180px) auto}}
 @media (max-width:1050px){.tl .trow.v2{grid-template-columns:minmax(0,1fr) auto auto}}
 @media (max-width:700px){.tl .trow.v2{grid-template-columns:minmax(0,1fr)}}
+/* 2.1 · registratore telematico */
+.pp-rt{border:1px dashed var(--line);border-radius:12px;padding:10px 12px;display:flex;flex-direction:column;gap:6px;background:var(--surface)}
+.pp-rt-h{display:flex;align-items:center;gap:6px;font-size:12px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3)}
+.pp-rt-h .ico{width:14px;height:14px}
+.pp-rt table{width:100%;border-collapse:collapse;font-size:13px}
+.pp-rt th{font-size:11px;color:var(--ink-3);font-weight:600;text-align:left;padding:2px 4px}
+.pp-rt td{padding:3px 4px;border-top:1px solid var(--line)}
+.pp-rt .r{text-align:right}
+.pp-rt tr.tot td{font-weight:800}
+.pp-rt-p{font-size:12.5px;color:var(--ink-2)}
+.rt-ok{color:#1E6B37;font-weight:700}.rt-miss{color:#B45309;font-weight:800}
+.rt-warn{display:flex;gap:8px;align-items:flex-start;background:#FFF1DC;color:#8A4B00;border-radius:10px;padding:8px 10px;font-size:12.5px;font-weight:600}
+.rt-warn .ico{width:16px;height:16px;flex:0 0 auto;margin-top:1px}
+.rt-warn small{font-weight:400}
+.rt-num{color:var(--ink-3)}
+.rt-tab{width:100%;max-width:720px}
+.rt-tab td,.rt-tab th{padding:5px 8px;text-align:left}
+.rt-in{width:90px;border:1px solid var(--line);border-radius:8px;padding:6px 8px;background:var(--surface);color:var(--ink)}
+.rt-in.wide{width:220px}
+.rt-all td{background:var(--surface-2)}
+.rt-note{display:flex;gap:8px;align-items:center;background:#FFF1DC;color:#8A4B00;border-radius:10px;padding:8px 12px;font-size:13px;font-weight:600}
+.rt-note .ico{width:16px;height:16px}
+.ac-h span{font-weight:400;text-transform:none;letter-spacing:0;color:var(--ink-3);margin-left:6px}
+/* 2.1.1 · colonna fila: pulsante + menu ordinato */
+.wl .fsel{width:100%;height:100%;min-height:26px;border:0;background:transparent;text-align:left;padding:3px 6px;font:inherit;cursor:pointer;color:var(--ink);white-space:nowrap}
+.wl .fsel span{color:#B9BDC2}
+.wl .fsel.on{font-weight:650;color:#9A3412}
+.wl .fsel:hover{background:#FFF4EC}
+.pop.fmenu{width:360px;max-width:360px;padding:6px}
+.fm{display:flex;flex-direction:column;gap:2px}
+.fm-r{display:grid;grid-template-columns:118px 1fr;gap:8px;align-items:center;padding:7px 8px;border-radius:10px}
+.fm-r:hover{background:var(--surface-2)}
+.fm-l{display:flex;flex-direction:column;line-height:1.25}
+.fm-l b{font-size:14px}
+.fm-l span{font-size:12px;color:#9A3412;font-weight:700}.fm-l small{color:var(--ink-3);font-weight:400}
+.fm-o{display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end}
+.pop.fmenu .fm-b{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--line);border-radius:999px;padding:4px 10px;font-size:12.5px;font-weight:600;background:var(--surface)}
+.pop.fmenu .fm-b i{font-style:normal;font-size:11px;font-weight:800;color:#1E6B37;background:#E3F4E8;border-radius:999px;padding:0 6px}
+.pop.fmenu .fm-b:hover{border-color:#9A3412;color:#9A3412}
+.pop.fmenu .fm-b.on{background:#9A3412;border-color:#9A3412;color:#fff}.pop.fmenu .fm-b.on i{background:rgba(255,255,255,.25);color:#fff}
+.fm-full{font-size:12px;color:var(--ink-3);padding:4px 10px}
+.fm-more{border-top:1px solid var(--line);margin-top:4px;padding-top:4px}
+.fm-more summary{cursor:pointer;list-style:none;padding:6px 8px;font-size:13px;font-weight:600;color:var(--ink-2);border-radius:8px}
+.fm-more summary::-webkit-details-marker{display:none}
+.fm-more summary::after{content:" ›";color:var(--ink-3)}
+.fm-more[open] summary::after{content:" ⌄"}
+.fm-more summary:hover{background:var(--surface-2)}
+.fm-free{display:flex;flex-wrap:wrap;gap:5px;padding:4px 8px 8px}
+.pop.fmenu .fm-none{display:flex;align-items:center;gap:6px;color:var(--ink-3);font-size:13px;margin-top:2px}
+.pop.fmenu .fm-none .ico{width:14px;height:14px}
+/* colonna quota: quanto paga la persona della riga */
+.wl td.c-quota{white-space:nowrap;text-align:right;padding:0 8px;font-variant-numeric:tabular-nums;font-weight:650;color:var(--ink-2);background:#FAFAF8}
+.wl td.c-quota small{display:block;font-size:10px;font-weight:700;color:#9A3412;line-height:1}
+.wl td.c-quota .q-na{color:#B9BDC2}
+.sp-in{position:relative;display:inline-flex;align-items:center}.sp-in i{position:absolute;right:9px;font-style:normal;color:var(--ink-3)}.sp-in .rt-in{padding-right:24px;text-align:right}
+.sp-tab th small{font-weight:400;color:var(--ink-3);margin-left:4px;text-transform:none}
+/* liste più ordinate: colonne a larghezza fissa, righe più ariose, bordi leggeri */
+table.wl{table-layout:fixed;font-size:13.5px}
+.wl th{background:#F4F2EE;border:1px solid #D9D6D0;color:#4E555C;font-size:11.5px;letter-spacing:.02em;padding:6px 6px}
+.wl td{border:1px solid #E4E1DC;height:30px}
+.wl .wc{height:30px;padding:4px 7px}
+.wl tr.gh td{border-top:2px solid #8F949A}
+.wl th:first-child,.wl td.wn{width:62px}
+.wl th.c-cognome{width:17%}.wl th.c-nome{width:12%}.wl th.c-nascita{width:86px}.wl th.c-tel{width:118px}.wl th.c-natoA{width:10%}
+.wl th.c-part{width:58px}.wl th.c-hotel{width:118px}.wl th.c-cam{width:40px}.wl th.c-fila{width:112px}.wl th.c-posto{width:92px}.wl th.c-quota{width:84px}.wl th.c-pagato{width:74px}
+.wl td.c-cognome,.wl td.c-nome,.wl td.c-nascita,.wl td.c-tel,.wl td.c-natoA,.wl td.c-fila,.wl td.c-note{min-width:0;width:auto}
+.wl .wc{text-overflow:ellipsis}
+.wl-side,.wl-staff,.wl-ann,.wl-att{table-layout:auto}
+/* date della testa mai tagliate */
+.th-in input[type=date]{min-width:136px}
+.thead2 .th-g{grid-template-columns:repeat(var(--c,3),minmax(136px,1fr))}
+.pop.fmenu{width:400px;max-width:calc(100vw - 24px)}
+.fm-r{grid-template-columns:150px 1fr}
+.fm-o{flex-wrap:nowrap}
+.wl td.c-quota small{display:inline-block;font-size:9.5px;font-weight:800;color:#fff;background:#C2410C;border-radius:4px;padding:1px 4px;margin-right:5px;vertical-align:1px;text-transform:uppercase}
+.wl th.c-quota{width:96px}
+.pop.fmenu{width:450px}
+.fm-r{grid-template-columns:140px minmax(0,1fr)}
+/* 2.1.1 · campi del prezzario supplementi: € accanto al numero, mai sopra */
+.box.form .sp-in{position:static;display:inline-flex;align-items:center;gap:6px}
+.box.form .sp-in i{position:static;font-style:normal;color:var(--ink-3);font-weight:600}
+.box.form .sp-in input.rt-in{width:84px;min-width:0;padding:6px 10px;text-align:right;font-variant-numeric:tabular-nums}
