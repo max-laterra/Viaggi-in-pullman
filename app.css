@@ -1543,3 +1543,76 @@ table.wl{table-layout:fixed;font-size:13.5px}
 .box.form .sp-in{position:static;display:inline-flex;align-items:center;gap:6px}
 .box.form .sp-in i{position:static;font-style:normal;color:var(--ink-3);font-weight:600}
 .box.form .sp-in input.rt-in{width:84px;min-width:0;padding:6px 10px;text-align:right;font-variant-numeric:tabular-nums}
+
+/* 2.1.3 · anteprima dello scontrino, come la carta del registratore */
+.rcp{position:relative;align-self:center;width:100%;max-width:330px;box-sizing:border-box;background:#fff;color:#1b1b1b;border-radius:4px;padding:28px 14px 14px;box-shadow:0 1px 3px rgba(0,0,0,.18),0 0 0 1px rgba(0,0,0,.06);font-family:"Courier New",Courier,ui-monospace,monospace;font-size:12.5px;line-height:1.35;overflow-wrap:anywhere}
+.rcp-badge{position:absolute;top:6px;left:50%;transform:translateX(-50%);max-width:calc(100% - 16px);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:inherit;font-size:10px;font-weight:700;letter-spacing:.04em;color:#8A4B00;background:#FFF1DC;border-radius:6px;padding:2px 8px}
+.rcp-c{text-align:center}
+.rcp-h{margin-bottom:12px;letter-spacing:.02em}
+.rcp-big{font-size:15px;font-weight:700;margin-bottom:2px}
+.rcp-dc{margin-bottom:12px}
+.rcp-dc .rcp-s,.rcp-s{font-size:12px}
+.rcp-r{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
+.rcp-r>span:first-child{min-width:0}
+.rcp-r>span:last-child{flex:0 0 auto;white-space:nowrap;text-align:right}
+.rcp-th{margin-bottom:2px}
+.rcp-d{margin-top:2px}
+.rcp-q{padding-left:30%;white-space:nowrap}
+.rcp-p i{display:inline-block;width:1.6em;text-align:right;font-style:normal}
+.rcp-tot{font-size:17px;font-weight:700;margin-top:8px}
+.rcp-leg{margin-top:10px}
+.rcp-ft{margin-top:12px}
+.rcp-rt{margin-top:2px}
+.rcp-rt i{font-style:italic;margin-right:14px}
+.rt-stop{background:#FDE3E1;color:#9B1C12}
+.rt-sel{width:auto;max-width:100%}
+.rt-int{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px}
+.rt-int label{display:flex;flex-direction:column;gap:4px;font-weight:600;min-width:0}
+.rt-ta{width:100%;box-sizing:border-box;border:1px solid var(--line);border-radius:8px;padding:6px 8px;background:var(--surface);color:var(--ink);font-family:"Courier New",Courier,ui-monospace,monospace;font-size:12.5px;resize:vertical}
+@media (max-width:760px){.rt-tab{display:block;overflow-x:auto;max-width:100%}}
+.rcp{container-type:inline-size}
+.rcp-big{font-size:clamp(11px,5.3cqw,15px)}
+.rt-ivag{grid-template-columns:repeat(auto-fill,minmax(200px,1fr));max-width:720px}
+.rt-ivag .rt-sel{width:100%;box-sizing:border-box;border:1px solid var(--line);border-radius:8px;padding:6px 8px;background:var(--surface);color:var(--ink);font-weight:400}
+
+/* ---- senza internet e controllo al ritorno (2.1.4) ---- */
+.offband{display:flex;gap:10px;align-items:flex-start;background:#C62828;color:#fff;padding:8px max(16px,env(safe-area-inset-right,0px)) 8px max(16px,env(safe-area-inset-left,0px));font-size:14px;line-height:1.4}
+.offband>.ico{width:18px;height:18px;flex:0 0 auto;margin-top:1px}
+.offband>span{min-width:0;overflow-wrap:anywhere}
+.offband b{font-weight:800}
+.side-map,.ldock{top:calc(76px + var(--offh,0px));max-height:calc(100vh - 92px - var(--offh,0px))}
+@media (min-width:861px){.side-l{top:calc(76px + var(--offh,0px));max-height:calc(100vh - 92px - var(--offh,0px))}.cl-list{top:calc(76px + var(--offh,0px));max-height:calc(100vh - 96px - var(--offh,0px))}}
+.mstrip{top:calc(67px + var(--offh,0px))}
+.pa-card.off{border-top-color:#C62828;max-height:calc(100vh - 32px);overflow:auto}
+.pa-card.off .pa-ico,.pa-card.cx .pa-ico{background:color-mix(in srgb,#C62828 14%,var(--surface));color:#C62828}
+.pa-card.off .pa-p{background:color-mix(in srgb,#C62828 8%,var(--surface));color:var(--ink)}
+.pa-card .pa-p>div{min-width:0}
+.off-ops{display:flex;flex-direction:column;gap:8px}
+.off-ops.sm{gap:4px;font-size:14px;background:var(--surface-2);border-radius:12px;padding:8px 12px}
+.off-tel{margin-top:2px}.off-tel a,.off-op a{color:inherit;font-weight:700;white-space:nowrap}
+.off-none{text-align:center;padding:12px;border-radius:14px;background:var(--surface-2);font-weight:600;color:var(--ink-2)}
+.off-btns{display:flex;gap:10px;flex-wrap:wrap}.off-btns .btn{flex:1 1 150px;justify-content:center}
+.pa-card.cx{width:min(620px,calc(100vw - 32px));border-top-color:#C62828;max-height:calc(100vh - 32px);overflow:auto}
+.cx-list{display:flex;flex-direction:column;gap:10px}
+.cx-i{border:1px solid var(--line);border-left:5px solid #C62828;border-radius:12px;padding:10px 12px;background:var(--surface);display:flex;flex-direction:column;gap:6px;min-width:0}
+.cx-t{font-weight:800;font-size:15px;overflow-wrap:anywhere}
+.cx-l{margin:0;padding-left:18px;font-size:13.5px;display:flex;flex-direction:column;gap:2px;overflow-wrap:anywhere}
+.cx-n{font-size:13.5px;color:var(--ink-2);overflow-wrap:anywhere}
+.cx-b{display:flex;gap:8px;flex-wrap:wrap}
+.cx-f{display:flex;gap:8px 12px;align-items:center;justify-content:space-between;flex-wrap:wrap}.cx-f small{color:var(--ink-3)}
+.casi{background:color-mix(in srgb,#C62828 6%,var(--surface));border:2px solid #C62828;border-radius:16px;padding:12px 14px;margin:8px 0 12px;display:flex;flex-direction:column;gap:10px}
+.casi-h{display:flex;gap:8px;align-items:center;flex-wrap:wrap;color:#C62828;font-size:16px}.casi-h .ico{width:20px;height:20px}
+.casi-h span{background:#C62828;color:#fff;border-radius:999px;padding:1px 9px;font-size:12.5px;font-weight:700}
+.v-conta .casi{max-width:1100px}
+.toast.ok{background:var(--ok);color:#fff}
+.cell-in{max-width:150px;min-width:110px}
+.pa-card.off .pa-p span b{font-size:inherit}
+/* lista a colonne fisse: cognome, nome e note non si stringono mai fino a sparire;
+   se lo spazio non basta, la lista scorre di lato dentro il suo riquadro (come prima della 2.1.1) */
+.wl th.c-cognome{width:150px}.wl th.c-nome{width:110px}.wl th.c-natoA{width:95px}.wl th.c-note{width:150px}
+/* riquadri in testa alla lista: al massimo --c campi per riga; se il riquadro è stretto i campi vanno a capo
+   invece di uscire dal riquadro (es. «Saldo entro il» sopra la riga di separazione) */
+.thead2 .th-g{grid-template-columns:repeat(auto-fit,minmax(max(120px,calc((100% - (var(--c,3) - 1) * 10px) / var(--c,3))),1fr))}
+@media (max-width:760px){.thead2 .th-g{grid-template-columns:repeat(auto-fit,minmax(max(120px,calc((100% - 10px) / 2)),1fr))}}
+.thead2 .th-sec{container-type:inline-size}
+@container (max-width:430px){.thead2 .th-g>*:has(input[type=date]){grid-column:1/-1}}

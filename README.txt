@@ -1,14 +1,103 @@
 VIAGGI IN PULLMAN · LA TERRA
 ============================
 
-Versione: 2.1.1
-Pacchetto creato il: 29/10/2026
+Versione: 2.1.4
+Pacchetto creato il: 30/10/2026
 
 Come installarla o aggiornarla: vedi LEGGIMI.txt.
 Aggiornamento: carica su GitHub TUTTI i file, config.js compreso (contiene già la chiave di Dropbox).
 
 MODIFICHE
 ---------
+
+VERSIONE 2.1.4 · 30/10/2026
+LAVORO SENZA INTERNET E ARCHIVIO IN UN FILE SEPARATO
+Per chi usa l'app cambia solo l'avviso quando manca internet: tutto il resto funziona come prima.
+
+A. Quando manca internet
+1. Appena cade la linea compare la finestra «Stai lavorando senza internet» con chi era collegato
+   negli ultimi 2 minuti prima: nome, agenzia, cosa stava facendo (lista, piantina o incasso di quale
+   viaggio) e telefono. Prima chi era sullo stesso viaggio. Se non c'era nessuno:
+   «Nessun altro operatore era collegato». Pulsante «Ho capito».
+2. Dopo «Ho capito» resta in alto una fascia rossa: «Senza internet · N modifiche da inviare ·
+   Collegati prima: nome (agenzia, telefono)…», finché la linea non torna.
+3. Senza internet, la prima volta su ogni viaggio che si mette o sposta una persona sulla piantina,
+   si scrive una prenotazione nuova nella lista (anche da lista d'attesa, annullati o Word) o si
+   registra un incasso, l'app chiede «Sei senza internet: hai sentito al telefono …?» con
+   «Sì, ci siamo sentiti» e «Annulla». Ora, viaggio e risposta vanno nel registro del Super Master.
+4. Telefoni: Impostazioni › Agenzie e casse › «Telefono dell'agenzia» (il telefono dei messaggi
+   WhatsApp resta com'è); Impostazioni › Operatori e permessi › colonna «Cellulare» (facoltativa,
+   si mostra al posto del telefono dell'agenzia; si può scrivere anche quando si crea l'account).
+5. Quando internet torna: avviso verde «Internet tornato: invio N modifiche…», poi «Tutto
+   sincronizzato». La fascia rossa sparisce.
+   L'app si accorge che manca internet anche quando il computer risulta collegato ma Dropbox non
+   risponde per due volte di fila; senza linea riprova ogni 20 secondi al massimo.
+
+B. Controllo dopo il ritorno di internet
+1. Al ritorno della linea l'app confronta le modifiche fatte senza internet con quelle arrivate
+   dagli altri computer nello stesso periodo, prima dell'unione, e cerca:
+   · stesso posto dello stesso bus dato a due persone diverse;
+   · bus con più persone che posti;
+   · prenotazione incassata due volte (pagato più del dovuto).
+2. Se trova qualcosa compare la finestra «Da controllare dopo il ritorno di internet»: per ogni caso
+   viaggio, bus, posto o prenotazione, chi ha fatto cosa, da quale agenzia e a che ora, con
+   «Apri la piantina» o «Apri la prenotazione».
+3. L'app non cambia nulla da sola. I casi restano in un riquadro rosso nella pagina del viaggio e in
+   Contabilità finché qualcuno non preme «Risolto». Tutto va nel registro del Super Master.
+   (Da questa versione ogni posto e ogni riga ricordano anche l'agenzia di chi li ha cambiati.)
+
+C. Archivio in un file separato (preparazione al server dell'ufficio)
+1. Lettura, salvataggio e allineamento con gli altri computer sono passati da app.js al nuovo file
+   archivio.js, senza cambiare il comportamento. In cima al file c'è l'elenco delle funzioni che
+   l'app usa e cosa fa ognuna.
+2. Anche la diagnostica del Super Master ora passa da archivio.js (prima parlava direttamente con
+   Dropbox). Il registro tecnico ci passava già. L'accesso a Dropbox (login) resta in dropbox.js.
+3. Più avanti basterà sostituire archivio.js con una versione che parla con il nostro server.
+   ATTENZIONE: nel caricamento su GitHub c'è un file in più, archivio.js: caricate tutto il contenuto.
+
+D. Correzioni grafiche trovate durante le prove
+1. Lista prenotazioni: sugli schermi più stretti (e con la piantina accanto) le colonne cognome e
+   nome si stringevano fino quasi a sparire e la colonna «note / mail» spariva del tutto. Ora hanno
+   una larghezza minima; se lo spazio non basta, la lista scorre di lato dentro il suo riquadro.
+2. Riquadri in testa alla lista (Quote e pagamenti, Date e hotel): «Saldo entro il» usciva dal
+   riquadro e finiva sopra la riga di separazione. Ora i campi vanno a capo.
+
+VERSIONE 2.1.3 · 30/10/2026
+SCONTRINI COME QUELLI DELL'AGENZIA
+1. Riga della gita come sullo scontrino del registratore: «gita randazzo e floresta 08/11/26»,
+   in minuscolo, con quantità × prezzo (es. 2x72,00). Se il nome è troppo lungo per il registratore
+   (38 caratteri, da verificare con il manuale Custom) si accorcia il nome e la data resta in fondo.
+   Le quote ridotte hanno la loro riga: «gita randazzo e floresta ridotto 08/11/26  1x50,00».
+2. Supplemento fila e diritti di prevendita su righe separate sotto la gita:
+   «supplemento fila 2x4,00» (se tutti hanno lo stesso supplemento, altrimenti 1x il totale),
+   «diritti di prevendita 2x2,00».
+3. Gite: niente acconti. Se si sceglie «Scontrino» e l'importo è più basso del dovuto, l'app avvisa
+   e non registra: si incassa tutto oppure si sceglie «Senza documento».
+4. Anteprima dello scontrino nel riquadro dell'incasso, con l'impostazione dello scontrino vero:
+   intestazione, DOCUMENTO COMMERCIALE, righe, TOTALE COMPLESSIVO, DI CUI IVA, PAGAMENTO CONTANTE /
+   ELETTRONICO, IMPORTO PAGATO, «I: *NI Non imponibile», data e ora, matricola RT.
+   È segnata «ANTEPRIMA · non è un documento fiscale»: lo scontrino vero lo stampa il registratore.
+5. Impostazioni › Registratore telematico, due riquadri nuovi:
+   · IVA dei reparti (quota viaggio, supplemento fila, diritti): di base «NI · Non imponibile»;
+   · Intestazione dello scontrino per ogni agenzia (Ragusa già compilata con i dati dello scontrino).
+Le fatture dei tour, la biglietteria e tutto il resto restano come prima.
+L'app continua a NON mandare nulla al registratore: gli scontrini restano «da emettere».
+
+VERSIONE 2.1.2 · 30/10/2026
+DIAGNOSTICA: CONFLITTI RISOLTI AUTOMATICAMENTE
+Quando due computer modificano nello stesso momento lo stesso file (es. la lista di un viaggio),
+l'app unisce da sola le due versioni. Prima nella diagnostica compariva come «ERRORE rete … 409»;
+ora compare (solo nella diagnostica del Super Master) come «Conflitto risolto automaticamente»
+con cosa si è risolto, per esempio:
+   «Conflitto risolto automaticamente · Coldplay (2026-11-28): riga 12: contatto e note di Martina
+    + nome di Andrea (questo computer) · posti Bus 1 n. 5 e 6: scelta dell'altro computer»
+   · liste dei viaggi: per ogni riga quali campi vengono dall'altro computer e quali da questo,
+     righe aggiunte o tolte, posti dei bus, dati del viaggio;
+   · anagrafica e account: quanti aggiunti e quanti uniti;
+   · cassa e registro: quanti movimenti/righe dell'altro computer sono stati aggiunti.
+Si scrivono solo i nomi dei campi e i numeri di riga, mai il testo scritto dagli operatori.
+La risposta 409 di Dropbox nell'invio ora è una riga normale «Rete», non più un ERRORE.
+Tutto il resto (anche gli errori di connessione) resta com'era.
 
 VERSIONE 2.1.1 · 29/10/2026
 LISTE, SUPPLEMENTI FILE E ANAGRAFICA

@@ -1,6 +1,6 @@
 (function () {
   'use strict';
-  const VERSION = '2.1.1';
+  const VERSION = '2.1.4';
   const LOGO = './logo.jpg';
   const KEY = 'laterra.prenotazioniPosti.v1';
   const $ = (s, r = document) => r.querySelector(s);
@@ -194,7 +194,9 @@
         try {
           const r = await of.apply(this, arguments); const ms = performance.now() - t0;
           httpNote(ep, r.ok, ms);
-          if (!r.ok) ev('rete-errore', `${(init && init.method) || 'GET'} ${ep} → ${r.status}`, { file: fpath, ms: Math.round(ms), retryAfter: r.headers.get('Retry-After') || undefined });
+          // 409 nell'invio = il file è cambiato da un altro computer: l'app unisce e rimanda da sola (evento «Conflitto risolto»)
+          if (!r.ok && r.status === 409 && /files\/upload$/.test(ep)) ev('rete', `${(init && init.method) || 'GET'} ${ep} → 409 (cambiato da un altro computer, si unisce)`, { file: fpath, ms: Math.round(ms) });
+          else if (!r.ok) ev('rete-errore', `${(init && init.method) || 'GET'} ${ep} → ${r.status}`, { file: fpath, ms: Math.round(ms), retryAfter: r.headers.get('Retry-After') || undefined });
           else if (ms > 8000 && !lp) ev('rete-lenta', `${ep} ${Math.round(ms)} ms`, { file: fpath });
           return r;
         } catch (e) {
@@ -251,7 +253,7 @@
     }
     // ---- copia su Dropbox (ogni 10 minuti se ci sono eventi nuovi) ----
     async function upload(force) {
-      const D = window.VIPDBX; if (upBusy || !dev || !D || !D.isLinked() || !navigator.onLine) return;
+      const A = window.VIPARCHIVIO; if (upBusy || !dev || !A || !A.status().linked || A.status().offline) return;
       if (!force && (!newSinceUp || Date.now() - lastUp < 10 * 60000)) return;
       upBusy = true;
       try {
@@ -261,7 +263,7 @@
         for (const d of days) {
           const evs = await read(d, d); if (!evs.length) { if (d !== today) done[d] = 1; continue; }
           const body = new TextEncoder().encode(evs.map(r => JSON.stringify(Object.assign({ c: dev }, r))).join('\n') + '\n');
-          await D.upload(`/diagnostica/${d.slice(0, 7)}/${d}_${dev}.log`, body, 'overwrite');
+          await A.rawUpload(`/diagnostica/${d.slice(0, 7)}/${d}_${dev}.log`, body);
           if (d !== today) done[d] = 1;
         }
         Object.keys(done).forEach(k => { if (k < dayOf(new Date(Date.now() - 10 * 864e5))) delete done[k]; });
@@ -279,15 +281,13 @@
       ev, start, read, flush, upload, ring, SID,
       set ctx(f) { ctxFn = f; }, set dev(v) { dev = v; }, get dev() { return dev; },
       async remote(fromDay, toDay, skipDev) {
-        const D = window.VIPDBX; if (!D || !D.isLinked()) return { files: [], err: 'Dropbox non collegato' };
-        const out = []; let res;
-        try { res = await D.listFolder('/diagnostica'); } catch (e) { return { files: [], err: 'Elenco non riuscito: ' + (e.code || e.message) }; }
-        const entries = [];
-        while (res) { entries.push(...(res.entries || [])); if (!res.has_more) break; res = await D.listFolder(null, res.cursor); }
+        const A = window.VIPARCHIVIO; if (!A || !A.status().linked) return { files: [], err: 'Dropbox non collegato' };
+        const out = []; let entries;
+        try { entries = await A.rawList('/diagnostica'); } catch (e) { return { files: [], err: 'Elenco non riuscito: ' + (e.code || e.message) }; }
         for (const en of entries) {
           const m = /\/(\d{4}-\d{2}-\d{2})_([^/]+)\.log$/.exec(en.path_lower || ''); if (en['.tag'] !== 'file' || !m) continue;
           if (m[1] < fromDay || m[1] > toDay || m[2] === skipDev) continue;
-          try { const r = await D.download(en.path_lower); if (r) out.push({ name: en.name || en.path_lower.split('/').pop(), day: m[1], dev: m[2], text: new TextDecoder().decode(r.buf) }); } catch (e) { out.push({ name: en.name || en.path_lower.split('/').pop(), day: m[1], dev: m[2], text: '', err: e.code || e.message }); }
+          try { const r = await A.rawDownload(en.path_lower); if (r) out.push({ name: en.name || en.path_lower.split('/').pop(), day: m[1], dev: m[2], text: new TextDecoder().decode(r.buf) }); } catch (e) { out.push({ name: en.name || en.path_lower.split('/').pop(), day: m[1], dev: m[2], text: '', err: e.code || e.message }); }
         }
         return { files: out };
       }
@@ -423,20 +423,23 @@
   const SNAP = new Map(), MSNAP = { users: null, clients: null, cfg: null };
   const noTrans = (k, v) => (k === 'bookings' ? undefined : v);
   // nel confronto non contano le ore delle modifiche, chi le ha fatte e le cancellazioni dei posti
-  const itemJSON = x => JSON.stringify(x, (k, v) => (k === 'u' || k === 'uf' || k === 'by' || k === 'seatGone' || k === 'bookings' ? undefined : v));
+  const itemJSON = x => JSON.stringify(x, (k, v) => (k === 'u' || k === 'uf' || k === 'by' || k === 'bya' || k === 'seatGone' || k === 'bookings' ? undefined : v));
   const myName = () => { try { const m = window.ACC && ACC.sess && ACC.me(); return m ? m.name : ''; } catch (e) { return ''; } };
+  // agenzia da cui si lavora: con il nome (by) dice chi ha fatto una modifica, per il controllo dopo il ritorno di internet
+  const myAg = () => { try { return (window.ACC && ACC.sess && ACC.sess.ag) || ''; } catch (e) { return ''; } };
   // Due operatori sulla stessa prenotazione: ogni CAMPO di una riga porta l'ora della sua modifica (uf),
   // così se uno cambia il telefono e l'altro la nota, all'unione restano entrambe le modifiche.
   // Nei bus ogni POSTO porta l'ora della sua modifica e i posti liberati restano segnati (seatGone):
   // due operatori che sistemano persone diverse sullo stesso bus non si cancellano a vicenda.
   function fieldStamp(x, prev, now) {
     x.uf = x.uf || {};
-    new Set([...Object.keys(prev), ...Object.keys(x)]).forEach(f => { if (f === 'u' || f === 'uf' || f === 'by' || f === 'bookings') return; if (JSON.stringify(prev[f]) !== JSON.stringify(x[f])) x.uf[f] = now; });
+    new Set([...Object.keys(prev), ...Object.keys(x)]).forEach(f => { if (f === 'u' || f === 'uf' || f === 'by' || f === 'bya' || f === 'bookings') return; if (JSON.stringify(prev[f]) !== JSON.stringify(x[f])) x.uf[f] = now; });
   }
-  function seatStamp(b, prev, now) {
+  function seatStamp(b, prev, now, me, ag) {
     const ps = (prev && prev.seats) || {}; const cur = b.seats || {};
-    const strip = a => JSON.stringify(a, (k, v) => (k === 'u' ? undefined : v));
-    Object.keys(cur).forEach(s => { if (strip(cur[s]) !== strip(ps[s])) cur[s].u = now; });
+    const strip = a => JSON.stringify(a, (k, v) => (k === 'u' || k === 'by' || k === 'bya' ? undefined : v));
+    // ogni posto cambiato porta l'ora, chi l'ha cambiato e da quale agenzia
+    Object.keys(cur).forEach(s => { if (strip(cur[s]) !== strip(ps[s])) { cur[s].u = now; if (me) { cur[s].by = me; cur[s].bya = ag; } } });
     Object.keys(ps).forEach(s => { if (!(s in cur)) { b.seatGone = b.seatGone || {}; b.seatGone[s] = now; } });
     if (b.seatGone) { const old = now - 90 * 864e5; Object.keys(b.seatGone).forEach(s => { if (b.seatGone[s] < old || (cur[s] && (+cur[s].u || 0) > b.seatGone[s])) delete b.seatGone[s]; }); }
   }
@@ -449,12 +452,12 @@
     if (!s) { ch = true; t.tu = now; LISTS.forEach(k => effective(t, k).forEach(x => { if (!x.u) x.u = now; })); }
     else {
       const seen = new Set();
-      const me = myName();
+      const me = myName(), ag = myAg();
       LISTS.forEach(k => effective(t, k).forEach(x => {
         const key = k + ':' + x.id; seen.add(key); const pj = s.items.get(key); if (pj === itemJSON(x)) return;
         let prev = null; try { prev = pj ? JSON.parse(pj) : null; } catch (e) { prev = null; }
-        if (k === 'buses') seatStamp(x, prev, now); else if (prev) fieldStamp(x, prev, now);
-        x.u = now; if (me) x.by = me; ch = true;
+        if (k === 'buses') seatStamp(x, prev, now, me, ag); else if (prev) fieldStamp(x, prev, now);
+        x.u = now; if (me) { x.by = me; x.bya = ag; } ch = true;
       }));
       s.items.forEach((j, key) => { if (!seen.has(key)) { t.gone = t.gone || {}; t.gone[key] = now; ch = true; } });
       if (topJSON(t) !== s.top) { ch = true; t.tu = now; }
@@ -1691,7 +1694,7 @@
   function syncInfo(st) {
     st = st || STORE.status();
     if (!st.hasKey || !st.linked) return ['local', 'Solo questo computer', 'I dati restano su questo computer: per lavorare con le altre agenzie collega Dropbox in Impostazioni › Sincronizzazione'];
-    if (!st.online) return ['off', `Senza internet${st.pending ? ' · ' + st.pending + ' da inviare' : ''}`, 'Puoi continuare a lavorare: le modifiche partono appena torna la connessione'];
+    if (st.offline) return ['off', `Senza internet${st.pending ? ' · ' + st.pending + ' da inviare' : ''}`, 'Puoi continuare a lavorare: le modifiche partono appena torna la connessione'];
     if (st.error) return ['err', 'Sincronizzazione in pausa', 'Dropbox non risponde: riprovo da solo tra poco'];
     if (st.syncing || st.pending) return ['busy', st.pending ? `Invio ${st.pending}…` : 'Aggiorno…', 'Sto allineando i dati con gli altri computer'];
     return ['ok', 'Sincronizzato', st.last ? `Ultimo aggiornamento alle ${st.last.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' })}` : ''];
@@ -1707,7 +1710,7 @@
       ${ag ? `<button class="agchip" data-act="changeag" title="Cambia agenzia">${ICON.pin}${esc(ag.nome)}<span class="agc"> · ${esc(ag.cassa || ag.nome)}</span></button>` : ''}
       ${nb('cassa', 'Cassa', ICON.cash, ACC.can('cassa') || ACC.can('cassaAll') ? null : 'x')}${nb('conta', 'Contabilità', ICON.chart, 'conta')}${nb('anag', 'Anagrafica', ICON.users, 'anag')}${nb('settings', 'Impostazioni', ICON.gear)}${nb('super', 'Super Master', ICON.tool, 'tech')}
       ${me ? `<button class="me" data-act="memenu" aria-label="${esc(me.name)}: account"><span class="av">${esc((me.name || '?')[0].toUpperCase())}</span><span class="mt"><b>${esc(me.name)}</b><small>${esc(ROLE_L[me.role])}</small></span></button>` : ''}
-    </div></header>`;
+    </div>${offBandHTML()}</header>`;
   }
   const CAT_L = { gita: 'Gita', tour: 'Tour', evento: 'Evento', biglietteria: 'Biglietteria' };
   const tripCat = t => t.cat || (t.fine && t.fine !== t.data ? 'tour' : 'gita');
@@ -1822,6 +1825,7 @@
     const head = `<div class="crumbs"><a data-act="nav" data-v="home">Viaggi</a><span>›</span><span>${esc(t.nome)}</span></div>
       <div class="tripbar" data-droptrip="${t.id}"><h1>${esc(t.nome)}</h1><span class="tcat c-${tripCat(t)}">${CAT_L[tripCat(t)]}</span><span class="pill neutral">${esc(fmtTripDate(t, true))}</span>${progBox(t)}<button class="btn sm ghost" data-act="edittrip">${ICON.edit} Modifica gita</button></div>
       <div id="presence">${presenceHTML(t)}</div>
+      ${casiBoxHTML(t.id)}
       <div class="ptabs" role="tablist"><button role="tab" data-act="sec" data-v="lista" aria-selected="${UI.sec !== 'posti'}">${ICON.list} ${bigl ? 'Biglietti venduti' : 'Lista prenotazioni'} <span>${T.pers} persone${T.att ? ` · ${T.att} in attesa` : ''}</span></button>${bigl ? '' : `<button role="tab" data-act="sec" data-v="posti" aria-selected="${UI.sec === 'posti'}">${ICON.bus} Posti sul bus <span>${T.seated}/${T.pers} con il posto</span></button>`}</div>`;
     return head + (UI.sec === 'posti' ? postiView(t, D, SI, T) : listaView(t, D, SI, T));
   }
@@ -2698,267 +2702,11 @@
     (navigator.clipboard ? navigator.clipboard.writeText(txt) : Promise.reject()).then(() => toast('Testo copiato: incollalo nel modello su Meta')).catch(() => toast('Non riesco a copiare: seleziona il testo e premi Ctrl+C'));
   }
 
-  // ---------- archivio: copia su questo computer (IndexedDB) + Dropbox per tenere allineati tutti i computer ----------
-  // Cartella dell'app su Dropbox (Applicazioni › Viaggi in Pullman La Terra):
-  //   /viaggi/<id>.json                   un file per viaggio (lista, attesa, annullati, bus e posti)
-  //   /config/utenti.json                 account, ruoli, agenzie permesse, impronte delle password
-  //   /config/impostazioni.json           agenzie e casse, luoghi di partenza, testi WhatsApp
-  //   /anagrafica/clienti-00…31.json      anagrafica clienti, divisa in 32 file (ogni cliente sta sempre nello stesso file)
-  //   /cassa/aaaa-mm/aaaa-mm-gg_<pc>.json incassi registrati da ogni computer (ognuno scrive solo i suoi)
-  //   /cassa/chiusure/aaaa-mm-gg_<ag>.json chiusure di cassa
-  //   /programmi/<id-viaggio>/<file>      PDF o foto del programma
-  //   /registro/aaaa-mm/aaaa-mm-gg_<pc>.json log tecnico (lo legge solo il Super Master)
-  // Due computer che modificano lo stesso file nello stesso momento non si cancellano a vicenda: ogni riga,
-  // persona, bus, cliente e utente porta l'ora della sua ultima modifica e vince la più recente.
-  const STORE = (() => {
-    const DBN = 'viaggi-laterra', QK = 'vip-queue-v1', CK = 'vip-cursor-v1', DK = 'vip-device-v1', PK = 'vip-pulled-v1';
-    const files = new Map();
-    const lsGet = (k, d) => { try { const v = JSON.parse(localStorage.getItem(k) || 'null'); return v == null ? d : v; } catch (e) { return d; } };
-    const lsSet = (k, v) => { try { if (v == null) localStorage.removeItem(k); else localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* pieno o bloccato */ } };
-    let dirty = new Set(lsGet(QK, []));
-    const blobQ = new Set(lsGet(QK + '-b', []));
-    let device = lsGet(DK, null);
-    if (!device || !device.id) { device = { id: 'pc' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), since: new Date().toISOString() }; lsSet(DK, device); }
-    const st = { online: navigator.onLine, syncing: false, error: '', last: null, pulled: lsGet(PK, false) };
-    let db = null, onRemote = () => {}, onStatus = () => {};
-    const DBX = () => window.VIPDBX;
-    const linked = () => !!(DBX() && DBX().isLinked());
-
-    // ---- IndexedDB ----
-    function idbOpen() {
-      return new Promise((res, rej) => {
-        if (!window.indexedDB) return rej(new Error('noidb'));
-        const r = indexedDB.open(DBN, 1);
-        r.onupgradeneeded = () => { const d = r.result; if (!d.objectStoreNames.contains('files')) d.createObjectStore('files'); if (!d.objectStoreNames.contains('blobs')) d.createObjectStore('blobs'); };
-        r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); r.onblocked = () => rej(new Error('blocked'));
-      });
-    }
-    const tx = (store, mode, fn) => new Promise((res, rej) => { if (!db) return res(null); const t = db.transaction(store, mode); const s = t.objectStore(store); const rq = fn(s); t.oncomplete = () => res(rq && rq.result); t.onerror = () => rej(t.error); t.onabort = () => rej(t.error); });
-    async function open() {
-      try { db = await idbOpen(); } catch (e) { db = null; }
-      if (db) {
-        await new Promise((res) => { const t = db.transaction('files', 'readonly'); t.objectStore('files').openCursor().onsuccess = (e) => { const c = e.target.result; if (c) { files.set(c.key, c.value); c.continue(); } }; t.oncomplete = res; t.onerror = res; });
-      }
-      window.addEventListener('online', () => { st.online = true; kick(); emit(); });
-      window.addEventListener('offline', () => { st.online = false; emit(); });
-    }
-    const persist = (path) => { const rec = files.get(path); tx('files', 'readwrite', (s) => (rec ? s.put(rec, path) : s.delete(path))).catch(() => {}); };
-    const saveQ = () => lsSet(QK, [...dirty]);
-
-    // ---- unione di due versioni dello stesso file ----
-    const u = (x) => (x && +x.u) || 0;
-    // stessa riga cambiata su due computer: si tiene, campo per campo, la modifica più recente
-    function mergeFields(x, y) {
-      const base = u(y) > u(x) ? y : x; const out = JSON.parse(JSON.stringify(base)); const uf = {};
-      new Set([...Object.keys(x), ...Object.keys(y)]).forEach((f) => {
-        if (f === 'u' || f === 'uf' || f === 'by') return;
-        const tx = (x.uf && +x.uf[f]) || 0, ty = (y.uf && +y.uf[f]) || 0; if (tx || ty) uf[f] = Math.max(tx, ty);
-        const src = tx > ty ? x : ty > tx ? y : base;
-        if (src[f] === undefined) delete out[f]; else out[f] = JSON.parse(JSON.stringify(src[f]));
-      });
-      out.uf = uf; out.u = Math.max(u(x), u(y)); return out;
-    }
-    // posti dei bus: posto per posto vince l'ultima modifica; un posto liberato resta libero
-    function mergeSeats(x, y) {
-      const gone = Object.assign({}, x.seatGone || {}); Object.keys(y.seatGone || {}).forEach((s) => { gone[s] = Math.max(gone[s] || 0, y.seatGone[s]); });
-      const seats = {}; const xs = x.seats || {}, ys = y.seats || {};
-      new Set([...Object.keys(xs), ...Object.keys(ys)]).forEach((s) => {
-        const a = xs[s], c = ys[s]; const pick = !a ? c : !c ? a : ((+c.u || 0) > (+a.u || 0) ? c : a);
-        if (gone[s] && gone[s] >= (+pick.u || 0)) return; seats[s] = JSON.parse(JSON.stringify(pick));
-      });
-      return { seats, seatGone: gone };
-    }
-    function mergeList(a, b, gone, key) {
-      a = a || []; b = b || [];
-      const bm = new Map(b.map((x) => [x.id, x])), am = new Set(a.map((x) => x.id));
-      const out = a.map((x) => { const y = bm.get(x.id); if (!y) return x; if (key === 'buses') { const base = u(y) > u(x) ? y : x; return Object.assign(JSON.parse(JSON.stringify(base)), mergeSeats(x, y)); } if ((x.uf || y.uf) && JSON.stringify(x) !== JSON.stringify(y)) return mergeFields(x, y); return u(y) > u(x) ? y : x; });
-      b.forEach((y, i) => { if (am.has(y.id)) return; let at = out.length; for (let k = i - 1; k >= 0; k--) { const j = out.findIndex((z) => z.id === b[k].id); if (j >= 0) { at = j + 1; break; } } out.splice(at, 0, y); am.add(y.id); });
-      return out.filter((x) => !(gone && gone[key + ':' + x.id] && gone[key + ':' + x.id] >= u(x)));
-    }
-    function mergeGone(a, b) { const g = Object.assign({}, a || {}); Object.keys(b || {}).forEach((k) => { g[k] = Math.max(g[k] || 0, b[k]); }); const old = Date.now() - 90 * 864e5; Object.keys(g).forEach((k) => { if (g[k] < old) delete g[k]; }); return g; }
-    function mergeTrip(L, R) {
-      if (!L) return R; if (!R) return L;
-      if (L.deleted || R.deleted) return u(L) >= u(R) ? L : R;
-      // i dati del viaggio (prezzi, partenze, date…) vincono per l'ora della LORO modifica (tu), non per quella delle righe
-      const tu = (x) => (x && +x.tu) || u(x);
-      const base = tu(L) >= tu(R) ? L : R, other = base === L ? R : L;
-      const out = JSON.parse(JSON.stringify(base));
-      out.u = Math.max(u(L), u(R)); out.tu = Math.max(tu(L), tu(R));
-      out.gone = mergeGone(L.gone, R.gone);
-      const LS = ['rows', 'attesa', 'annullati'];
-      ['rows', 'attesa', 'annullati', 'buses'].forEach((k) => { out[k] = mergeList(base[k], other[k], out.gone, k); });
-      // una persona spostata da una lista all'altra resta solo dove è stata messa per ultima
-      const best = new Map(); LS.forEach((k) => out[k].forEach((x) => { const b = best.get(x.id); if (!b || u(x) > b.u) best.set(x.id, { k, u: u(x) }); }));
-      LS.forEach((k) => { out[k] = out[k].filter((x) => best.get(x.id).k === k); });
-      // una persona messa in due posti diversi da due computer: resta nel posto scelto per ultimo
-      const where = new Map(); (out.buses || []).forEach((b) => Object.keys(b.seats || {}).forEach((s) => { const a = b.seats[s]; if (!a || !a.pid) return; const w = where.get(a.pid); if (!w || (+a.u || 0) > w.u) { if (w) delete w.b.seats[w.s]; where.set(a.pid, { b, s, u: +a.u || 0 }); } else delete b.seats[s]; }));
-      return out;
-    }
-    function mergeMap(key) {
-      return (L, R) => {
-        if (!L) return R; if (!R) return L;
-        const out = Object.assign({}, u(L) >= u(R) ? L : R); const m = Object.assign({}, R[key] || {});
-        Object.keys(L[key] || {}).forEach((id) => { const a = L[key][id], b = m[id]; m[id] = !b || u(a) >= u(b) ? a : b; });
-        out.gone = mergeGone(L.gone, R.gone); Object.keys(out.gone).forEach((id) => { if (m[id] && out.gone[id] >= u(m[id])) delete m[id]; });
-        out[key] = m; out.u = Math.max(u(L), u(R)); return out;
-      };
-    }
-    function mergeUnion(key) {
-      return (L, R) => {
-        if (!L) return R; if (!R) return L;
-        const seen = new Map(); [...(R[key] || []), ...(L[key] || [])].forEach((x) => { const y = seen.get(x.id); if (!y || u(x) >= u(y)) seen.set(x.id, x); });
-        return Object.assign({}, R, L, { [key]: [...seen.values()].sort((a, b) => String(a.at || '').localeCompare(String(b.at || ''))) });
-      };
-    }
-    const lww = (L, R) => (!L ? R : !R ? L : u(L) >= u(R) ? L : R);
-    function mergeFor(path) {
-      if (path.startsWith('/viaggi/')) return mergeTrip;
-      if (path === '/config/utenti.json') return mergeMap('users');
-      if (path.startsWith('/anagrafica/')) return mergeMap('clienti');
-      if (path.startsWith('/cassa/movimenti/')) return mergeUnion('movs');
-      if (path.startsWith('/registro/') && !path.startsWith('/registro/dispositivi/')) return mergeUnion('ev');
-      return lww;
-    }
-
-    // ---- lettura e scrittura per l'app ----
-    const get = (path) => { const r = files.get(path); return r ? r.data : null; };
-    const list = (prefix) => [...files.keys()].filter((p) => p.startsWith(prefix)).map((p) => [p, files.get(p).data]);
-    let ver = 0;
-    function put(path, data) {
-      const rec = files.get(path) || { rev: null };
-      let d = JSON.parse(JSON.stringify(data));
-      if (rec.data && mergeFor(path) !== lww) d = mergeFor(path)(d, rec.data);
-      files.set(path, { rev: rec.rev, data: d }); ver++;
-      persist(path); dirty.add(path); saveQ(); kick(); emit();
-      const now = Date.now(); if (!path.startsWith('/presenza/') && (!putSeen[path] || now - putSeen[path] > 15000)) { putSeen[path] = now; DIAG.ev('salva', 'Salvato ' + path, { inAttesa: dirty.size }); }
-    }
-    const putSeen = {};
-
-    // ---- Dropbox ----
-    const enc = new TextEncoder(), dec = new TextDecoder();
-    let lock = Promise.resolve();
-    const locked = (fn) => { const p = lock.then(fn, fn); lock = p.catch(() => {}); return p; };
-    async function pullOnce() {
-      const D = DBX(); let cursor = lsGet(CK, null); let res;
-      try { res = cursor ? await D.listFolder(null, cursor) : await D.listFolder(''); }
-      catch (e) { if (e.code === 'reset') { lsSet(CK, null); res = await D.listFolder(''); } else throw e; }
-      if (res === null) { lsSet(CK, null); markPulled(); return []; }
-      const changed = [];
-      for (;;) {
-        for (const en of res.entries || []) {
-          const p = en.path_lower;
-          if (en['.tag'] === 'deleted') { if (files.has(p) && !dirty.has(p)) { files.delete(p); persist(p); changed.push(p); DIAG.ev('sync', 'Cancellato da un altro computer: ' + p); } continue; }
-          if (en['.tag'] !== 'file' || !/\.json$/.test(p)) continue;
-          const loc = files.get(p); if (loc && loc.rev === en.rev) continue;
-          const r = await D.download(p); if (!r) continue;
-          let remote; try { remote = JSON.parse(dec.decode(r.buf)); } catch (e) { DIAG.ev('sync-errore', 'File illeggibile su Dropbox: ' + p, { bytes: r.buf && r.buf.byteLength }); continue; }
-          if (dirty.has(p) && loc) { files.set(p, { rev: r.meta.rev || en.rev, data: mergeFor(p)(loc.data, remote) }); DIAG.ev('sync-unione', 'Unito con le modifiche di un altro computer: ' + p); }
-          else files.set(p, { rev: r.meta.rev || en.rev, data: remote });
-          persist(p); changed.push(p); ver++;
-        }
-        lsSet(CK, res.cursor);
-        if (!res.has_more) break;
-        res = await D.listFolder(null, res.cursor);
-      }
-      markPulled();
-      if (changed.length) DIAG.ev('sync', `Ricevuti ${changed.length} file da Dropbox`, { file: changed.slice(0, 25) });
-      return changed;
-    }
-    function markPulled() { if (!st.pulled) { st.pulled = true; lsSet(PK, true); } }
-    async function pushOnce() {
-      const D = DBX(); const changed = []; let fail = null; const sent = [];
-      for (const p of [...dirty]) {
-       try {
-        const rec = files.get(p); if (!rec) { dirty.delete(p); continue; }
-        for (let tryN = 0; tryN < 4; tryN++) {
-          try {
-            const meta = await D.upload(p, enc.encode(JSON.stringify(rec.data)), rec.rev ? { update: rec.rev } : 'add');
-            const cur = files.get(p); files.set(p, { rev: meta.rev, data: cur ? cur.data : rec.data }); persist(p);
-            if (cur && JSON.stringify(cur.data) === JSON.stringify(rec.data)) dirty.delete(p);
-            sent.push(p); break;
-          } catch (e) {
-            if (e.code !== 'conflict') throw e;
-            DIAG.ev('sync-conflitto', `${p}: cambiato nel frattempo da un altro computer, unisco (tentativo ${tryN + 1})`);
-            const r = await D.download(p);
-            if (!r) { rec.rev = null; continue; }
-            let remote = null; try { remote = JSON.parse(dec.decode(r.buf)); } catch (x) { remote = null; }
-            const merged = remote ? mergeFor(p)(files.get(p).data, remote) : files.get(p).data;
-            files.set(p, { rev: r.meta.rev, data: merged }); persist(p); Object.assign(rec, files.get(p)); changed.push(p); ver++;
-          }
-        }
-       } catch (e) { fail = fail || e; DIAG.ev('sync-errore', 'Invio non riuscito: ' + p, { code: e.code, status: e.status, summary: e.summary }); if (e.code === 'network' || e.code === 'no_auth') break; }
-      }
-      saveQ();
-      if (sent.length) DIAG.ev('sync', `Inviati ${sent.length} file a Dropbox`, { file: sent.slice(0, 25), restano: dirty.size });
-      if (fail) { const e = fail; e.changed = changed; throw e; }
-      return changed;
-    }
-    async function pushBlobs() {
-      const D = DBX();
-      for (const p of [...blobQ]) {
-        const b = await tx('blobs', 'readonly', (s) => s.get(p)).catch(() => null);
-        if (!b) { blobQ.delete(p); continue; }
-        try { await D.upload(p, b, 'overwrite'); blobQ.delete(p); DIAG.ev('sync', 'Inviato il file ' + p, { KB: Math.round((b.size || 0) / 1024) }); } catch (e) { DIAG.ev('sync-errore', 'Invio del file non riuscito: ' + p, { code: e.code, status: e.status }); if (e.code === 'network' || e.code === 'no_auth') break; }
-      }
-      lsSet(QK + '-b', [...blobQ]);
-    }
-    async function syncNow() {
-      if (!linked() || !navigator.onLine) return;
-      return locked(async () => {
-        st.syncing = true; emit();
-        try {
-          const a = await pullOnce(); if (a.length) onRemote(a);
-          let b = []; try { b = await pushOnce(); } catch (e) { if (e.changed && e.changed.length) onRemote(e.changed); throw e; }
-          if (b.length) onRemote(b);
-          await pushBlobs();
-          st.error = ''; st.last = new Date();
-        } catch (e) { st.error = e && e.code ? e.code : 'errore'; DIAG.ev('sync-errore', 'Sincronizzazione interrotta: ' + st.error, { code: e && e.code, status: e && e.status, summary: e && e.summary, msg: e && e.message }); if (window.ACC) ACC.tlog('errore', 'Sincronizzazione Dropbox: ' + (e && (e.code + (e.status ? ' ' + e.status : '')) || e)); throw e; }
-        finally { st.syncing = false; emit(); }
-      });
-    }
-    let kickT = null; let looping = false;
-    function kick() { clearTimeout(kickT); kickT = setTimeout(() => { syncNow().catch(() => {}); }, 1200); }
-    async function loop() {
-      if (looping) return; looping = true;
-      let wait = 2000;
-      for (;;) {
-        if (!linked() || !navigator.onLine) { await sleep(4000); continue; }
-        try {
-          await syncNow(); wait = 2000;
-          const cur = lsGet(CK, null);
-          if (cur) { const lp = await DBX().longpoll(cur, 45); if (lp && lp.backoff) { DIAG.ev('sync', `Dropbox chiede di aspettare ${lp.backoff} s`); await sleep(lp.backoff * 1000); } }
-          else await sleep(5000);
-        } catch (e) { DIAG.ev('sync', `Nuovo tentativo tra ${Math.round(wait / 1000)} s`); await sleep(wait); wait = Math.min(60000, wait * 2); }
-      }
-    }
-    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-    function emit() { try { onStatus(status()); } catch (e) { /* niente */ } }
-    function status() { return Object.assign({ linked: linked(), pending: dirty.size + blobQ.size, hasKey: !!(DBX() && DBX().hasKey()) }, st); }
-
-    // ---- file non di testo (programmi) ----
-    async function putBlob(path, blob) { await tx('blobs', 'readwrite', (s) => s.put(blob, path)).catch(() => {}); blobQ.add(path); lsSet(QK + '-b', [...blobQ]); kick(); }
-    async function getBlob(path) {
-      const b = await tx('blobs', 'readonly', (s) => s.get(path)).catch(() => null); if (b) return b;
-      if (!linked()) return null;
-      const r = await DBX().download(path); if (!r) return null;
-      const bl = new Blob([r.buf], { type: /\.pdf$/i.test(path) ? 'application/pdf' : /\.png$/i.test(path) ? 'image/png' : 'image/jpeg' });
-      await tx('blobs', 'readwrite', (s) => s.put(bl, path)).catch(() => {});
-      return bl;
-    }
-    async function delBlob(path) { await tx('blobs', 'readwrite', (s) => s.delete(path)).catch(() => {}); blobQ.delete(path); lsSet(QK + '-b', [...blobQ]); if (linked()) DBX().remove(path).catch(() => {}); }
-
-    return {
-      pendingList: () => [...dirty, ...blobQ],
-      sizes() { const o = {}; files.forEach((r, p) => { const k = p.split('/').slice(0, 2).join('/') || '/'; const b = JSON.stringify(r.data || null).length; const x = o[k] = o[k] || { file: 0, KB: 0, senzaRev: 0 }; x.file++; x.KB += b / 1024; if (!r.rev) x.senzaRev++; }); Object.values(o).forEach(x => { x.KB = Math.round(x.KB); }); return o; },
-      cursor: () => !!lsGet(CK, null),
-      dropUnsynced() { DIAG.ev('sync', 'Primo collegamento a Dropbox: tolti i dati di prova di questo computer'); [...files.keys()].forEach((p) => { const r = files.get(p); if (r && !r.rev) { files.delete(p); persist(p); dirty.delete(p); } }); blobQ.clear(); lsSet(QK + '-b', []); saveQ(); },
-      ver: () => ver,
-      open, get, list, put, putBlob, getBlob, delBlob, syncNow, loop, kick, status, device,
-      mergeTrip, mergeFor, set onRemote(f) { onRemote = f; }, set onStatus(f) { onStatus = f; },
-      // per le prove: svuota la copia locale
-      async wipe() { DIAG.ev('sync', 'Copia di questo computer cancellata: la riscarico da Dropbox'); files.clear(); dirty.clear(); blobQ.clear(); saveQ(); lsSet(CK, null); lsSet(PK, null); st.pulled = false; await tx('files', 'readwrite', (s) => s.clear()); await tx('blobs', 'readwrite', (s) => s.clear()); }
-    };
-  })();
+  // ---------- archivio ----------
+  // Lettura, salvataggio e allineamento con gli altri computer stanno in archivio.js (window.VIPARCHIVIO):
+  // le schermate usano solo le funzioni elencate in cima a quel file.
+  const STORE = window.VIPARCHIVIO;
+  STORE.diag = DIAG;
 
   // ---------- account, accesso e registro tecnico ----------
   // Ruoli: «super» (Super Master: il tecnico per la manutenzione, invisibile agli altri), «master», «operatore»,
@@ -3491,6 +3239,7 @@
     mv.tot = Math.round(mv.parts.reduce((a, p) => a + (+p.a || 0), 0) * 100) / 100;
     const p = movPath(day); const cur = STORE.get(p) || { dev: STORE.device.id, movs: [] };
     cur.movs = (cur.movs || []).concat([mv]); STORE.put(p, cur);
+    offNoteMov(mv);
     return mv;
   }
   const fmtNum = v => { const r = Math.round(v * 100) / 100; return Number.isInteger(r) ? String(r) : String(r).replace('.', ','); };
@@ -3638,9 +3387,9 @@
     const Q = t.quota || {}; const m = bkMoney(t, bk); const cat = tripCat(t); bk._m = m;
     const pm = payMoney(t, bk, pid); const who = pid ? bk.persone.filter(p => p.id === pid) : bk.persone.filter(p => pm.incl.includes(p.id));
     const tkOn = Q.tkt1 != null || Q.tkt2 != null; const dir = tkOn ? (+Q.diritti || 0) : 0;
-    const groups = []; let suppl = 0;
+    const groups = []; let suppl = 0; const supL = [];
     bk.persone.forEach((p, i) => { if (!who.includes(p)) return;
-      const per = m.per[i] || {}; const tipo = per.tipo; const sup = supplOf(t, bk, p) || 0; suppl += sup;
+      const per = m.per[i] || {}; const tipo = per.tipo; const sup = supplOf(t, bk, p) || 0; suppl += sup; if (sup) supL.push(sup);
       const tk = tkOn && tipo !== 'free' ? (+(tipo === 'bam' || tipo === 'inf' ? (Q.tkt2 ?? Q.tkt1) : Q.tkt1) || 0) : 0;
       const bus = per.v != null ? r2(per.v - sup - (tk ? tk + dir : 0)) : 0;
       const l = tipo === 'bam' || tipo === 'inf' ? 'Ridotto' : 'Intero';
@@ -3653,10 +3402,11 @@
     const P0 = pid ? who[0] : bk.persone[0]; const h = pid ? P0.row : bk.head; const cl = h.cid && S.clients.clienti[h.cid];
     const circ = Q.circuito || (tkOn ? (ACC.sess.ag === 'md' ? 'T.OneMD' : 'T.OneRG') : '');
     return {
-      bigl: cat === 'biglietteria', tour: cat === 'tour',
+      bigl: cat === 'biglietteria', tour: cat === 'tour', gita: cat === 'gita',
       doc: cat === 'tour' ? 'fattura' : 'scontrino', cat: autoCat, cliente: (pid ? `${P0.cognome} ${P0.nome}` : `${bkName(bk)} ${bk.persone[0] ? bk.persone[0].nome : ''}`).trim().toUpperCase(),
-      desc: `${yy2(t.data)} ${t.nome}`.toLowerCase(), lines: groups, suppl: r2(suppl), dir, circuito: circ, emis: todayISO(), ant: false,
-      imp: pm.rest != null && pm.rest > 0 ? r2(pm.rest) : '', met: 'contanti', mix: {}, pratica: '', canale: 'In agenzia', dataPag: todayISO(), pagante: '', note: '',
+      // gite: descrizione come sullo scontrino dell'agenzia, «gita randazzo e floresta 08/11/26»
+      desc: (cat === 'gita' ? `${/^\s*gita\b/i.test(t.nome || '') ? '' : 'gita '}${t.nome || ''} ${yy2(t.data)}` : `${yy2(t.data)} ${t.nome}`).replace(/\s+/g, ' ').trim().toLowerCase(), lines: groups, suppl: r2(suppl), supN: supL.length > 1 && supL.every(v => v === supL[0]) ? supL.length : 1, dir, circuito: circ, emis: todayISO(), ant: false,
+      imp: pm.rest != null && pm.rest > 0 ? r2(pm.rest) : '', rest: pm.rest != null ? r2(pm.rest) : null, met: 'contanti', mix: {}, pratica: '', canale: 'In agenzia', dataPag: todayISO(), pagante: '', note: '',
       legacy: h.pagato || '',
       fatt: (() => { const p0 = P0 || {}; const nm = (cl && cl.nome) || p0.nome || ''; return {
         cognome: (cl && cl.cognome) || (pid ? p0.cognome : bkName(bk)), nome: nm, sesso: (cl && cl.sesso) || CF.guessSex(nm),
@@ -3786,8 +3536,8 @@
   function payRecalc() {
     const f = UI.pay && UI.pay.f; if (!f) return; const T = payTotals(f); const el = $('#pp-tot'); if (el) el.innerHTML = payTotHTML(T, f.bigl);
     f.lines.forEach((l, i) => { const c = $('#pl-t' + i); if (c) c.textContent = l.q ? money((+l.q) * ((+l.bus || 0) + (+l.tkt || 0))) : ''; });
+    const t = trip(); const bk = t && deriveBookings(t).find(x => x.id === UI.pay.bkId); const w = $('#pp-warn'); if (bk) { bk._m = bkMoney(t, bk); const pm = payMoney(t, bk, UI.pay.pid || ''); f.rest = pm.rest != null ? r2(pm.rest) : null; if (w) w.textContent = payWarnTxt(f, pm); }
     const rt = $('#pp-rt'); if (rt) rt.innerHTML = rtPreviewHTML(f);
-    const t = trip(); const bk = t && deriveBookings(t).find(x => x.id === UI.pay.bkId); const w = $('#pp-warn'); if (w && bk) { bk._m = bkMoney(t, bk); w.textContent = payWarnTxt(f, payMoney(t, bk, UI.pay.pid || '')); }
   }
   function payInput(el) {
     const f = UI.pay && UI.pay.f; if (!f) return false; const d = el.dataset;
@@ -3814,12 +3564,14 @@
     if (f.doc === 'fattura' && !String(f.fatt.cf || '').trim()) return toast('Per la fattura scrivi il codice fiscale o la partita IVA');
     if (f.doc === 'fattura') { const c = CF.check(f.fatt.cf); if (c !== 'ok' && c !== 'piva') return toast(c === 'piva-errata' ? 'La partita IVA non è valida: ricontrollala' : 'Il codice fiscale non è valido: ricontrollalo'); }
     const T = payTotals(f); bk._m = bkMoney(t, bk); const pid = UI.pay.pid || ''; const m = payMoney(t, bk, pid); const P = pid && bk.persone.find(p => p.id === pid);
+    f.rest = m.rest != null ? r2(m.rest) : null;
+    if (rtGitaParziale(f)) return toast(`Per le gite lo scontrino si fa solo al saldo: incassa tutto quello che resta (${money(f.rest != null ? f.rest : T.tot)}) oppure scegli «Senza documento»`);
     const tipo = m.rest != null && imp >= m.rest - 0.009 ? 'saldo' : 'acconto';
     const agz = T.tot > 0 ? r2(imp * T.agenzia / T.tot) : imp;
     const mv = addMov({ tripId: t.id, tripN: t.nome, tripD: t.data, bkId: bk.id, pid: pid || undefined, pnome: P ? `${P.cognome} ${P.nome}`.trim() : undefined, cliente: f.cliente || (P ? `${P.cognome} ${P.nome}` : `${bkName(bk)} x ${bk.persone.length}`), tel: (P && P.tel) || (bk.persone.find(p => p.tel) || {}).tel || '', tipo, parts,
       doc: f.doc, docStato: f.doc === 'scontrino' || f.doc === 'fattura' ? 'da_emettere' : '', cat: f.cat, desc: f.desc, circuito: T.tkt ? f.circuito : '', emis: T.tkt ? f.emis : '', ant: !!f.ant,
       rt: f.doc === 'scontrino' ? { chiusura: '', numero: '', dataOra: '', matricola: '', esito: '' } : undefined,
-      lines: f.lines.filter(l => +l.q).map(l => ({ l: l.l, q: +l.q, bus: +l.bus || 0, tkt: +l.tkt || 0 })), suppl: T.sup, dir: +f.dir || 0, nT: T.nT, docTot: T.tot, agenzia: agz, biglietti: r2(imp - agz),
+      lines: f.lines.filter(l => +l.q).map(l => ({ l: l.l, q: +l.q, bus: +l.bus || 0, tkt: +l.tkt || 0 })), suppl: T.sup, supN: f.supN || 1, dir: +f.dir || 0, nT: T.nT, docTot: T.tot, agenzia: agz, biglietti: r2(imp - agz),
       pratica: f.pratica, canale: f.met === 'contanti' || f.met === 'pos' ? '' : f.canale, dataPag: f.met === 'contanti' || f.met === 'pos' ? '' : f.dataPag, pagante: f.pagante, note: f.note, fatt: f.doc === 'fattura' ? Object.assign({}, f.fatt) : null, sigla: sigla(ACC.sess.uid, ACC.me().name) });
     const hc = P ? P.row.cid : bk.head.cid;
     if (f.doc === 'fattura' && hc && S.clients.clienti[hc]) { const c = S.clients.clienti[hc]; Object.assign(c, { cf: f.fatt.cf, sdi: f.fatt.sdi, cap: f.fatt.cap, citta: f.fatt.citta }); if (f.fatt.sesso) c.sesso = f.fatt.sesso; if (f.fatt.nascita) c.nascita = CF.itFromIso(f.fatt.nascita); if (f.fatt.natoA) c.natoA = f.fatt.natoA; if (f.fatt.ind) c.indirizzo = f.fatt.ind; save(); }
@@ -3989,11 +3741,34 @@
   // Qui: impostazioni (tipi di pagamento e reparti del registratore), anteprima nel riquadro dell'incasso,
   // dati dello scontrino emesso sul movimento, file Danea degli scontrini del giorno.
   const RT_PARTS = [['bus', 'Quota viaggio / bus'], ['suppl', 'Supplemento fila'], ['dir', 'Diritti di prevendita']];
-  const RT_DEF = () => ({ pag: {}, rep: {}, daneaScontrini: false });
-  const rtCfg = () => { const c = Object.assign(RT_DEF(), S.cfg.rt || {}); c.pag = c.pag || {}; c.rep = c.rep || {}; return c; };
+  const RT_DEF = () => ({ pag: {}, rep: {}, iva: {}, intest: {}, daneaScontrini: false });
+  const rtCfg = () => { const c = Object.assign(RT_DEF(), S.cfg.rt || {}); c.pag = c.pag || {}; c.rep = c.rep || {}; c.iva = c.iva || {}; c.intest = c.intest || {}; return c; };
   const rtRep = (cat, k) => { const R = rtCfg().rep; return String(((R[cat] || {})[k]) || ((R['*'] || {})[k]) || '').trim(); };
   const rtPag = m => { const p = rtCfg().pag[m] || {}; return { n: String(p.n || '').trim(), d: String(p.d || '').trim() }; };
   const rr2 = v => Math.round((+v || 0) * 100) / 100;
+  // IVA dei reparti (2.1.3): di base «NI non imponibile», come sullo scontrino dell'agenzia
+  const RT_IVA = [['NI', 'NI · Non imponibile'], ['ES', 'ES · Esente'], ['NS', 'NS · Non soggetta'], ['22', '22%'], ['10', '10%'], ['5', '5%'], ['4', '4%']];
+  const RT_IVA_SIG = { NI: ['I', '*NI Non imponibile'], ES: ['E', '*ES Esente'], NS: ['S', '*NS Non soggetta'] };
+  const rtIva = k => { const v = String(rtCfg().iva[k] || 'NI'); return RT_IVA.some(([x]) => x === v) ? v : 'NI'; };
+  // intestazione per l'anteprima (sullo scontrino vero la stampa il registratore)
+  const RT_INT_DEF = { rg: 'LA TERRA VIAGGI IN PULLMAN SNC\nVIA ARCHIMEDE 285/C\n97100 - RAGUSA\nP.IVA 01622470886' };
+  const rtIntest = ag => { const v = rtCfg().intest[ag]; return v != null ? String(v) : (RT_INT_DEF[ag] || 'LA TERRA VIAGGI IN PULLMAN SNC\nP.IVA 01622470886'); };
+  // descrizione della riga come sullo scontrino dell'agenzia: «gita randazzo e floresta 08/11/26».
+  // Lunghezza massima della descrizione sul registratore: 38 caratteri (da verificare con il manuale Custom).
+  // Se è più lunga si accorcia il nome e si tiene sempre la data in fondo.
+  const RT_DESC_MAX = 38;
+  function rtFit(s, extra) {
+    s = String(s || '').replace(/\s+/g, ' ').trim(); const x = extra ? ' ' + String(extra).replace(/\s+/g, ' ').trim().toLowerCase() : '';
+    const m = s.match(/^(.*?)(\s\d{2}\/\d{2}\/\d{2,4})$/); const head = m ? m[1] : s; const tail = x + (m ? m[2] : '');
+    if (head.length + tail.length <= RT_DESC_MAX) return head + tail;
+    // «ridotto» che non ci sta diventa «rid.»
+    if (x.length > 5 && !/\s/.test(x.trim())) return rtFit(s, x.trim().slice(0, 3) + '.');
+    // si taglia tra una parola e l'altra e si tolgono virgole e parole corte rimaste in fondo («e», «le», «di»…)
+    let h = head.slice(0, Math.max(0, RT_DESC_MAX - tail.length + 1)); const sp = h.lastIndexOf(' ');
+    h = sp > 4 ? h.slice(0, sp) : h.slice(0, RT_DESC_MAX - tail.length);
+    for (let i = 0; i < 3; i++) h = h.replace(/[\s,;:.\-–]+$/, '').replace(/\s(e|ed|o|di|del|della|dei|delle|da|a|al|alle|in|la|le|il|lo|gli|i|l'|con|per|su|tra|fra)$/i, '');
+    return h.replace(/[\s,;:.\-–]+$/, '') + tail;
+  }
   // cosa andrà sul registratore: righe della parte agenzia (bus, supplemento fila, diritti) e tipi di pagamento.
   // Se si incassa solo una parte del documento (acconto o saldo di quanto già pagato prima), sul registratore va una riga sola «Pagamento parziale» con l'importo della parte agenzia.
   function rtDraft(m) {
@@ -4002,10 +3777,12 @@
     const full = rr2(bus + sup + dirT); const ag = rr2(m.agenzia != null ? m.agenzia : full);
     let righe = [];
     if (full > 0 && Math.abs(ag - full) < 0.01) {
-      L.filter(l => +l.bus).forEach(l => righe.push({ part: 'bus', desc: `${m.desc || 'Viaggio'}${L.length > 1 || l.l !== 'Intero' ? ' · ' + l.l : ''}`, q: +l.q, prezzo: rr2(l.bus), reparto: rtRep(cat, 'bus') }));
-      if (sup) righe.push({ part: 'suppl', desc: 'Supplemento fila', q: 1, prezzo: sup, reparto: rtRep(cat, 'suppl') });
-      if (dirT) righe.push({ part: 'dir', desc: 'Diritti di prevendita', q: nT, prezzo: rr2(m.dir), reparto: rtRep(cat, 'dir') });
-    } else if (ag > 0) righe.push({ part: 'bus', desc: `Pagamento parziale · ${m.desc || 'Viaggio'}`, q: 1, prezzo: ag, reparto: rtRep(cat, 'bus'), acconto: true });
+      L.filter(l => +l.bus).forEach(l => righe.push({ part: 'bus', desc: rtFit(m.desc || 'viaggio', l.l && !/^intero$/i.test(String(l.l).trim()) ? l.l : ''), q: +l.q, prezzo: rr2(l.bus), reparto: rtRep(cat, 'bus'), iva: rtIva('bus') }));
+      // supplemento fila: «2x4,00» se tutte le persone hanno lo stesso supplemento, altrimenti «1x» con il totale
+      const sN = +m.supN > 1 && Math.abs(rr2(sup / m.supN) * m.supN - sup) < 0.005 ? +m.supN : 1;
+      if (sup) righe.push({ part: 'suppl', desc: 'supplemento fila', q: sN, prezzo: rr2(sup / sN), reparto: rtRep(cat, 'suppl'), iva: rtIva('suppl') });
+      if (dirT) righe.push({ part: 'dir', desc: 'diritti di prevendita', q: nT, prezzo: rr2(m.dir), reparto: rtRep(cat, 'dir'), iva: rtIva('dir') });
+    } else if (ag > 0) righe.push({ part: 'bus', desc: rtFit((cat === 'Gita' ? 'saldo ' : 'pagamento parziale ') + (m.desc || 'viaggio')), q: 1, prezzo: ag, reparto: rtRep(cat, 'bus'), iva: rtIva('bus'), acconto: true });
     const totale = rr2(righe.reduce((a, r) => a + r.q * r.prezzo, 0));
     // pagamenti in proporzione alla parte agenzia (i biglietti del circuito restano fuori dallo scontrino)
     const parts = (m.parts || []).filter(p => +p.a); const tp = rr2(parts.reduce((a, p) => a + (+p.a), 0));
@@ -4021,15 +3798,51 @@
     if (!f || f.doc !== 'scontrino') return '';
     const T = payTotals(f); const imp = rr2(+f.imp || 0);
     const parts = f.met === 'misto' ? METODI.map(([k]) => ({ m: k, a: rr2(f.mix[k] || 0) })).filter(p => p.a > 0) : (imp ? [{ m: f.met, a: imp }] : []);
-    const ag = imp > 0 && T.tot > 0 ? rr2(imp * T.agenzia / T.tot) : T.agenzia;
-    const d = rtDraft({ lines: f.lines, suppl: T.sup, dir: f.dir, nT: T.nT, cat: f.cat, desc: f.desc, agenzia: ag, parts });
+    const noSaldo = rtGitaParziale(f);
+    const ag = imp > 0 && T.tot > 0 && !noSaldo ? rr2(imp * T.agenzia / T.tot) : T.agenzia;
+    const parts2 = parts.length && !noSaldo ? parts : f.met !== 'misto' ? [{ m: f.met, a: ag }] : parts;
+    const d = rtDraft({ lines: f.lines, suppl: T.sup, supN: f.supN, dir: f.dir, nT: T.nT, cat: f.cat, desc: f.desc, agenzia: ag, parts: parts2 });
     if (!d.righe.length) return '';
-    return `<div class="pp-rt"><div class="pp-rt-h">${ICON.print} Cosa andrà sul registratore</div>
-      <table><thead><tr><th>Descrizione</th><th class="r">Q</th><th class="r">Prezzo</th><th class="r">Reparto</th></tr></thead><tbody>
-      ${d.righe.map(r => `<tr><td>${esc(r.desc)}</td><td class="r">${r.q}</td><td class="r">${esc(money(r.prezzo))}</td><td class="r">${r.reparto ? esc(r.reparto) : '<span class="rt-miss">—</span>'}</td></tr>`).join('')}
-      <tr class="tot"><td>Totale scontrino</td><td></td><td class="r">${esc(money(d.totale))}</td><td></td></tr></tbody></table>
-      ${d.pagamenti.length ? `<div class="pp-rt-p">Pagamento: ${d.pagamenti.map(p => `<b>${esc(MET_L[p.metodo] || p.metodo)}</b> ${esc(money(p.importo))} → ${p.n ? `<span class="rt-ok">${esc(p.n)} ${esc(p.d)}</span>` : '<span class="rt-miss">—</span>'}`).join(' · ')}</div>` : ''}
+    return `<div class="pp-rt"><div class="pp-rt-h">${ICON.print} Anteprima dello scontrino</div>
+      ${noSaldo ? `<div class="rt-warn rt-stop">${ICON.alert}<div>Per le gite lo scontrino si fa solo al saldo: incassa tutto quello che resta (${esc(money(rtDue(f)))}) oppure scegli «Senza documento».</div></div>` : ''}
+      ${rtReceiptHTML(d, ACC.sess.ag)}
       ${d.avvisi.length ? `<div class="rt-warn">${ICON.alert}<div>${d.avvisi.map(esc).join('<br>')}<br><small>Si imposta in Impostazioni › Registratore telematico.</small></div></div>` : ''}</div>`;
+  }
+  // quanto resta da pagare (se la lista non lo sa, il totale delle righe)
+  const rtDue = f => f.rest != null ? rr2(f.rest) : payTotals(f).tot;
+  // gita con scontrino e importo più basso del dovuto: per le gite niente acconti, lo scontrino si fa solo al saldo
+  function rtGitaParziale(f) {
+    if (!f || f.doc !== 'scontrino' || !f.gita) return false;
+    const imp = rr2(+f.imp || 0); const due = rtDue(f);
+    return imp > 0 && due > 0 && imp < due - 0.009;
+  }
+  // lo scontrino disegnato come quello del registratore dell'agenzia (solo anteprima)
+  const rtN = v => (+v || 0).toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const rtSig = v => RT_IVA_SIG[v] ? RT_IVA_SIG[v][0] : v + '%';
+  const rtPagL = (k, d) => k === 'contanti' ? 'CONTANTE' : ['pos', 'paypal', 'postepay'].includes(k) ? 'ELETTRONICO' : String(d || MET_L[k] || k).toUpperCase();
+  function rtReceiptHTML(d, agId) {
+    const ag = S.cfg.agenzie.find(a => a.id === agId) || {};
+    const head = rtIntest(agId).split('\n').map(x => x.trim()).filter(Boolean);
+    const ivaTot = rr2(d.righe.reduce((a, r) => { const p = parseFloat(r.iva); return a + (isNaN(p) ? 0 : r.q * r.prezzo * p / (100 + p)); }, 0));
+    const sigs = [...new Set(d.righe.map(r => r.iva))].filter(v => RT_IVA_SIG[v]);
+    const now = new Date(); const p2 = x => String(x).padStart(2, '0');
+    const amt = (v, iva) => `<span class="rcp-p">${esc(rtN(v))}<i>${iva ? esc(rtSig(iva)) : ''}</i></span>`;
+    const rows = d.righe.map(r => r.q > 1 || r.desc.length > 24
+      ? `<div class="rcp-d">${esc(r.desc)}</div><div class="rcp-r"><span class="rcp-q">${r.q > 1 ? `${r.q}x${esc(rtN(r.prezzo))}` : ''}</span>${amt(r.q * r.prezzo, r.iva)}</div>`
+      : `<div class="rcp-r"><span class="rcp-d1">${esc(r.desc)}</span>${amt(r.prezzo, r.iva)}</div>`).join('');
+    return `<div class="rcp" role="img" aria-label="Anteprima dello scontrino: totale ${esc(rtN(d.totale))} euro">
+      <div class="rcp-badge">ANTEPRIMA · non è un documento fiscale</div>
+      <div class="rcp-c rcp-h">${head.map((x, i) => `<div${i === 0 ? ' class="rcp-big"' : ''}>${esc(x)}</div>`).join('')}</div>
+      <div class="rcp-c rcp-dc"><div>DOCUMENTO COMMERCIALE</div><div class="rcp-s">di vendita o prestazione</div></div>
+      <div class="rcp-r rcp-th"><span>DESCRIZIONE</span><span>PREZZO(€) IVA</span></div>
+      ${rows}
+      <div class="rcp-r rcp-tot"><span>TOTALE COMPLESSIVO</span><span>${esc(rtN(d.totale))}</span></div>
+      <div class="rcp-r"><span>DI CUI IVA</span><span>${esc(rtN(ivaTot))}</span></div>
+      ${d.pagamenti.map(p => `<div class="rcp-r"><span>PAGAMENTO ${esc(rtPagL(p.metodo, p.d))}</span><span>${esc(rtN(p.importo))}</span></div>`).join('')}
+      <div class="rcp-r"><span>IMPORTO PAGATO</span><span>${esc(rtN(d.pagamenti.length ? d.pagamenti.reduce((a, p) => a + p.importo, 0) : d.totale))}</span></div>
+      ${sigs.length ? `<div class="rcp-leg">${sigs.map(v => `<div>${esc(RT_IVA_SIG[v][0])}: ${esc(RT_IVA_SIG[v][1])}</div>`).join('')}</div>` : ''}
+      <div class="rcp-r rcp-ft"><span>${p2(now.getDate())}/${p2(now.getMonth() + 1)}/${String(now.getFullYear()).slice(2)} ${p2(now.getHours())}:${p2(now.getMinutes())}</span><span>DOC. ----</span></div>
+      <div class="rcp-c rcp-rt"><i>RT</i> ${esc(ag.rtMatricola || '··········')}</div></div>`;
   }
   // emissione: chiede a registratore.js e scrive nel registro l'esito (per ora sempre «non ancora collegato»)
   async function fiscalPrint(mv) {
@@ -4065,12 +3878,19 @@
         <tr class="rt-all"><td><b>Tutte le categorie</b></td>${RT_PARTS.map(([k]) => `<td>${rep('*', k)}</td>`).join('')}</tr>
         ${CATS.map(c => `<tr><td>${esc(c)}</td>${RT_PARTS.map(([k]) => `<td>${rep(c, k)}</td>`).join('')}</tr>`).join('')}
         </tbody></table></div>
+      <div class="box form"><h3>IVA dei reparti</h3><div class="small">Come è programmato ogni reparto sul registratore. Serve per l'anteprima dello scontrino (riga «di cui IVA» e lettera accanto al prezzo). Sullo scontrino dell'agenzia le gite sono «NI · Non imponibile».</div>
+        <div class="rt-int rt-ivag">${RT_PARTS.map(([k, l]) => `<label>${esc(l)}<select class="rt-sel" data-rtiva="${k}" aria-label="IVA del reparto ${esc(l)}">${RT_IVA.map(([v, t]) => `<option value="${v}"${rtIva(k) === v ? ' selected' : ''}>${esc(t)}</option>`).join('')}</select></label>`).join('')}</div>
+        <div class="rt-note">${ICON.alert}<span>Diritti di prevendita: l'IVA giusta va verificata con il commercialista.</span></div></div>
+      <div class="box form"><h3>Intestazione dello scontrino</h3><div class="small">Le righe in alto, come sono programmate su ogni registratore. Servono solo per l'anteprima: sullo scontrino vero l'intestazione la stampa il registratore da solo.</div>
+        <div class="rt-int">${S.cfg.agenzie.map(a => `<label>${esc(a.nome)}<textarea class="rt-ta" data-rtint="${esc(a.id)}" rows="4" spellcheck="false" aria-label="Intestazione dello scontrino di ${esc(a.nome)}">${esc(rtIntest(a.id))}</textarea></label>`).join('')}</div></div>
       <div class="box form"><h3>File Danea degli scontrini</h3>
         <label class="kv"><span><b>Pulsante «Scontrini del giorno per Danea»</b> nel resoconto giornaliero<br><small>Accendilo solo dopo la prova di importazione: Danea deve registrare gli scontrini senza rimandarli al registratore.</small></span><input type="checkbox" class="sw" id="rt-dan"${C.daneaScontrini ? ' checked' : ''}></label></div>
       <div><button class="btn primary" data-act="savert">Salva</button></div>`;
   }
   function rtSave() {
-    const C = { pag: {}, rep: {}, daneaScontrini: !!($('#rt-dan') && $('#rt-dan').checked) };
+    const C = { pag: {}, rep: {}, iva: {}, intest: {}, daneaScontrini: !!($('#rt-dan') && $('#rt-dan').checked) };
+    $$('[data-rtiva]').forEach(i => { C.iva[i.dataset.rtiva] = i.value; });
+    $$('[data-rtint]').forEach(i => { C.intest[i.dataset.rtint] = i.value.split('\n').map(x => x.trim()).filter(Boolean).join('\n'); });
     $$('[data-rtpag]').forEach(i => { const v = i.value.trim(); if (!v) return; (C.pag[i.dataset.rtpag] = C.pag[i.dataset.rtpag] || {})[i.dataset.k] = v; });
     $$('[data-rtrep]').forEach(i => { const v = i.value.trim(); if (!v) return; (C.rep[i.dataset.rtrep] = C.rep[i.dataset.rtrep] || {})[i.dataset.k] = v; });
     S.cfg.rt = C; save(); ACC.tlog('info', `Impostazioni del registratore salvate (pagamenti: ${Object.keys(C.pag).length}, reparti: ${Object.keys(C.rep).length}, file Danea scontrini: ${C.daneaScontrini ? 'acceso' : 'spento'})`); toast('Impostazioni del registratore salvate'); render();
@@ -4133,8 +3953,8 @@
     else if (sec === 'utenti') {
       const list = Object.entries(ACC.users()).filter(([, u]) => u.role !== 'super' || ACC.role() === 'super').sort((a, b) => (a[1].active === false) - (b[1].active === false) || a[1].name.localeCompare(b[1].name));
       body = `<div class="sh"><div><h2>Operatori e permessi</h2><p class="sub">Chi può entrare, con quale ruolo e in quali agenzie. Senza agenzie spuntate, l'account può entrare in tutte.</p></div><button class="btn primary" data-act="unew">${ICON.plus} Nuovo account</button></div>
-        <div class="box tablecard"><div class="tscroll"><table class="rt users"><thead><tr><th>Account</th><th>Sigla</th><th>Ruolo</th>${S.cfg.agenzie.map(a => `<th class="ctr">${esc(a.nome)}</th>`).join('')}<th>Attivo</th><th></th></tr></thead><tbody>
-        ${list.map(([id, u]) => { const self = id === ACC.sess.uid; const lockRole = self || (u.role === 'master' && ACC.role() !== 'super' && false); return `<tr class="${u.active === false ? 'off' : ''}"><td><span class="av">${esc((u.name || '?')[0].toUpperCase())}</span> <b>${esc(u.name)}</b>${self ? ' <small>(tu)</small>' : ''}${u.mustChange ? '<br><small>deve cambiare la password</small>' : ''}</td><td><input class="code-in" data-usig="${id}" value="${esc(u.sigla || '')}" maxlength="3" placeholder="${esc(String(u.name || '').slice(0, 2).toUpperCase())}" aria-label="Sigla di ${esc(u.name)} nel resoconto (colonna Op.)"></td>
+        <div class="box tablecard"><div class="tscroll"><table class="rt users"><thead><tr><th>Account</th><th>Sigla</th><th>Cellulare</th><th>Ruolo</th>${S.cfg.agenzie.map(a => `<th class="ctr">${esc(a.nome)}</th>`).join('')}<th>Attivo</th><th></th></tr></thead><tbody>
+        ${list.map(([id, u]) => { const self = id === ACC.sess.uid; const lockRole = self || (u.role === 'master' && ACC.role() !== 'super' && false); return `<tr class="${u.active === false ? 'off' : ''}"><td><span class="av">${esc((u.name || '?')[0].toUpperCase())}</span> <b>${esc(u.name)}</b>${self ? ' <small>(tu)</small>' : ''}${u.mustChange ? '<br><small>deve cambiare la password</small>' : ''}</td><td><input class="code-in" data-usig="${id}" value="${esc(u.sigla || '')}" maxlength="3" placeholder="${esc(String(u.name || '').slice(0, 2).toUpperCase())}" aria-label="Sigla di ${esc(u.name)} nel resoconto (colonna Op.)"></td><td><input class="cell-in" data-ucell="${id}" value="${esc(u.cell || '')}" inputmode="tel" autocomplete="off" placeholder="facoltativo" aria-label="Cellulare di ${esc(u.name)}"></td>
           <td>${u.role === 'super' ? 'Super Master' : `<select data-urole="${id}" aria-label="Ruolo di ${esc(u.name)}"${lockRole ? ' disabled' : ''}>${['operatore', 'master', 'contabilita'].map(r => `<option value="${r}"${u.role === r ? ' selected' : ''}>${ROLE_L[r]}</option>`).join('')}</select>`}</td>
           ${S.cfg.agenzie.map(a => `<td class="ctr"><input type="checkbox" class="sw" data-uag="${id}" data-ag="${a.id}"${(u.agencies || []).includes(a.id) ? ' checked' : ''} aria-label="${esc(u.name)} in ${esc(a.nome)}"${u.role === 'super' || u.role === 'contabilita' ? ' disabled' : ''}></td>`).join('')}
           <td class="ctr"><input type="checkbox" class="sw" data-uact="${id}"${u.active !== false ? ' checked' : ''}${self || u.role === 'super' ? ' disabled' : ''} aria-label="${esc(u.name)} attivo"></td>
@@ -4143,7 +3963,7 @@
         <div class="two"><div class="box form"><h3>Cosa può fare ogni ruolo</h3><ul class="small ul"><li><b>Operatore</b>: liste, posti sul bus, anagrafica, incassi e resoconto della sua agenzia, messaggi ai clienti.</li><li><b>Master</b>: tutto quello dell'operatore, più contabilità, impostazioni e account.</li><li><b>Contabilità</b>: vede cassa e contabilità di tutte le agenzie, senza modificare.</li></ul></div>
         <div class="box form"><h3>Password dimenticata</h3><div class="small">Premi «Reimposta password»: scegli una password provvisoria e dilla alla persona. Al primo accesso l'app le chiede di sceglierne una nuova.</div></div></div>`;
     } else if (sec === 'agenzie') body = `<h2>Agenzie e casse</h2><p class="sub">Ogni agenzia ha la sua cassa: gli incassi vanno nella cassa dell'agenzia scelta all'accesso.</p>
-      ${S.cfg.agenzie.map((a, i) => `<div class="box form agf"><div class="grid3"><label>Agenzia<input data-cfgag="${i}" data-k="nome" value="${esc(a.nome)}"></label><label>Nome della cassa<input data-cfgag="${i}" data-k="cassa" value="${esc(a.cassa || '')}"></label><label>Indirizzo<input data-cfgag="${i}" data-k="indirizzo" value="${esc(a.indirizzo || '')}" placeholder="via, numero, città"></label></div><div class="grid3"><label>Contanti in cassa all'inizio (riporto) €<input data-cfgag="${i}" data-k="cassaIniziale" inputmode="decimal" value="${esc(a.cassaIniziale || '')}" placeholder="0"></label><span class="small" style="grid-column:span 2;align-self:end">Il fondo cassa da cui parte il conto dei contanti nel resoconto giornaliero (colonna «Saldo» del foglio CASSA).</span></div><div class="grid3"><label>Indirizzo del registratore telematico<input data-cfgag="${i}" data-k="rtIp" value="${esc(a.rtIp || '')}" placeholder="es. 192.168.1.50" inputmode="decimal" autocomplete="off"></label><label>Matricola del registratore (facoltativa)<input data-cfgag="${i}" data-k="rtMatricola" value="${esc(a.rtMatricola || '')}" placeholder="es. 99MEY012345" autocomplete="off"></label><span class="small" style="align-self:end">Custom Q3X-F collegato al router dell'agenzia. Per ora l'app non lo usa: serve per il collegamento diretto.</span></div></div>`).join('')}`;
+      ${S.cfg.agenzie.map((a, i) => `<div class="box form agf"><div class="grid3"><label>Agenzia<input data-cfgag="${i}" data-k="nome" value="${esc(a.nome)}"></label><label>Nome della cassa<input data-cfgag="${i}" data-k="cassa" value="${esc(a.cassa || '')}"></label><label>Indirizzo<input data-cfgag="${i}" data-k="indirizzo" value="${esc(a.indirizzo || '')}" placeholder="via, numero, città"></label></div><div class="grid3"><label>Contanti in cassa all'inizio (riporto) €<input data-cfgag="${i}" data-k="cassaIniziale" inputmode="decimal" value="${esc(a.cassaIniziale || '')}" placeholder="0"></label><span class="small" style="grid-column:span 2;align-self:end">Il fondo cassa da cui parte il conto dei contanti nel resoconto giornaliero (colonna «Saldo» del foglio CASSA).</span></div><div class="grid3"><label>Telefono dell'agenzia<input data-cfgag="${i}" data-k="tel" value="${esc(a.tel || '')}" inputmode="tel" autocomplete="off" placeholder="es. 0932 000000"></label><span class="small" style="grid-column:span 2;align-self:end">Compare agli altri operatori quando manca internet, per sentirsi al telefono prima di vendere posti o incassare (se l'operatore ha un cellulare nel suo account, si mostra quello). Il telefono dei messaggi WhatsApp resta quello di Impostazioni › WhatsApp.</span></div><div class="grid3"><label>Indirizzo del registratore telematico<input data-cfgag="${i}" data-k="rtIp" value="${esc(a.rtIp || '')}" placeholder="es. 192.168.1.50" inputmode="decimal" autocomplete="off"></label><label>Matricola del registratore (facoltativa)<input data-cfgag="${i}" data-k="rtMatricola" value="${esc(a.rtMatricola || '')}" placeholder="es. 99MEY012345" autocomplete="off"></label><span class="small" style="align-self:end">Custom Q3X-F collegato al router dell'agenzia. Per ora l'app non lo usa: serve per il collegamento diretto.</span></div></div>`).join('')}`;
     else if (sec === 'luoghi') body = `<div class="sh"><div><h2>Luoghi di partenza e mappe</h2><p class="sub">Per ogni punto di salita incolla il link di Google Maps: nel messaggio WhatsApp il cliente lo tocca e trova il punto preciso. Il codice è quello della colonna «part» della lista (es. RG, MD).</p></div><button class="btn primary" data-act="lnew">${ICON.plus} Aggiungi luogo</button></div>
       <div class="box tablecard"><div class="tscroll"><table class="rt luoghi"><thead><tr><th>Codice</th><th>Città</th><th>Punto di salita</th><th>Link Google Maps</th><th></th></tr></thead><tbody>
       ${(S.cfg.luoghi || []).map((l, i) => `<tr><td><input data-cfgl="${i}" data-k="code" value="${esc(l.code || '')}" placeholder="RG" aria-label="Codice" class="code-in"></td><td><input data-cfgl="${i}" data-k="citta" value="${esc(l.citta || '')}" placeholder="Ragusa" aria-label="Città"></td><td><input data-cfgl="${i}" data-k="luogo" value="${esc(l.luogo || '')}" placeholder="es. Palazama" aria-label="Punto di salita"></td><td><input data-cfgl="${i}" data-k="maps" value="${esc(l.maps || '')}" placeholder="https://maps.app.goo.gl/…" aria-label="Link Google Maps"></td>
@@ -4184,7 +4004,8 @@
     openModal(u ? `Reimposta la password · ${esc(u.name)}` : 'Nuovo account', `
       ${u ? '' : `<div class="field"><label for="nu-n">Nome dell'account</label><input id="nu-n" autocomplete="off" placeholder="es. Giulia"></div>
       <div class="field"><label for="nu-r">Ruolo</label><select id="nu-r">${['operatore', 'master', 'contabilita'].map(r => `<option value="${r}">${ROLE_L[r]}</option>`).join('')}</select></div>
-      <div class="field"><label>Agenzie in cui può entrare</label><div class="chips">${S.cfg.agenzie.map(a => `<label class="chk"><input type="checkbox" data-nuag="${a.id}"> ${esc(a.nome)}</label>`).join('')}</div><span class="small">Nessuna spunta = tutte le agenzie.</span></div>`}
+      <div class="field"><label>Agenzie in cui può entrare</label><div class="chips">${S.cfg.agenzie.map(a => `<label class="chk"><input type="checkbox" data-nuag="${a.id}"> ${esc(a.nome)}</label>`).join('')}</div><span class="small">Nessuna spunta = tutte le agenzie.</span></div>
+      <div class="field"><label for="nu-c">Cellulare (facoltativo)</label><input id="nu-c" inputmode="tel" autocomplete="off" placeholder="es. 333 000 0000"><span class="small">Si mostra agli altri operatori solo quando manca internet, per sentirsi al telefono.</span></div>`}
       <div class="field"><label for="nu-p">Password provvisoria (almeno 8 caratteri)</label><input id="nu-p" autocomplete="new-password" value="${esc(tempPw())}"><span class="small">Dilla alla persona: al primo accesso ne sceglie una sua.</span></div>`,
       `<button class="btn" data-act="close">Annulla</button><button class="btn primary" data-act="usave">${u ? 'Reimposta' : 'Crea l\'account'}</button>`);
   }
@@ -4196,7 +4017,7 @@
     const n = ($('#nu-n').value || '').trim(); if (!n) return toast('Scrivi il nome dell\'account');
     if (ACC.find(n)) return toast('Questo nome non si può usare: scegline un altro');
     const ags = $$('[data-nuag]').filter(x => x.checked).map(x => x.dataset.nuag);
-    const nid = await ACC.create(n, pw, $('#nu-r').value, ags); ACC.users()[nid].mustChange = true; save();
+    const nid = await ACC.create(n, pw, $('#nu-r').value, ags); ACC.users()[nid].mustChange = true; { const c = ($('#nu-c') && $('#nu-c').value || '').trim(); if (c) ACC.users()[nid].cell = c; } save();
     ACC.tlog('info', `Creato l'account «${n}» (${ROLE_L[$('#nu-r').value]})`); closeModal(); render(); toast(`Account «${n}» creato`);
   }
 
@@ -4255,7 +4076,7 @@
       const reg = STORE.list('/registro/').filter(([p]) => !p.startsWith('/registro/dispositivi/')).flatMap(([, d]) => (d.ev || []).map(e => Object.assign({ dev: d.dev }, e))).filter(e => { const dd = dayISO(new Date(e.at)); return dd >= from && dd <= to; }).sort((a, b) => a.at.localeCompare(b.at));
       const hm2 = iso => { const d = new Date(iso); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`; };
       const q = v => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`;
-      const KL = { avvio: 'Avvio', accesso: 'Accesso', pagina: 'Pagina aperta', azione: 'Pulsante', campo: 'Campo modificato', modulo: 'Modulo', trascina: 'Trascinamento', finestra: 'Finestra', avviso: 'Messaggio mostrato', salva: 'Salvataggio', sync: 'Sincronizzazione', 'sync-unione': 'Unione con altro computer', 'sync-conflitto': 'Conflitto risolto', 'sync-errore': 'ERRORE sincronizzazione', rete: 'Rete', 'rete-errore': 'ERRORE rete', 'rete-lenta': 'Rete lenta', errore: 'ERRORE programma', 'console-error': 'ERRORE console', 'console-warn': 'Avviso console', lento: 'Rallentamento', stato: 'Stato', diagnostica: 'Diagnostica', 'registro-info': 'Registro', 'registro-avviso': 'Registro · avviso', 'registro-errore': 'ERRORE registro' };
+      const KL = { avvio: 'Avvio', accesso: 'Accesso', pagina: 'Pagina aperta', azione: 'Pulsante', campo: 'Campo modificato', modulo: 'Modulo', trascina: 'Trascinamento', finestra: 'Finestra', avviso: 'Messaggio mostrato', salva: 'Salvataggio', sync: 'Sincronizzazione', 'sync-unione': 'Unione con altro computer', 'sync-conflitto': 'Conflitto risolto automaticamente', 'sync-errore': 'ERRORE sincronizzazione', rete: 'Rete', 'rete-errore': 'ERRORE rete', 'rete-lenta': 'Rete lenta', errore: 'ERRORE programma', 'console-error': 'ERRORE console', 'console-warn': 'Avviso console', lento: 'Rallentamento', stato: 'Stato', diagnostica: 'Diagnostica', 'registro-info': 'Registro', 'registro-avviso': 'Registro · avviso', 'registro-errore': 'ERRORE registro' };
       const isErr = r => /errore/.test(r.k);
       const csv = '﻿' + [['Data', 'Ora', 'Computer', 'Chi c\'era', 'Sessione', 'N.', 'Utente', 'Agenzia', 'Pagina', 'Tipo', 'Cosa è successo', 'Dettagli'].map(q).join(';')]
         .concat(allEv.map(r => [fmtDate(r.d), hm2(r.t), r.c, devNames[r.c] || '', r.s, r.n, r.u || '', r.ag ? agName(r.ag) : '', r.v || '', KL[r.k] || r.k, r.m, r.x ? JSON.stringify(r.x) : ''].map(q).join(';'))).join('\r\n');
@@ -4436,6 +4257,281 @@
     if (d.gdrag) { gestSave(g => { g.dragSel = e.target.checked; }); return; }
   });
 
+  // ---------- lavoro senza internet ----------
+  // Senza internet si continua a lavorare, ma:
+  //  1. l'operatore lo vede subito, con chi era collegato prima della caduta della linea (da telefonare);
+  //  2. la prima volta su ogni viaggio che mette persone sui posti, aggiunge una prenotazione o incassa,
+  //     l'app chiede se si è sentito con loro (la risposta va nel registro del Super Master);
+  //  3. quando internet torna, l'app confronta le modifiche fatte senza linea con quelle degli altri
+  //     computer e segnala posti dati due volte, bus con più persone che posti e incassi doppi.
+  //     Non cambia nulla da sola: i casi restano nel viaggio e in Contabilità finché qualcuno li segna «Risolto».
+  const OFFK = 'vip-offline-v1', CASI = '/controlli/casi.json';
+  // OFFS: lo stato del periodo senza internet (resta anche se si ricarica la pagina)
+  //   since: ultimo contatto riuscito con gli altri computer · at: quando ce ne siamo accorti
+  //   ops: chi era collegato negli ultimi 2 minuti prima · ack: «Ho capito» premuto · ok: viaggi già confermati
+  //   base: i posti di ogni bus al momento della caduta · pays: incassi registrati senza linea
+  let OFFS = (() => { try { return JSON.parse(localStorage.getItem(OFFK) || 'null'); } catch (e) { return null; } })();
+  const OFFR = { back: 0, merges: [], replay: false, ask: null };
+  const offSave = () => { try { if (OFFS) localStorage.setItem(OFFK, JSON.stringify(OFFS)); else localStorage.removeItem(OFFK); } catch (e) { /* pieno o bloccato */ } };
+  const isOff = st => { st = st || STORE.status(); return !!(st.linked && st.offline); };
+  const hmOf = ms => { const d = new Date(+ms); return isNaN(d) ? '' : `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
+  const tripLbl = t => t ? `${t.nome} (${fmtDate(t.data).slice(0, 5)})` : 'un viaggio';
+  const telOf = d => { const u = d.uid && S && S.users.users[d.uid]; if (u && String(u.cell || '').trim()) return String(u.cell).trim(); const a = S && S.cfg.agenzie.find(x => x.id === d.ag); return a && String(a.tel || '').trim() ? String(a.tel).trim() : ''; };
+  const OFF_VIEW = { home: 'era nell\'elenco dei viaggi', models: 'era nelle Piantine', cassa: 'era nella Cassa', conta: 'era in Contabilità', anag: 'era in Anagrafica', settings: 'era nelle Impostazioni' };
+  function offDoing(d) {
+    const t = d.tripId && S && S.trips.find(x => x.id === d.tripId); const tn = t ? `«${tripLbl(t)}»` : 'un viaggio';
+    if (d.view === 'trip') return d.payBk ? `stava incassando una prenotazione di ${tn}` : d.sec === 'posti' ? `era sulla piantina${d.busL ? ' di ' + d.busL : ''} di ${tn}` : `era sulla lista di ${tn}`;
+    return OFF_VIEW[d.view] || 'era collegato';
+  }
+  // chi era collegato: prima chi era sul viaggio aperto qui, poi gli altri dal più recente
+  function offOps() {
+    if (!OFFS) return [];
+    const tid = UI.view === 'trip' ? UI.tripId : '';
+    return (OFFS.ops || []).slice().sort((a, b) => ((b.tripId === tid && tid) ? 1 : 0) - ((a.tripId === tid && tid) ? 1 : 0) || (+b.at || 0) - (+a.at || 0));
+  }
+  const opShort = d => `${d.name}${d.ag ? ' (' + agName(d.ag) + ')' : ''}`;
+  function offBegin(st) {
+    const ref = st.lastOk || Date.now();
+    const ops = STORE.list('/presenza/').map(([, d]) => d).filter(d => d && d.dev !== STORE.device.id && d.name && (+d.at || 0) >= ref - 120000)
+      .map(d => ({ dev: d.dev, uid: d.uid, name: d.name, ag: d.ag || '', view: d.view, tripId: d.tripId || '', sec: d.sec || '', busL: d.busL || '', payBk: d.payBk || '', at: +d.at || 0 }));
+    try { if (S) flush(); } catch (e) { /* niente */ }
+    const base = {};
+    STORE.list('/viaggi/').forEach(([, d]) => { if (!d || d.deleted || !(d.buses || []).length) return; const o = {}; d.buses.forEach(b => { const m = {}; Object.keys(b.seats || {}).forEach(s => { const a = b.seats[s]; m[s] = a.pid || (a.res ? 'res' : ''); }); o[b.id] = m; }); base[d.id] = o; });
+    OFFS = { since: ref, at: Date.now(), ops, ack: false, ok: {}, base, pays: [] }; offSave();
+    DIAG.ev('rete', 'Internet assente: si lavora senza linea', { ultimoContatto: new Date(ref).toISOString(), collegatiPrima: ops.length });
+    if (ACC.sess) ACC.tlog('avviso', `Senza internet · collegati prima della caduta della linea: ${ops.length ? ops.map(opShort).join(', ') : 'nessun altro operatore'}`);
+  }
+
+  // ---- 1. finestra grande e fascia rossa ----
+  function offAlert() {
+    if ($('#off-alert')) return;
+    const ops = offOps();
+    const box = document.createElement('div'); box.id = 'off-alert'; box.className = 'pres-alert'; box.setAttribute('role', 'alertdialog'); box.setAttribute('aria-label', 'Stai lavorando senza internet');
+    box.innerHTML = `<div class="pa-card off"><div class="pa-ico">${ICON.alert}</div><div class="pa-h">Stai lavorando senza internet</div>
+      <div class="pa-s">Puoi continuare a lavorare: le modifiche partiranno quando torna la connessione. <b>Prima di vendere posti o incassare, telefona a chi stava lavorando:</b></div>
+      <div class="off-ops">${ops.length ? ops.map(d => { const tel = telOf(d); return `<div class="pa-p"><span class="pa-av">${esc(String(d.name || '?').trim().slice(0, 1).toUpperCase())}</span><div><b>${esc(d.name)}</b><span>${d.ag ? 'agenzia di <b>' + esc(agName(d.ag)) + '</b> · ' : ''}${esc(offDoing(d))}</span><span class="off-tel">${tel ? `Telefono <a href="tel:${esc(tel.replace(/[^\d+]/g, ''))}">${esc(tel)}</a>` : 'Telefono non indicato (Impostazioni › Agenzie e casse)'}</span></div></div>`; }).join('') : '<div class="off-none">Nessun altro operatore era collegato</div>'}</div>
+      <button class="btn primary big" data-act="offok">Ho capito</button></div>`;
+    document.body.appendChild(box); setTimeout(() => { const b = box.querySelector('button'); if (b) b.focus(); }, 30);
+    DIAG.ev('avviso', `Avviso: senza internet · collegati prima: ${ops.map(opShort).join(', ') || 'nessuno'}`);
+  }
+  function offBandHTML(st) {
+    st = st || STORE.status(); if (!isOff(st) || !OFFS) return '';
+    const ops = offOps();
+    return `<div id="offband" class="offband" role="status">${ICON.alert}<span><b>Senza internet</b> · ${st.pending === 1 ? '1 modifica' : st.pending + ' modifiche'} da inviare · Collegati prima: ${ops.length ? ops.map(d => { const tel = telOf(d); return `<span class="ob-p">${esc(d.name)} (${esc([d.ag ? agName(d.ag) : '', tel].filter(Boolean).join(', ') || 'telefono non indicato')})</span>`; }).join(', ') : 'nessuno'}</span></div>`;
+  }
+  // la fascia sta sotto la barra in alto: le colonne fisse (lista, piantina) scendono della sua altezza
+  function offBand(st) {
+    const hd = $('.topbar'); if (!hd) { document.documentElement.style.setProperty('--offh', '0px'); return; }
+    const html = offBandHTML(st); const cur = $('#offband');
+    if (!html) { if (cur) cur.remove(); }
+    else if (cur) cur.outerHTML = html; else hd.insertAdjacentHTML('beforeend', html);
+    const ob = $('#offband'); document.documentElement.style.setProperty('--offh', (ob ? Math.ceil(ob.getBoundingClientRect().height) : 0) + 'px');
+  }
+  // avvisi verdi uno dopo l'altro: «Internet tornato…» resta visibile almeno 2 secondi prima di «Tutto sincronizzato»
+  let offTQ = Promise.resolve();
+  function offToast(msg) {
+    offTQ = offTQ.then(() => new Promise(res => { toast(msg); const el = $('#toast'); if (el) el.classList.add('ok'); setTimeout(res, 2000); }));
+  }
+  // ad ogni cambio di stato della sincronizzazione
+  function offStatus(st) {
+    st = st || STORE.status();
+    const off = isOff(st);
+    if (off && !OFFS) offBegin(st);
+    if (off && OFFS) { OFFR.back = 0; if (!OFFS.ack && ACC.sess && ACC.me() && !gateStep()) offAlert(); }
+    if (!off && OFFS && st.linked) {
+      if (!OFFR.back) { OFFR.back = Date.now(); const x = $('#off-alert'); if (x) x.remove(); offToast(st.pending ? `Internet tornato: invio ${st.pending === 1 ? '1 modifica' : st.pending + ' modifiche'}…` : 'Internet tornato: aggiorno i dati…'); DIAG.ev('rete', 'Internet tornato', { inAttesa: st.pending }); }
+      else if (!st.syncing && !st.pending && !st.error && st.pulled && (+st.lastOk || 0) > OFFR.back) offFinish();
+    }
+    offBand(st);
+  }
+  function offAfterRender() { try { offStatus(STORE.status()); } catch (e) { DIAG.ev('errore', 'Avviso senza internet: ' + e.message); } }
+  document.addEventListener('click', e => {
+    const el = e.target.closest && e.target.closest('[data-act="offok"]'); if (!el) return;
+    const x = $('#off-alert'); if (x) x.remove(); if (OFFS) { OFFS.ack = true; offSave(); } offBand();
+  });
+
+  // ---- 2. «hai sentito al telefono…?» la prima volta su ogni viaggio ----
+  const OFF_KIND = { posto: 'mettere o spostare persone sui posti', prenotazione: 'aggiungere prenotazioni', incasso: 'incassare' };
+  const offNeedAsk = t => !!(t && OFFS && isOff() && !(OFFS.ok || {})[t.id]);
+  function offAsk(t, kind, go, cancel) {
+    if (OFFR.ask) return; const ops = offOps(); const names = ops.map(opShort);
+    const q = names.length ? `Sei senza internet: hai sentito al telefono ${names.length < 2 ? names[0] : names.slice(0, -1).join(', ') + ' e ' + names[names.length - 1]}?` : 'Sei senza internet e prima della caduta della linea non c\'era nessun altro operatore collegato: hai sentito al telefono le altre agenzie?';
+    const box = document.createElement('div'); box.id = 'off-ask'; box.className = 'pres-alert'; box.setAttribute('role', 'alertdialog'); box.setAttribute('aria-label', 'Sei senza internet');
+    box.innerHTML = `<div class="pa-card off"><div class="pa-ico">${ICON.alert}</div><div class="pa-h">${esc(q)}</div>
+      <div class="pa-trip">${esc(tripLbl(t))}</div>
+      <div class="pa-s">Prima di ${OFF_KIND[kind]} mettetevi d'accordo, così quando torna internet non risultano posti venduti due volte o incassi doppi.</div>
+      ${ops.length ? `<div class="off-ops sm">${ops.map(d => { const tel = telOf(d); return `<div class="off-op"><b>${esc(d.name)}</b>${d.ag ? ' · ' + esc(agName(d.ag)) : ''}${tel ? ` · <a href="tel:${esc(tel.replace(/[^\d+]/g, ''))}">${esc(tel)}</a>` : ''}</div>`; }).join('')}</div>` : ''}
+      <div class="off-btns"><button class="btn big" data-off="no">Annulla</button><button class="btn primary big" data-off="si">Sì, ci siamo sentiti</button></div></div>`;
+    document.body.appendChild(box); OFFR.ask = box;
+    const done = yes => {
+      box.remove(); OFFR.ask = null;
+      ACC.tlog('avviso', `Senza internet · ${tripLbl(t)} · prima di ${OFF_KIND[kind]}: «${yes ? 'Sì, ci siamo sentiti' : 'Annulla'}» (${names.length ? 'collegati prima: ' + names.join(', ') : 'nessun altro collegato prima'})`);
+      if (yes) { OFFS.ok = OFFS.ok || {}; OFFS.ok[t.id] = Date.now(); offSave(); go(); } else if (cancel) cancel();
+    };
+    box.querySelectorAll('[data-off]').forEach(b => b.addEventListener('click', ev => { ev.stopPropagation(); ev.preventDefault(); done(b.dataset.off === 'si'); }));
+    box.addEventListener('keydown', ev => { if (ev.key === 'Escape') { ev.stopPropagation(); done(false); } });
+    setTimeout(() => { const b = box.querySelector('[data-off="si"]'); if (b) b.focus(); }, 30);
+  }
+  const offTrip = () => (UI.view === 'trip' ? trip() : null);
+  // clic che mettono persone sui posti, aggiungono prenotazioni o incassano
+  function offClickKind(e) {
+    if (e.target.closest('#off-ask, #off-alert, #cx-alert')) return null;
+    const seatEl = e.target.closest('#mapwrap .seat[data-seat]'); const el = e.target.closest('[data-act]');
+    if (seatEl && !el) return UI.move != null || UI.sel || UI.selP ? 'posto' : null;
+    const a = el && el.dataset.act;
+    if (a === 'fill') return 'posto';
+    if (a === 'attconf' || a === 'annrest' || (a === 'doimport' && UI.modal && UI.modal.mode !== 'new')) return 'prenotazione';
+    if (a === 'pfsave') return 'incasso';
+    return null;
+  }
+  window.addEventListener('click', e => {
+    if (OFFR.replay || !e.isTrusted) return; const t = offTrip(); if (!offNeedAsk(t)) return;
+    const kind = offClickKind(e); if (!kind) return;
+    e.preventDefault(); e.stopImmediatePropagation();
+    const tgt = e.target;
+    offAsk(t, kind, () => { OFFR.replay = true; try { tgt.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })); } finally { OFFR.replay = false; } });
+  }, true);
+  const offDropClean = () => { $$('.drop').forEach(x => x.classList.remove('drop')); $$('.drop-b,.drop-a').forEach(x => x.classList.remove('drop-b', 'drop-a')); const db = $('#dropbar'); if (db) db.remove(); };
+  window.addEventListener('drop', e => {
+    if (OFFR.replay || !drag) return; const t = offTrip(); if (!offNeedAsk(t)) return;
+    const tgt = e.target.closest ? e.target : e.target.parentElement;
+    if (!tgt.closest('#mapwrap .seat[data-seat]') && !tgt.closest('[data-dropbus]')) return;
+    e.preventDefault(); e.stopImmediatePropagation(); const saved = drag; offDropClean();
+    offAsk(t, 'posto', () => { drag = saved; OFFR.replay = true; try { tgt.dispatchEvent(new Event('drop', { bubbles: true, cancelable: true })); } finally { OFFR.replay = false; drag = null; } }, () => { drag = null; });
+  }, true);
+  // si scrive in una riga vuota della lista: è una prenotazione nuova
+  window.addEventListener('input', e => {
+    if (OFFR.replay) return; const el = e.target; const d = el.dataset || {}; if (!d.r) return;
+    const t = offTrip(); if (!offNeedAsk(t)) return; const r = rowById(t, d.r); if (!r || !isEmptyRow(r)) return;
+    e.stopImmediatePropagation(); const v = el.value; el.value = '';
+    offAsk(t, 'prenotazione', () => { el.value = v; OFFR.replay = true; try { el.dispatchEvent(new Event('input', { bubbles: true })); } finally { OFFR.replay = false; } try { el.focus(); el.selectionStart = el.selectionEnd = v.length; } catch (x) { /* niente */ } }, () => { try { el.focus(); } catch (x) { /* niente */ } });
+  }, true);
+  // incasso registrato senza internet: si ricorda quanto risultava pagato, per il controllo al ritorno
+  function offNoteMov(mv) {
+    try {
+      if (!OFFS || !isOff() || !mv || !mv.tripId || !mv.bkId || mv.tipo === 'storno') return;
+      const t = S.trips.find(x => x.id === mv.tripId); if (!t) return; const bid = resolveBk(mv.tripId, mv.bkId);
+      const bk = deriveBookings(t).find(x => x.id === bid); const known = allMovs().filter(m => m.tripId === mv.tripId && resolveBk(m.tripId, m.bkId) === bid).map(m => m.id);
+      OFFS.pays = (OFFS.pays || []).concat([{ tripId: mv.tripId, bkId: bid, mov: mv.id, paid: bk ? bkMoney(t, bk).paid : 0, known }]).slice(-300); offSave();
+    } catch (e) { DIAG.ev('errore', 'Incasso senza internet non annotato: ' + e.message); }
+  }
+
+  // ---- 3. controllo dopo il ritorno di internet ----
+  STORE.onMerge = (p, mine, other, merged) => {
+    if (!OFFS || !p.startsWith('/viaggi/') || !mine || !other || mine.deleted || other.deleted) return;
+    OFFR.merges.push({ p, L: JSON.parse(JSON.stringify(mine)), R: JSON.parse(JSON.stringify(other)), M: JSON.parse(JSON.stringify(merged)) });
+  };
+  const pName = (d, pid) => { if (pid === 'res') return 'posto riservato (guida / 2° autista)'; const r = (d.rows || []).concat(d.attesa || [], d.annullati || []).find(x => x.id === pid); return r ? `${String(r.cognome || '').replace(RX, '$1').trim()} ${r.nome || ''}`.trim() || 'persona senza nome' : 'una persona tolta dalla lista'; };
+  const whoOf = (x, fb) => ({ by: (x && x.by) || (fb && fb.by) || '', ag: (x && x.bya) || (fb && fb.bya) || '', u: (x && +x.u) || 0 });
+  const seatPid = a => (a ? a.pid || (a.res ? 'res' : '') : '');
+  function caseSeats(mg, out) {
+    const { L, R, M } = mg; const base = (OFFS.base || {})[L.id] || {};
+    (L.buses || []).forEach(bl => {
+      const br = (R.buses || []).find(x => x.id === bl.id); if (!br) return; const bm = (M.buses || []).find(x => x.id === bl.id) || { seats: {} }; const b0 = base[bl.id] || {};
+      new Set([...Object.keys(bl.seats || {}), ...Object.keys(br.seats || {})]).forEach(s => {
+        const a = (bl.seats || {})[s], c = (br.seats || {})[s]; const lp = seatPid(a), rp = seatPid(c), bp = b0[s] || '';
+        if (!lp || !rp || lp === rp || lp === bp || rp === bp) return;
+        const kept = seatPid((bm.seats || {})[s]); const lost = kept === lp ? rp : lp;
+        let lostAt = ''; (M.buses || []).forEach(x => Object.keys(x.seats || {}).forEach(k => { if (x.seats[k].pid === lost) lostAt = `${(M.buses || []).length > 1 ? x.label + ', ' : ''}posto ${k}`; }));
+        out.push({ id: 's' + hash36([L.id, bl.id, s, lp, rp].sort().join('|')), kind: 'posto', tripId: L.id, busId: bl.id, busL: bm.label || bl.label || 'Bus', seat: s,
+          mine: Object.assign({ nome: pName(L, lp) }, whoOf(a, bl)), other: Object.assign({ nome: pName(R, rp) }, whoOf(c, br)),
+          kept: pName(M, kept), lost: lost === 'res' ? '' : pName(M, lost), lostAt });
+      });
+    });
+  }
+  function busCount(d) {
+    const o = {};
+    try { const t = tripInit(JSON.parse(JSON.stringify(d))); const D = deriveBookings(t); t.buses.forEach(b => { if (!LMAP[b.layout]) return; syncBus(t, b, D); const st = busStats(b); o[b.id] = { n: st.tot, cap: st.cap, label: b.label, ids: new Set(b.bookings.flatMap(k => k.persone.map(p => p.id))) }; }); } catch (e) { DIAG.ev('errore', 'Conteggio dei posti non riuscito: ' + e.message); }
+    return o;
+  }
+  function caseBus(mg, out) {
+    const { L, R, M } = mg; const cl = busCount(L), cr = busCount(R), cm = busCount(M);
+    Object.keys(cm).forEach(id => {
+      const m = cm[id], l = cl[id] || { n: 0, ids: new Set() }, r = cr[id] || { n: 0, ids: new Set() };
+      if (!(m.n > m.cap && m.n > Math.max(l.n, r.n))) return;
+      const rowsOf = (d, ids) => (d.rows || []).filter(x => ids.has(x.id)).map(x => Object.assign({ nome: pName(d, x.id) }, whoOf(x)));
+      const mine = rowsOf(L, new Set([...l.ids].filter(x => !r.ids.has(x)))), other = rowsOf(R, new Set([...r.ids].filter(x => !l.ids.has(x))));
+      out.push({ id: 'b' + hash36([L.id, id, ...mine.map(x => x.nome), ...other.map(x => x.nome)].join('|')), kind: 'bus', tripId: L.id, busId: id, busL: m.label || 'Bus', n: m.n, cap: m.cap, mine: mine.slice(0, 12), other: other.slice(0, 12) });
+    });
+  }
+  function casePays(out) {
+    const seen = new Set();
+    (OFFS.pays || []).forEach(x => {
+      const key = x.tripId + '|' + x.bkId; if (seen.has(key)) return; seen.add(key);
+      const t = S.trips.find(y => y.id === x.tripId); if (!t) return; const bk = deriveBookings(t).find(y => y.id === x.bkId); if (!bk) return;
+      const m = bkMoney(t, bk); if (!(m.extra > 0.009)) return;
+      const mine = new Set((OFFS.pays || []).filter(y => y.tripId === x.tripId && y.bkId === x.bkId).flatMap(y => [y.mov, ...(y.known || [])]));
+      const movs = allMovs().filter(y => y.tripId === x.tripId && resolveBk(y.tripId, y.bkId) === x.bkId && isInc(y));
+      const others = movs.filter(y => !mine.has(y.id) && (+y.tot || 0) > 0); if (!others.length) return;
+      out.push({ id: 'p' + hash36([x.tripId, x.bkId, ...movs.map(y => y.id).sort()].join('|')), kind: 'incasso', tripId: x.tripId, bkId: x.bkId, cliente: bkName(bk) + (bk.persone.length > 1 ? ' x ' + bk.persone.length : ''),
+        due: m.due, paid: m.paid, extra: m.extra, movs: movs.slice(-8).map(y => ({ tot: +y.tot || 0, by: y.who || '', ag: y.ag || '', at: y.at, qui: y.dev === STORE.device.id })) });
+    });
+  }
+  function offFinish() {
+    const mins = Math.max(1, Math.round((Date.now() - (OFFS.at || Date.now())) / 60000)); const found = [];
+    try { OFFR.merges.forEach(mg => { caseSeats(mg, found); caseBus(mg, found); }); casePays(found); } catch (e) { DIAG.ev('errore', 'Controllo dopo il ritorno di internet non riuscito: ' + e.message, { stack: e.stack }); }
+    const uniq = []; found.forEach(c => { if (!uniq.some(x => x.id === c.id)) uniq.push(c); });
+    const cur = JSON.parse(JSON.stringify(STORE.get(CASI) || { casi: {} })); cur.casi = cur.casi || {}; const now = tick(); const me = ACC.me(); const fresh = [];
+    uniq.forEach(c => { if (cur.casi[c.id]) return; const t = S.trips.find(x => x.id === c.tripId); Object.assign(c, { u: now, at: new Date().toISOString(), stato: 'aperto', tripN: t ? t.nome : '', tripD: t ? t.data : '', trovato: me ? me.name : '', trovatoAg: ACC.sess && ACC.sess.ag || '' }); cur.casi[c.id] = c; fresh.push(c); });
+    if (fresh.length) { cur.u = now; STORE.put(CASI, cur); }
+    ACC.tlog(fresh.length ? 'avviso' : 'info', `Internet tornato dopo circa ${mins} min · controllo delle modifiche fatte senza linea: ${fresh.length ? fresh.length + ' da controllare (' + fresh.map(caseTitle).join(' · ') + ')' : 'nessun problema'}`);
+    DIAG.ev('rete', 'Controllo dopo il ritorno di internet', { minuti: mins, unioni: OFFR.merges.length, incassi: (OFFS.pays || []).length, casi: fresh.length });
+    OFFS = null; offSave(); OFFR.merges = []; OFFR.back = 0;
+    offToast('Tutto sincronizzato'); offBand();
+    if (fresh.length) cxAlert(fresh);
+    render();
+  }
+
+  // ---- casi da controllare: finestra, elenco nel viaggio e in Contabilità ----
+  const casiAll = () => Object.values((STORE.get(CASI) || {}).casi || {});
+  const casiOpen = tid => casiAll().filter(c => c.stato !== 'risolto' && (!tid || c.tripId === tid)).sort((a, b) => String(b.at).localeCompare(String(a.at)));
+  const whoTxt = x => [x.by || 'un altro operatore', x.ag ? agName(x.ag) : '', x.u ? 'alle ' + hmOf(x.u) : ''].filter(Boolean).join(' · ');
+  function caseTitle(c) {
+    const t = S.trips.find(x => x.id === c.tripId); const tn = t ? tripLbl(t) : `${c.tripN || 'viaggio tolto'}${c.tripD ? ' (' + fmtDate(c.tripD).slice(0, 5) + ')' : ''}`;
+    return c.kind === 'posto' ? `Posto ${c.seat} dato a due persone · ${c.busL} · ${tn}` : c.kind === 'bus' ? `${c.busL} con più persone che posti (${c.n} su ${c.cap}) · ${tn}` : `Prenotazione incassata due volte · ${c.cliente} · ${tn}`;
+  }
+  function caseBody(c) {
+    if (c.kind === 'posto') return `<ul class="cx-l"><li><b>${esc(c.mine.nome)}</b> · messo da ${esc(whoTxt(c.mine))} <small>(senza internet)</small></li><li><b>${esc(c.other.nome)}</b> · messo da ${esc(whoTxt(c.other))}</li></ul>
+      <div class="cx-n">Dopo l'unione sul posto ${esc(c.seat)} è rimasto <b>${esc(c.kept)}</b>.${c.lost ? ` ${esc(c.lost)} ${c.lostAt ? 'ora è al ' + esc(c.lostAt) : 'ora è <b>senza posto</b>'}.` : ''}</div>`;
+    if (c.kind === 'bus') { const li = (a, tag) => a.map(x => `<li><b>${esc(x.nome)}</b> · ${esc(whoTxt(x))}${tag}</li>`).join(''); return `<div class="cx-n">Dopo l'unione sul ${esc(c.busL)} ci sono <b>${c.n} persone</b> e <b>${c.cap} posti</b>.</div><ul class="cx-l">${li(c.mine, ' <small>(senza internet)</small>')}${li(c.other, '')}</ul>`; }
+    return `<div class="cx-n">Dovuto <b>${money(c.due)}</b> · pagato <b>${money(c.paid)}</b> · <b>${money(c.extra)} in più</b>.</div><ul class="cx-l">${(c.movs || []).map(m => `<li><b>${money(m.tot)}</b> · ${esc(whoTxt({ by: m.by, ag: m.ag }))} · ${esc(fmtDate(String(m.at).slice(0, 10)).slice(0, 5))} ${esc(hm(m.at))}${m.qui ? ' <small>(da questo computer)</small>' : ''}</li>`).join('')}</ul>`;
+  }
+  const caseOpenBtn = c => ACC.can('viaggi') && S.trips.some(x => x.id === c.tripId) ? `<button class="btn sm" data-act="cxopen" data-id="${esc(c.id)}">${c.kind === 'incasso' ? 'Apri la prenotazione' : 'Apri la piantina'}</button>` : '';
+  function cxAlert(list) {
+    const x = $('#cx-alert'); if (x) x.remove();
+    const box = document.createElement('div'); box.id = 'cx-alert'; box.className = 'pres-alert'; box.setAttribute('role', 'alertdialog'); box.setAttribute('aria-label', 'Da controllare dopo il ritorno di internet');
+    box.innerHTML = `<div class="pa-card cx"><div class="pa-ico">${ICON.alert}</div><div class="pa-h">Da controllare dopo il ritorno di internet</div>
+      <div class="pa-s">Mentre eri senza internet un altro computer ha cambiato le stesse cose. L'app non ha cambiato nulla da sola: decidi tu.</div>
+      <div class="cx-list">${list.map(c => `<div class="cx-i"><div class="cx-t">${esc(caseTitle(c))}</div>${caseBody(c)}<div class="cx-b">${caseOpenBtn(c)}</div></div>`).join('')}</div>
+      <div class="pa-s small">I casi restano nella pagina del viaggio e in Contabilità finché qualcuno non li segna «Risolto».</div>
+      <button class="btn primary big" data-act="cxclose">Ho capito</button></div>`;
+    document.body.appendChild(box); setTimeout(() => { const b = box.querySelector('[data-act="cxclose"]'); if (b) b.focus(); }, 30);
+  }
+  function casiBoxHTML(tid) {
+    const L = casiOpen(tid); if (!L.length) return '';
+    const canOk = !ACC.can('readonly');
+    return `<section class="casi" aria-label="Da controllare dopo il ritorno di internet"><div class="casi-h">${ICON.alert}<b>Da controllare dopo il ritorno di internet</b><span>${L.length === 1 ? '1 caso' : L.length + ' casi'}</span></div>
+      ${L.map(c => `<div class="cx-i"><div class="cx-t">${esc(caseTitle(c))}</div>${caseBody(c)}<div class="cx-f"><small>Trovato da ${esc(c.trovato || '—')}${c.trovatoAg ? ' · ' + esc(agName(c.trovatoAg)) : ''} il ${esc(fmtDate(String(c.at).slice(0, 10)).slice(0, 5))} alle ${esc(hm(c.at))}</small><span class="cx-b">${caseOpenBtn(c)}${canOk ? `<button class="btn sm primary" data-act="cxok" data-id="${esc(c.id)}">${ICON.check} Risolto</button>` : ''}</span></div></div>`).join('')}</section>`;
+  }
+  document.addEventListener('click', e => {
+    const el = e.target.closest && e.target.closest('[data-act="cxopen"],[data-act="cxok"],[data-act="cxclose"]'); if (!el) return;
+    const act = el.dataset.act;
+    if (act === 'cxclose') { const x = $('#cx-alert'); if (x) x.remove(); return; }
+    const c = casiAll().find(x => x.id === el.dataset.id); if (!c) return;
+    if (act === 'cxopen') {
+      const x = $('#cx-alert'); if (x) x.remove(); const t = S.trips.find(y => y.id === c.tripId); if (!t) return;
+      UI.view = 'trip'; UI.tripId = t.id; UI.pay = null; UI.sel = UI.selP = null; UI.move = null; UI.lsel = [];
+      if (c.kind === 'incasso') { UI.sec = 'lista'; render(); payOpen(c.bkId, ''); }
+      else { UI.sec = 'posti'; UI.busId = t.buses.some(b => b.id === c.busId) ? c.busId : (t.buses[0] && t.buses[0].id); render(); }
+      window.scrollTo(0, 0); return;
+    }
+    if (act === 'cxok') {
+      if (ACC.can('readonly')) return; const cur = JSON.parse(JSON.stringify(STORE.get(CASI) || { casi: {} })); const x = cur.casi[c.id]; if (!x) return; const me = ACC.me();
+      Object.assign(x, { stato: 'risolto', risoltoDa: me ? me.name : '', risoltoAg: ACC.sess && ACC.sess.ag || '', risoltoAt: new Date().toISOString(), u: tick() }); cur.u = x.u; STORE.put(CASI, cur);
+      ACC.tlog('info', `Segnato «Risolto»: ${caseTitle(c)}`); toast('Segnato come risolto'); render();
+    }
+  });
+
   // ---------- render ----------
   const FOCUS_KEYS = ['note', 'st', 'depsel', 'hq', 'aq', 'r', 'ar', 'nr', 'f', 'q', 'qs', 'qt', 'tf', 'dep2', 'dep', 'k', 'bind', 'cl', 'cfgag', 'cfgl', 'pf', 'pl', 'pff', 'pfm', 'usig'];
   const ACT_PERM = { unew: 'users', unewm: 'tech', ureset: 'users', usave: 'users', resetall: 'tech', doresetall: 'tech', savekeys: 'tech', wipelocal: 'tech', lgf: 'tech', lexport: 'tech', diagexport: 'tech', lnew: 'settings', ldel: 'settings', savewa: 'settings', savetel: 'settings', savedanea: 'settings', savert: 'settings', savesuppl: 'settings', filaset: 'viaggi', export: 'settings', pay: 'cassa', paypanel: 'viaggi', paywho: 'viaggi', lmove: 'viaggi', lmove1: 'viaggi', detach: 'viaggi', reattach: 'viaggi', noteadd: 'viaggi', notedel: 'viaggi', suppadd: 'viaggi', suppdel: 'viaggi', pfsave: 'cassa', cashmov: 'cassa', cashsave: 'cassa', storno: 'cassa', cclose: 'cassa', ccsave: 'cassa', clnew: 'anag', cldel: 'anag', impgo: 'anag', newtrip: 'viaggi', deltrip: 'viaggi' };
@@ -4443,7 +4539,7 @@
   let lastNav = '', lastSess = '', lastGateHTML = '';
   function render() {
     const t0 = performance.now();
-    try { renderIn(); if (UI.view === 'home') alignBlocks(); if (UI.pay) setTimeout(cfRecalc, 0); presenceBeat(false); presenceCheck(); } catch (e) { DIAG.ev('errore', 'Errore nel disegnare la pagina: ' + e.message, { stack: e.stack, vista: UI.view, sezione: UI.sec }); throw e; }
+    try { renderIn(); if (UI.view === 'home') alignBlocks(); if (UI.pay) setTimeout(cfRecalc, 0); presenceBeat(false); presenceCheck(); offAfterRender(); } catch (e) { DIAG.ev('errore', 'Errore nel disegnare la pagina: ' + e.message, { stack: e.stack, vista: UI.view, sezione: UI.sec }); throw e; }
     const ms = performance.now() - t0;
     const sk = ACC.sess ? `${ACC.sess.uid}|${ACC.sess.ag || ''}` : '';
     if (sk !== lastSess) { const me = ACC.me(); DIAG.ev('accesso', sk ? `Dentro come ${me ? me.name + ' (' + ROLE_L[me.role] + ')' : '?'}${ACC.sess.ag ? ' · ' + agName(ACC.sess.ag) : ''}` : 'Nessuno collegato (schermata di accesso)'); lastSess = sk; }
@@ -4474,7 +4570,7 @@
     }
     const keep = ['#bklist', '.mapwrap', '.wtw', '.ldock .mapwrap', '.pp-b'].map(s => { const el = $(s); return el ? [s, el.scrollTop, el.scrollLeft] : null; }).filter(Boolean);
     const y = window.scrollY;
-    const V = { home: homeView, models: modelsView, trip: tripView, anag: anagView, cassa: cassaView, conta: contaView, settings: settingsView, super: superView };
+    const V = { home: homeView, models: modelsView, trip: tripView, anag: anagView, cassa: cassaView, conta: () => casiBoxHTML(null) + contaView(), settings: settingsView, super: superView };
     const view = (V[UI.view] || homeView)();
     $('#app').innerHTML = topbar() + `<main class="wrap v-${esc(UI.view)}${UI.view === 'trip' && UI.sec !== 'posti' ? ' wide' : ''}">${view}</main>`;
     keep.forEach(([s, top, left]) => { const el = $(s); if (el) { el.scrollTop = top; el.scrollLeft = left; } });
@@ -4504,7 +4600,7 @@
   }
   function commit() { save(); render(); }
   let toastT;
-  function toast(msg) { DIAG.ev('avviso', msg); const el = $('#toast'); el.textContent = msg; el.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => { el.hidden = true; }, 3600); }
+  function toast(msg) { DIAG.ev('avviso', msg); const el = $('#toast'); el.classList.remove('ok'); el.textContent = msg; el.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => { el.hidden = true; }, 3600); }
   const ddmm = () => fmtDate(todayISO()).slice(0, 5);
 
   // ---------- menu delle righe ----------
@@ -4927,6 +5023,7 @@
     if (d.cfgag !== undefined) { S.cfg.agenzie[+d.cfgag][d.k] = el.value; save(); return; }
     if (d.cfgl !== undefined) { S.cfg.luoghi[+d.cfgl][d.k] = d.k === 'code' ? el.value.toUpperCase() : el.value; save(); return; }
     if (d.cc) { ccDiff(); return; }
+    if (d.ucell) { if (!ACC.can('users')) return; const u = ACC.users()[d.ucell]; if (u) { u.cell = el.value.trim(); save(); } return; }
     if (d.usig) { if (!ACC.can('users')) return; const u = ACC.users()[d.usig]; if (u) { u.sigla = el.value.toUpperCase().trim(); save(); } return; }
     if (UI.pay && (d.pf || d.pl !== undefined || d.pff || d.pfm || d.pfc)) { payInput(el); return; }
     if (d.r && t) { const r = rowById(t, d.r); if (r) { r[d.f] = el.value; if (d.f === 'cognome' || d.f === 'nome') { if (r.cid && S.clients.clienti[r.cid]) { const x = S.clients.clienti[r.cid]; if (nk(baseCognome(r.cognome)) !== nk(x.cognome) || nk(r.nome) !== nk(x.nome)) delete r.cid; } acOpen(el); } save(); } return; }
@@ -5137,7 +5234,7 @@
   }
 
   // test interni (usati solo in fase di verifica)
-  window.__posti = { get S() { return S; }, UI, render, deriveBookings, tripLists, listRows, listKey, multiBus, moveRowsToList, personMoney, groupMoney, pidPaid, gest, presenceCheck, syncAll, seatIndex, officeLabels, parseTripDocx, autoAssign, prefStatus, bkMoney, summaryOf, LMAP, dropFamily, dropPerson, STORE, ACC, flush, allMovs, payTotals, cashSaldo, giornoData, xlRow, DIAG,
+  window.__posti = { get S() { return S; }, UI, render, deriveBookings, tripLists, listRows, listKey, multiBus, moveRowsToList, personMoney, groupMoney, pidPaid, gest, presenceCheck, syncAll, seatIndex, officeLabels, parseTripDocx, autoAssign, prefStatus, bkMoney, summaryOf, LMAP, dropFamily, dropPerson, STORE, ACC, flush, allMovs, payTotals, cashSaldo, giornoData, bkMoney, off: { get OFFS() { return OFFS; }, cxAlert, offAlert, casiAll, offStatus }, xlRow, DIAG,
     demo() { const d = demoState(); d.trips.forEach(t => { delete t.demo; S.trips.push(t); t.rows.forEach(r => upsertFromRow(r)); }); flush(); render(); return d.trips.map(t => t.id); } };
 
   // ---------- avvio ----------
@@ -5224,6 +5321,7 @@
     STORE.onStatus = st => {
       const el = $('#syncpill'); if (el) { const [k, l, tt] = syncInfo(st); el.className = 'sync ' + k; el.title = tt; el.innerHTML = '<i></i>' + esc(l); }
       const g = gateStep(); if (g !== lastGate) { lastGate = g; if (st.pulled) { seedCatalog(); buildAnagrafica(); } render(); }
+      offStatus(st);
     };
     { const st = STORE.status(); const local = localStorage.getItem(LOCAL_MODE) === '1' || !st.hasKey; if ((local && !st.linked) || st.pulled) { seedCatalog(); buildAnagrafica(); } }
     render();
