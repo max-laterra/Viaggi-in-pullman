@@ -1,7 +1,7 @@
 VIAGGI IN PULLMAN · LA TERRA
 ============================
 
-Versione: 2.1.5
+Versione: 2.1.7
 Pacchetto creato il: 04/11/2026
 
 Come installarla o aggiornarla: vedi LEGGIMI.txt.
@@ -9,6 +9,51 @@ Aggiornamento: carica su GitHub TUTTI i file, config.js compreso (contiene già 
 
 MODIFICHE
 ---------
+
+VERSIONE 2.1.7 · 04/11/2026
+AIUTO: IL MANUALE D'ISTRUZIONI DENTRO L'APP
+
+1. Nuovo pulsante «Aiuto» (la lente) nel menu in alto, accanto a Impostazioni; si apre anche con
+   il tasto F1. Scrivi la domanda con parole tue (es. «come incasso un biglietto sospeso?»,
+   «ho sbagliato, come torno indietro?»): l'app trova le istruzioni giuste, passo passo.
+   Senza scrivere nulla si vede l'indice per argomento: primi passi, viaggi e liste, posti sul bus,
+   stampe e messaggi, incassi e cassa, biglietteria, buoni regalo, internet, impostazioni.
+2. Se la ricerca non trova niente, o premi «Non trovo la soluzione» / «Non ho risolto», compare
+   il messaggio: «SE PROPRIO NON STAI TROVANDO SOLUZIONE AL PROBLEMA ALLORA È GIUNTA L'ORA DI
+   CHIAMARE GIOVANNI».
+3. Il manuale segue l'app: in cima c'è «Novità delle ultime versioni», presa da sola da queste
+   note, e ogni nuova versione dell'app si crea solo dopo aver aggiornato anche il manuale.
+4. Contiene anche tutte le novità della 2.1.6 (Biglietteria), se non l'avevi ancora caricata.
+
+VERSIONE 2.1.6 · 04/11/2026
+BIGLIETTERIA IN UNA SEZIONE A PARTE
+
+Nuova voce «Biglietteria» nel menu in alto (per chi può usare la cassa). Funziona come il foglio
+CASSA e i fogli SOSPESI: ogni biglietto ricorda il giorno in cui è stato emesso sul circuito e ogni
+incasso conta per quel giorno, in qualsiasi agenzia venga fatto.
+1. Vendita: scegli l'evento, il settore, quanti biglietti interi e ridotti, il cliente e il giorno
+   dell'emissione. Il totale separa biglietti e diritti di prevendita (nello scontrino vanno solo i
+   diritti, la parte dell'agenzia). «Incassa» apre l'incasso (contanti, POS, misto, buono regalo…);
+   «Emesso, non pagato» la mette tra i sospesi. Se ci sono biglietti dell'agenzia liberi per quel
+   settore, si può scegliere «Biglietto dell'agenzia». Accanto: le vendite di oggi; dal menu «⋯» di
+   ogni vendita: incassa, cambio nome (5 € + 5 € di diritti), rimborso, annulla (solo senza incassi).
+2. Sospesi: i biglietti emessi e non ancora pagati, divisi per evento, con data di emissione,
+   acquirente, settore e tariffa, prezzo, da incassare e agenzia; filtro per circuito; «Incassa».
+   In fondo i biglietti dell'agenzia ancora liberi.
+3. Eventi: data, luogo, circuito, settori con prezzo intero e ridotto, diritti, venduti e sospesi.
+   Si può collegare il viaggio con il bus (che resta in «Viaggi» con lista, piantina e cartelli).
+4. Biglietti dell'agenzia: i biglietti comprati per i pacchetti bus + biglietto. Entrano tra le
+   emissioni del circuito nel giorno in cui li avete emessi e restano sospesi finché non li date ai
+   clienti (in Vendita, oppure nell'incasso del viaggio collegato: «Biglietti dell'agenzia» nelle
+   righe del documento).
+5. Controllo circuiti: per ogni circuito e settimana, giorno per giorno, emesso, incassato a Ragusa,
+   Modica e Marina, sospesi. Per TicketOne e B-Fast anche le settimane contabili del portafoglio:
+   si scrive l'addebito quando arriva e l'app lo confronta con le emissioni (differenza).
+Gli incassi della biglietteria vanno nel resoconto di cassa come sempre (TicketEdiritti o SoloTicket,
+con circuito, emissione, biglietti e diritti). I vecchi viaggi di tipo «Biglietteria» restano dove sono.
+6. Correzioni grafiche: la barra in alto con la voce nuova resta su una riga anche sugli schermi
+   medi (tra 1100 e 1330 pixel solo le icone); sul telefono l'elenco dei viaggi non fa più scorrere
+   la pagina di lato.
 
 VERSIONE 2.1.5 · 04/11/2026
 INCASSO AL CENTRO, INDIETRO E CRONOLOGIA, LISTA CHIUSA, BUONI REGALO

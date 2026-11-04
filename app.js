@@ -1,6 +1,6 @@
 (function () {
   'use strict';
-  const VERSION = '2.1.5';
+  const VERSION = '2.1.7';
   const LOGO = './logo.jpg';
   const KEY = 'laterra.prenotazioniPosti.v1';
   const $ = (s, r = document) => r.querySelector(s);
@@ -1709,10 +1709,19 @@
       <span class="spacer"></span>
       <span id="syncpill" class="sync ${sk}" title="${esc(st)}" role="status"><i></i>${esc(sl)}</span>
       ${ag ? `<button class="agchip" data-act="changeag" title="Cambia agenzia">${ICON.pin}${esc(ag.nome)}<span class="agc"> · ${esc(ag.cassa || ag.nome)}</span></button>` : ''}
-      ${nb('cassa', 'Cassa', ICON.cash, ACC.can('cassa') || ACC.can('cassaAll') ? null : 'x')}${nb('conta', 'Contabilità', ICON.chart, 'conta')}${nb('anag', 'Anagrafica', ICON.users, 'anag')}${nb('settings', 'Impostazioni', ICON.gear)}${nb('super', 'Super Master', ICON.tool, 'tech')}
+      ${nb('bigl', 'Biglietteria', ICON.tkt, ACC.can('cassa') || ACC.can('cassaAll') ? null : 'x')}${nb('cassa', 'Cassa', ICON.cash, ACC.can('cassa') || ACC.can('cassaAll') ? null : 'x')}${nb('conta', 'Contabilità', ICON.chart, 'conta')}${nb('anag', 'Anagrafica', ICON.users, 'anag')}${nb('settings', 'Impostazioni', ICON.gear)}<button class="tlink hlbtn" data-act="help" title="Aiuto: cerca nel manuale d'istruzioni (F1)" aria-label="Aiuto: cerca nel manuale d'istruzioni">${ICON.search}<span>Aiuto</span></button>${nb('super', 'Super Master', ICON.tool, 'tech')}
       ${me ? `<button class="me" data-act="memenu" aria-label="${esc(me.name)}: account"><span class="av">${esc((me.name || '?')[0].toUpperCase())}</span><span class="mt"><b>${esc(me.name)}</b><small>${esc(ROLE_L[me.role])}</small></span></button>` : ''}
     </div>${offBandHTML()}</header>`;
   }
+  // la barra in alto deve stare su una riga sui computer: se non ci sta (nomi lunghi, più voci), si stringe a gradini
+  function topFit() {
+    const h = $('.topbar .in'); if (!h) return; const T = document.querySelector('.topbar');
+    T.classList.remove('tf1', 'tf2', 'tf3'); if (innerWidth <= 1100) return;
+    const br = h.querySelector('.brand'); if (!br) return;
+    const wrapped = () => { const lim = br.getBoundingClientRect().bottom - 2; return [...h.children].some(x => { const r = x.getBoundingClientRect(); return r.width && r.top >= lim; }); };
+    for (const c of ['tf1', 'tf2', 'tf3']) { if (!wrapped()) return; T.classList.add(c); }
+  }
+  window.addEventListener('resize', () => { cancelAnimationFrame(topFit.r); topFit.r = requestAnimationFrame(topFit); });
   const CAT_L = { gita: 'Gita', tour: 'Tour', evento: 'Evento', biglietteria: 'Biglietteria' };
   const tripCat = t => t.cat || (t.fine && t.fine !== t.data ? 'tour' : 'gita');
   const nGiorni = t => !t.fine || t.fine === t.data ? 1 : Math.round((parseD(t.fine) - parseD(t.data)) / 864e5) + 1;
@@ -3258,7 +3267,7 @@
     if (allMovs().some(x => x.storno === id)) return toast('Questo incasso è già stato stornato');
     confirmBox('Storna incasso', `Annullo l'incasso di <b>${money(m.tot)}</b> di ${esc(m.cliente)}? Nel resoconto resta segnato, con un movimento uguale e contrario${m.doc === 'scontrino' ? ' (nota di credito dello scontrino)' : m.doc === 'fattura' ? ' (nota di credito della fattura)' : ''}.`, 'Storna', () => {
       const t = S.trips.find(x => x.id === m.tripId);
-      addMov({ tripId: m.tripId, tripN: m.tripN, tripD: m.tripD, bkId: m.bkId, pid: m.pid, pnome: m.pnome, rtRif: m.doc === 'scontrino' ? Object.assign({ chiusura: '', numero: '', dataOra: '', matricola: '' }, m.rt || {}, { mov: m.id }) : undefined, cliente: m.cliente, tipo: 'storno', storno: id, ag: m.ag, cassa: m.cassa, doc: m.doc === 'fattura' ? 'ncfattura' : m.doc === 'scontrino' ? 'ncscontrino' : m.doc, docStato: m.doc === 'fattura' || m.doc === 'scontrino' ? 'da_emettere' : '', cat: m.cat, desc: m.desc, circuito: m.circuito, lines: (m.lines || []).map(l => Object.assign({}, l, { q: -l.q })), suppl: -(m.suppl || 0), dir: m.dir, docTot: -(m.docTot || 0), agenzia: -(m.agenzia || 0), biglietti: -(m.biglietti || 0), parts: m.parts.map(p => Object.assign({ m: p.m, a: -p.a }, p.buono ? { buono: p.buono, bnum: p.bnum } : {})), note: `storno dell'incasso del ${fmtDate(m.day)}${ACC.sess.ag && ACC.sess.ag !== m.ag ? ' (fatto da ' + agName(ACC.sess.ag) + ')' : ''}` });
+      addMov({ tripId: m.tripId, tripN: m.tripN, tripD: m.tripD, bkId: m.bkId, pid: m.pid, pnome: m.pnome, rtRif: m.doc === 'scontrino' ? Object.assign({ chiusura: '', numero: '', dataOra: '', matricola: '' }, m.rt || {}, { mov: m.id }) : undefined, cliente: m.cliente, tipo: 'storno', storno: id, ag: m.ag, cassa: m.cassa, doc: m.doc === 'fattura' ? 'ncfattura' : m.doc === 'scontrino' ? 'ncscontrino' : m.doc, docStato: m.doc === 'fattura' || m.doc === 'scontrino' ? 'da_emettere' : '', cat: m.cat, desc: m.desc, circuito: m.circuito, venId: m.venId, emis: m.emis, ant: m.ant, stock: m.stock, nT: m.nT != null ? -m.nT : undefined, lines: (m.lines || []).map(l => Object.assign({}, l, { q: -l.q })), suppl: -(m.suppl || 0), dir: m.dir, docTot: -(m.docTot || 0), agenzia: -(m.agenzia || 0), biglietti: -(m.biglietti || 0), parts: m.parts.map(p => Object.assign({ m: p.m, a: -p.a }, p.buono ? { buono: p.buono, bnum: p.bnum } : {})), note: `storno dell'incasso del ${fmtDate(m.day)}${ACC.sess.ag && ACC.sess.ag !== m.ag ? ' (fatto da ' + agName(ACC.sess.ag) + ')' : ''}` });
       ACC.tlog('avviso', `Storno ${money(m.tot)} · ${m.cliente} · ${m.tripN}`);
       commit(); if (UI.pay) payRefresh(); toast('Incasso stornato');
     });
@@ -3492,6 +3501,7 @@
         </tbody></table>
         <div class="pp-g3">${f.bigl ? '' : `<label>Suppl. fila €${nIn('suppl', f.suppl)}</label>`}${tkOn ? `<label>Diritti € (per biglietto)${nIn('dir', f.dir)}</label><label>Circuito<select data-pf="circuito"><option value="">—</option>${CIRCUITI.map(c => `<option${c === f.circuito ? ' selected' : ''}>${c}</option>`).join('')}</select></label>` : ''}</div>
         ${tkOn ? `<div class="pp-g2"><label>Emissione biglietti<input type="date" data-pf="emis" value="${esc(f.emis)}"></label><label class="chk pp-chk"><input type="checkbox" data-pfc="ant"${f.ant ? ' checked' : ''}> Emissione anticipata</label></div>` : ''}
+        ${typeof bgTripStockHTML === 'function' ? bgTripStockHTML(t, f) : ''}
       </div></details>
       <div class="pp-tot" id="pp-tot">${payTotHTML(T, f.bigl)}</div>
       <div id="pp-rt">${rtPreviewHTML(f)}</div>
@@ -3602,7 +3612,7 @@
     const tipo = m.rest != null && imp >= m.rest - 0.009 ? 'saldo' : 'acconto';
     const agz = T.tot > 0 ? r2(imp * T.agenzia / T.tot) : imp;
     const mv = addMov({ tripId: t.id, tripN: t.nome, tripD: t.data, bkId: bk.id, pid: pid || undefined, pnome: P ? `${P.cognome} ${P.nome}`.trim() : undefined, cliente: f.cliente || (P ? `${P.cognome} ${P.nome}` : `${bkName(bk)} x ${bk.persone.length}`), tel: (P && P.tel) || (bk.persone.find(p => p.tel) || {}).tel || '', tipo, parts,
-      doc: f.doc, docStato: f.doc === 'scontrino' || f.doc === 'fattura' ? 'da_emettere' : '', cat: f.cat, desc: f.desc, circuito: T.tkt ? f.circuito : '', emis: T.tkt ? f.emis : '', ant: !!f.ant,
+      doc: f.doc, docStato: f.doc === 'scontrino' || f.doc === 'fattura' ? 'da_emettere' : '', cat: f.cat, desc: f.desc, ...(() => { const sk = f.stock && bgStock().find(x => x.id === f.stock); return sk ? { circuito: sk.circ, emis: sk.emis, ant: true, stock: sk.id } : { circuito: T.tkt ? f.circuito : '', emis: T.tkt ? f.emis : '', ant: !!f.ant }; })(),
       rt: f.doc === 'scontrino' ? { chiusura: '', numero: '', dataOra: '', matricola: '', esito: '' } : undefined,
       lines: f.lines.filter(l => +l.q).map(l => ({ l: l.l, q: +l.q, bus: +l.bus || 0, tkt: +l.tkt || 0 })), suppl: T.sup, supN: f.supN || 1, dir: +f.dir || 0, nT: T.nT, docTot: T.tot, agenzia: agz, biglietti: r2(imp - agz),
       pratica: f.pratica, canale: f.met === 'contanti' || f.met === 'pos' ? '' : f.canale, dataPag: f.met === 'contanti' || f.met === 'pos' ? '' : f.dataPag, pagante: f.pagante, note: f.note, fatt: f.doc === 'fattura' ? Object.assign({}, f.fatt) : null, sigla: sigla(ACC.sess.uid, ACC.me().name) });
@@ -3811,6 +3821,393 @@
     const el = e.target;
     if (el.dataset && el.dataset.bq) { UI.bq = el.value; clearTimeout(el._t); el._t = setTimeout(render, 200); }
     else if (el.dataset && el.dataset.bpq && UI.pay) { UI.pay.f.bq = el.value; clearTimeout(el._t); el._t = setTimeout(() => { const box = $('#pp-buono'); if (box) { box.innerHTML = buonoPayHTML(UI.pay.f); const i = box.querySelector('[data-bpq]'); if (i) { i.focus(); i.selectionStart = i.selectionEnd = i.value.length; } } }, 150); }
+  });
+
+  // ---------- BIGLIETTERIA (2.1.6) ----------
+  // Sezione a parte per i biglietti di concerti ed eventi venduti sui circuiti (TicketOne, Boxol, Vivaticket…).
+  // Come il foglio CASSA e i fogli SOSPESI dell'agenzia:
+  //  · ogni vendita ricorda il giorno in cui il biglietto è stato EMESSO sul circuito;
+  //  · ogni incasso si attribuisce al giorno di quell'emissione, in qualsiasi agenzia venga fatto;
+  //  · sospesi = emesso − incassato (biglietti emessi e non ancora pagati, compresi quelli comprati dall'agenzia);
+  //  · TicketOne e B-Fast: ogni settimana (lunedì–domenica) l'addebito del portafoglio si confronta con le emissioni.
+  // File (cartella /biglietteria/ dell'archivio):
+  //  eventi.json   { eventi: { id: { nome, luogo, data, ora, circ, dir, settori:[{id,nome,intero,ridotto}], tripId, note } } }
+  //  stock.json    { stock: { id: { evId, sett, circ, q, prezzo, emis, tripId, note } } }   biglietti comprati dall'agenzia
+  //  addebiti.json { add: { "<circuito>|<lunedì>": { circ, week, data, importo } } }        addebiti settimanali
+  //  vendite/aaaa-mm.json { ven: [ { evId, sett, circ, righe:[{tar,q,prezzo}], dir, nT, totTkt, totDir, tot, emis, stock, cliente, tel, tipo, rimb } ] }
+  // Gli incassi sono normali movimenti di cassa (categoria TicketEdiritti o SoloTicket) con venId = la vendita.
+  ICON.tkt = I('<path d="M3 8a2 2 0 0 0 2-2h14a2 2 0 0 0 2 2v2a2 2 0 0 0 0 4v2a2 2 0 0 0-2 2H5a2 2 0 0 0-2-2v-2a2 2 0 0 0 0-4z"/><path d="M14 6v2M14 11v2M14 16v2"/>');
+  ICON.search = I('<circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/>');
+  const BGP = { ev: '/biglietteria/eventi.json', st: '/biglietteria/stock.json', add: '/biglietteria/addebiti.json', ven: mon => `/biglietteria/vendite/${mon}.json` };
+  const CIRC_L = { 'T.OneRG': 'TicketOne RG', 'T.OneMD': 'TicketOne MD', BoxRG: 'Boxol RG', BoxMD: 'Boxol MD', Viva: 'Vivaticket', CiaoRG: 'CiaoTickets RG', CiaoMD: 'CiaoTickets MD', CiaoMDR: 'CiaoTickets MDR', LiveRG: 'LiveTicket RG', LiveMD: 'LiveTicket MD', 'B-Fast': 'B-Fast', 'On-Line': 'On-Line' };
+  const CIRC_W = ['T.OneRG', 'T.OneMD', 'B-Fast'];   // circuiti con l'addebito settimanale del portafoglio
+  const circL = c => CIRC_L[c] || c || '—';
+  const circB = c => `<span class="bg-c c-${String(c || '').replace(/[^a-z]/gi, '')}">${esc(circL(c))}</span>`;
+  const bgDirDef = c => (/^T\.One/.test(c) ? 2 : 3);
+  const bgCan = () => ACC.can('cassa') && !ACC.can('readonly');
+  const bgSee = () => ACC.can('cassa') || ACC.can('cassaAll');
+  const bgEvents = () => Object.values((STORE.get(BGP.ev) || {}).eventi || {}).filter(e => e && e.id && !e.del);
+  const bgEv = id => bgEvents().find(e => e.id === id);
+  const bgStock = () => Object.values((STORE.get(BGP.st) || {}).stock || {}).filter(x => x && x.id && !x.del);
+  const bgVend = () => STORE.list('/biglietteria/vendite/').flatMap(([, d]) => (d && d.ven) || []).filter(v => v && v.id && !v.del);
+  const bgAdd = () => (STORE.get(BGP.add) || {}).add || {};
+  function bgPutMap(path, key, obj) { const cur = JSON.parse(JSON.stringify(STORE.get(path) || {})); cur[key] = cur[key] || {}; obj.u = tick(); cur[key][obj.id] = obj; cur.u = obj.u; STORE.put(path, cur); }
+  function bgPutVen(v) { v.u = tick(); const p = BGP.ven(v.day.slice(0, 7)); const cur = JSON.parse(JSON.stringify(STORE.get(p) || { ven: [] })); cur.ven = (cur.ven || []).filter(x => x.id !== v.id).concat([v]); cur.u = v.u; STORE.put(p, cur); }
+  const evLbl = e => e ? `${e.nome}${e.luogo ? ' · ' + e.luogo.split('·')[0].trim() : ''} · ${fmtDate(e.data).slice(0, 5)}/${String(e.data).slice(2, 4)}` : 'evento tolto';
+  const fmt2 = v => (Math.round((+v || 0) * 100) / 100).toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  // valore di un campo numerico: i numeri salvati con due decimali, quello che si sta scrivendo così com'è
+  const bgNumV = v => (v === '' || v == null || (typeof v === 'number' && !v) ? '' : typeof v === 'number' ? esc(fmt2(v)) : esc(String(v)));
+  const dd2 = iso => { const [y, m, d] = String(iso || '').split('-'); return d ? `${d}/${m}/${y.slice(2)}` : ''; };
+  // ---- conti: pagato, sospeso, biglietti dell'agenzia ancora liberi ----
+  function bgIdx() {
+    const v = STORE.ver(); if (bgIdx.v === v && bgIdx.c) return bgIdx.c;
+    const paid = new Map(), movs = allMovs(); const trSt = new Map();
+    movs.forEach(m => {
+      if (m.venId && m.tipo !== 'rimborso') paid.set(m.venId, r2((paid.get(m.venId) || 0) + (+m.tot || 0)));
+      if (m.stock && m.tripId) { const k = m.stock + '|' + m.tripId + '|' + m.bkId + '|' + (m.pid || ''); trSt.set(k, Math.max(trSt.get(k) || 0, m.tipo === 'storno' ? 0 : (+m.nT || 0))); }
+    });
+    const used = new Map();
+    bgVend().forEach(x => { if (x.stock && x.tipo !== 'rimborso') used.set(x.stock, (used.get(x.stock) || 0) + (+x.nT || 0) - (+x.rimb || 0)); });
+    trSt.forEach((n, k) => { const s = k.split('|')[0]; used.set(s, (used.get(s) || 0) + n); });
+    bgIdx.v = v; bgIdx.c = { paid, used, movs }; return bgIdx.c;
+  }
+  const venPaid = x => bgIdx().paid.get(x.id) || 0;
+  const venQ = x => (+x.nT || 0) - (+x.rimb || 0);
+  const venDue = x => (venQ(x) > 0 ? r2(x.tot - venPaid(x)) : 0);
+  const venSosp = x => x.tipo !== 'rimborso' && venDue(x) > 0.009;
+  const stLiberi = s => Math.max(0, (+s.q || 0) - (bgIdx().used.get(s.id) || 0));
+  // ---- controllo per circuito: emesso, incassato per agenzia (per giorno di emissione), sospesi ----
+  function bgCtl(circ) {
+    const E = {}, add = (d, k, a, n, ag) => { const o = E[d] = E[d] || { em: 0, emN: 0, inc: {}, incN: {} }; if (k === 'em') { o.em = r2(o.em + a); o.emN += n; } else { o.inc[ag] = r2((o.inc[ag] || 0) + a); o.incN[ag] = (o.incN[ag] || 0) + n; } };
+    const V = new Map(bgVend().map(x => [x.id, x])), ST = new Map(bgStock().map(s => [s.id, s]));
+    V.forEach(x => { if (x.circ !== circ || x.stock || x.tipo === 'rimborso') return; add(x.emis, 'em', +x.totTkt || 0, +x.nT || 0); });
+    ST.forEach(s => { if (s.circ === circ) add(s.emis, 'em', r2((+s.q || 0) * (+s.prezzo || 0)), +s.q || 0); });
+    bgIdx().movs.forEach(m => {
+      const b = +m.biglietti || 0; if (!b) return; let c, d;
+      if (m.venId) { const x = V.get(m.venId); if (!x) return; c = x.circ; const s = x.stock && ST.get(x.stock); d = s ? s.emis : x.emis; }
+      else if (m.circuito && m.tripId) { c = m.circuito; d = m.emis || m.day; if (!m.ant && !m.stock && m.tipo !== 'storno') add(d, 'em', b, +m.nT || 0); if (m.stock) { const s = ST.get(m.stock); if (s) d = s.emis; } }
+      else return;
+      if (c !== circ) return; const tb = x => (x && +x.totTkt) || 0; const x = m.venId && V.get(m.venId);
+      const n = x && tb(x) ? Math.round((+x.nT || 0) * b / tb(x)) : (+m.nT || 0) * Math.sign(b);
+      add(d, 'inc', b, n, m.ag || '');
+    });
+    return E;
+  }
+  const monday = iso => { const d = parseD(iso); const w = (d.getDay() + 6) % 7; d.setDate(d.getDate() - w); return dayISO(d); };
+  const addDays = (iso, n) => { const d = parseD(iso); d.setDate(d.getDate() + n); return dayISO(d); };
+
+  // ---- vista ----
+  const BG_TABS = [['vendita', 'Vendita', 'tkt'], ['sospesi', 'Sospesi', 'clock'], ['eventi', 'Eventi', 'star'], ['agenzia', 'Biglietti dell\'agenzia', 'bus'], ['controllo', 'Controllo circuiti', 'check']];
+  const bgS = () => (UI.bg = UI.bg || { tab: 'vendita', q: {}, pr: {}, src: 'new', emis: todayISO(), ccirc: 'T.OneRG', week: monday(todayISO()) });
+  function bglView() {
+    if (!bgSee()) return '<div class="infobox">La biglietteria non è disponibile per il tuo account.</div>';
+    const st = bgS(); const nS = bgVend().filter(venSosp).length;
+    const tabs = `<div class="seg bg-tabs" role="tablist" aria-label="Biglietteria">${BG_TABS.map(([k, l, ic]) => `<button role="tab" data-act="bgtab" data-v="${k}" aria-pressed="${st.tab === k}">${ICON[ic]}<span>${l}${k === 'sospesi' && nS ? ` <i>${nS}</i>` : ''}</span></button>`).join('')}</div>`;
+    const V = { vendita: bgVendita, sospesi: bgSospesi, eventi: bgEventi, agenzia: bgAgenzia, controllo: bgControllo };
+    return (V[st.tab] || bgVendita)(tabs);
+  }
+  const bgHead = (sub, btns) => `<div class="pagehead"><div><h1>Biglietteria</h1><div class="sub">${sub}</div></div><div class="hbtns">${btns || ''}</div></div>`;
+  // ---- Vendita ----
+  function bgVendita(tabs) {
+    const st = bgS(); const today = todayISO(); const ag = ACC.sess.ag;
+    const L = bgVend().filter(x => x.day === today && (!ag || ACC.can('cassaAll') || x.ag === ag)).sort((a, b) => b.at.localeCompare(a.at));
+    const em = L.filter(x => x.tipo !== 'rimborso'); const nT = em.reduce((a, x) => a + (+x.nT || 0), 0); const tot = r2(em.reduce((a, x) => a + x.tot, 0));
+    const inc = r2(em.reduce((a, x) => a + venPaid(x), 0)); const sos = r2(em.reduce((a, x) => a + venDue(x), 0)); const dir = r2(em.reduce((a, x) => a + (+x.totDir || 0), 0));
+    const evs = bgEvents().filter(e => e.data >= today).sort((a, b) => a.data.localeCompare(b.data));
+    const e = st.evId && bgEv(st.evId); const sett = e && (e.settori || []).find(s => s.id === st.sett);
+    const stk = e && sett ? bgStock().filter(s => s.evId === e.id && s.sett === sett.nome && stLiberi(s) > 0) : [];
+    if (st.src === 'stock' && !stk.length) st.src = 'new';
+    const SK = st.src === 'stock' ? stk.find(s => s.id === st.stockId) || stk[0] : null; if (SK) st.stockId = SK.id;
+    const tar = sett ? [['Intero', sett.intero], ...(sett.ridotto ? [[sett.ridottoL || 'Ridotto', sett.ridotto]] : [])] : [];
+    const dirV = e ? (st.dirV != null ? st.dirV : +e.dir || 0) : 0;
+    const rows = tar.map(([l, p]) => { const q = +(st.q[l] || 0); const pr = SK ? +SK.prezzo : (st.pr[l] != null ? +st.pr[l] : +p); return { l, q, pr }; });
+    const nq = rows.reduce((a, r) => a + r.q, 0), tTkt = r2(rows.reduce((a, r) => a + r.q * r.pr, 0)), tDir = r2(nq * dirV), T = r2(tTkt + tDir);
+    const q = String(st.evq || '').trim().toLowerCase();
+    const evList = !e ? evs.filter(x => !q || [x.nome, x.luogo, circL(x.circ)].some(v => String(v || '').toLowerCase().includes(q))).slice(0, 8) : [];
+    const canSell = bgCan() && ag;
+    const form = `<section class="box bg-new" aria-label="Nuova vendita"><h2>Nuova vendita</h2>
+      ${e ? `<div class="bg-f"><span class="bg-l">Evento</span><div class="bg-sel on"><span><b>${esc(e.nome)}</b> · ${esc(e.luogo || '')} · ${esc(fmtDate(e.data, true))}${e.ora ? ' ore ' + esc(e.ora) : ''}</span>${circB(e.circ)}<button class="btn sm ghost" data-act="bgevclr">Cambia</button></div></div>`
+        : `<label class="bg-f">Evento<div class="bg-sel">${ICON.search}<input data-bgq="1" value="${esc(st.evq || '')}" placeholder="scrivi il nome dell'evento o il luogo" autocomplete="off"></div></label>
+        <div class="bu-list">${evList.map(x => `<button type="button" data-act="bgevpick" data-id="${esc(x.id)}"><b>${esc(dd2(x.data))}</b><span>${esc(x.nome)}${x.luogo ? ' · ' + esc(x.luogo) : ''}</span>${circB(x.circ)}</button>`).join('') || `<div class="small">${evs.length ? 'Nessun evento trovato.' : 'Nessun evento in vendita.'} Crealo nella scheda «Eventi».</div>`}</div>`}
+      ${e ? `<div class="bg-f"><span class="bg-l">Settore</span><div class="bg-chips">${(e.settori || []).map(s => `<button type="button" data-act="bgsett" data-id="${esc(s.id)}" aria-pressed="${st.sett === s.id}">${esc(s.nome)} <small>${esc(fmt2(+s.intero || 0))} €${s.ridotto ? ' · rid. ' + esc(fmt2(+s.ridotto)) + ' €' : ''}</small></button>`).join('') || '<span class="small">L\'evento non ha settori: aggiungili in «Eventi».</span>'}</div></div>` : ''}
+      ${sett && stk.length ? `<div class="bg-f"><span class="bg-l">Da dove viene il biglietto</span><div class="seg bg-src"><button type="button" data-act="bgsrc" data-v="new" aria-pressed="${st.src !== 'stock'}">Emetti un biglietto nuovo</button>${stk.map(s => `<button type="button" data-act="bgsrc" data-v="stock" data-id="${esc(s.id)}" aria-pressed="${!!SK && SK.id === s.id}">Biglietto dell'agenzia <small>${stLiberi(s)} liberi · emessi il ${esc(dd2(s.emis))}</small></button>`).join('')}</div></div>` : ''}
+      ${sett ? `<table class="bg-tar"><thead><tr><th>Tariffa</th><th>Quantità</th><th class="r">Prezzo</th><th class="r">Diritti</th><th class="r">Totale</th></tr></thead><tbody>
+        ${rows.map(r => `<tr${r.q ? '' : ' class="off"'}><td>${esc(r.l)}</td><td><input class="bg-q" data-bgqt="${esc(r.l)}" inputmode="numeric" value="${r.q || ''}" placeholder="0" aria-label="Quantità ${esc(r.l)}"></td><td class="r"><input class="bg-p" data-bgpr="${esc(r.l)}" inputmode="decimal" value="${esc(fmt2(r.pr))}"${SK ? ' disabled' : ''} aria-label="Prezzo ${esc(r.l)}"></td><td class="r">${esc(fmt2(dirV))} €</td><td class="r" id="bgt-${esc(r.l.replace(/\W/g, ''))}">${r.q ? `<b>${money(r.q * (r.pr + dirV))}</b>` : '—'}</td></tr>`).join('')}</tbody></table>
+        <div class="bg-g3"><label class="bg-f">Cliente<input data-bgf="cliente" value="${esc(st.cliente || '')}" placeholder="Cognome e nome" autocomplete="off"></label><label class="bg-f">Telefono<input data-bgf="tel" value="${esc(st.tel || '')}" inputmode="tel" autocomplete="off" placeholder="facoltativo"></label><label class="bg-f">Emesso sul circuito il<input type="date" data-bgf="emis" value="${esc(SK ? SK.emis : st.emis || today)}"${SK ? ' disabled' : ''}></label></div>
+        <label class="bg-f">Diritti di prevendita a biglietto €<input class="bg-p sm" data-bgf="dirV" inputmode="decimal" value="${esc(fmt2(dirV))}"></label>
+        <div class="bg-sum" id="bg-sum">${bgSumHTML(nq, tTkt, tDir, T)}</div>
+        ${canSell ? `<div class="bg-act"><button class="btn primary big" data-act="bgsell" data-k="pay"${nq ? '' : ' disabled'}>${ICON.euro} Incassa${T ? ' ' + money(T) : ''}</button><button class="btn big" data-act="bgsell" data-k="sosp"${nq ? '' : ' disabled'}>${ICON.clock} Emesso, non pagato (sospeso)</button></div>` : `<div class="small">${ag ? 'Il tuo account può solo consultare.' : 'Per vendere scegli l\'agenzia in cui lavori (in alto).'}</div>`}
+        <div class="small">«Incassa» registra la vendita e apre l'incasso (contanti, POS, misto, buono regalo…). «Sospeso» la mette tra i sospesi finché il cliente non paga.</div>` : ''}
+    </section>`;
+    const list = `<section class="box tablecard bg-today"><h2 class="ch">Vendite di oggi</h2><div class="tscroll"><table class="rt"><thead><tr><th>Ora</th><th>Cliente</th><th>Evento e settore</th><th class="r">Totale</th><th></th><th></th></tr></thead><tbody>
+      ${L.map(x => `<tr${x.tipo === 'rimborso' ? ' class="neg"' : ''}><td>${esc(hm(x.at))}</td><td><b>${esc(x.cliente || '—')}</b><br><small>${esc((x.righe || []).filter(r => r.q).map(r => `${r.q} ${r.tar.toLowerCase()}`).join(' + '))}${x.rimb ? ' · ' + x.rimb + ' rimborsati' : ''}</small></td><td>${esc(evLbl(bgEv(x.evId)) || x.evN)}<br><small>${esc(x.sett || '')} · ${esc(circL(x.circ))}${x.stock ? ' · dell\'agenzia' : ''}</small></td><td class="r"><b>${money(x.tot)}</b></td><td>${venSosp(x) ? '<span class="pill tbd">sospeso</span>' : venQ(x) <= 0 ? '<span class="pill neutral">rimborsato</span>' : '<span class="pill ok">pagato</span>'}</td><td class="r"><button class="kebab" data-act="bgvmenu" data-id="${esc(x.id)}" aria-label="Azioni">⋯</button></td></tr>`).join('') || '<tr><td colspan="6" class="emptyrow">Nessuna vendita oggi</td></tr>'}
+    </tbody></table></div></section>`;
+    return `${bgHead(`${esc(agName(ag) || 'tutte le agenzie')} · ${esc(fmtDate(today, true))}${ACC.me() ? ' · ' + esc(ACC.me().name) : ''}`)}${tabs}
+      <div class="tiles"><div class="tile dark"><span>Emessi oggi</span><b>${nT} ${nT === 1 ? 'biglietto' : 'biglietti'}</b><small>${money(tot)} con i diritti · ${em.length} ${em.length === 1 ? 'vendita' : 'vendite'}</small></div><div class="tile"><span>Incassati</span><b>${money(inc)}</b><small>biglietti e diritti</small></div><div class="tile"><span>Sospesi di oggi</span><b${sos ? ' class="neg"' : ''}>${money(sos)}</b><small>da incassare</small></div><div class="tile"><span>Diritti di prevendita</span><b>${money(dir)}</b><small>parte dell'agenzia</small></div></div>
+      <div class="bg-two">${form}${list}</div>`;
+  }
+  const bgSumHTML = (n, tk, di, T) => `<div><span>Biglietti (${n})</span><b>${money(tk)}</b></div><div><span>Diritti di prevendita</span><b>${money(di)}</b></div><div class="tot"><span>Totale</span><b>${money(T)}</b></div><div class="ag"><span>Nello scontrino (solo i diritti, parte agenzia)</span><b>${money(di)}</b></div>`;
+  function bgRecalc() {
+    const st = bgS(); const e = st.evId && bgEv(st.evId); const sett = e && (e.settori || []).find(s => s.id === st.sett); if (!sett) return;
+    const SK = st.src === 'stock' && bgStock().find(s => s.id === st.stockId);
+    const dirV = st.dirV != null ? +st.dirV : +e.dir || 0;
+    const tar = [['Intero', sett.intero], ...(sett.ridotto ? [[sett.ridottoL || 'Ridotto', sett.ridotto]] : [])];
+    let n = 0, tk = 0; tar.forEach(([l, p]) => { const q = +(st.q[l] || 0); const pr = SK ? +SK.prezzo : (st.pr[l] != null ? +st.pr[l] : +p); n += q; tk += q * pr; const c = $('#bgt-' + l.replace(/\W/g, '')); if (c) c.innerHTML = q ? `<b>${money(q * (pr + dirV))}</b>` : '—'; });
+    tk = r2(tk); const di = r2(n * dirV); const box = $('#bg-sum'); if (box) box.innerHTML = bgSumHTML(n, tk, di, r2(tk + di));
+    $$('[data-act="bgsell"]').forEach(b => { b.disabled = !n; if (b.dataset.k === 'pay') b.innerHTML = `${ICON.euro} Incassa${n ? ' ' + money(r2(tk + di)) : ''}`; });
+  }
+  function bgSell(k) {
+    const st = bgS(); const e = bgEv(st.evId); const sett = e && (e.settori || []).find(s => s.id === st.sett); if (!e || !sett) return toast('Scegli evento e settore');
+    if (!ACC.sess.ag) return toast('Scegli prima l\'agenzia in cui lavori (in alto)');
+    const SK = st.src === 'stock' && bgStock().find(s => s.id === st.stockId);
+    const dirV = st.dirV != null ? +st.dirV : +e.dir || 0;
+    const tar = [['Intero', sett.intero], ...(sett.ridotto ? [[sett.ridottoL || 'Ridotto', sett.ridotto]] : [])];
+    const righe = tar.map(([l, p]) => ({ tar: l, q: +(st.q[l] || 0), prezzo: r2(SK ? +SK.prezzo : (st.pr[l] != null ? +st.pr[l] : +p)) })).filter(r => r.q > 0);
+    const nT = righe.reduce((a, r) => a + r.q, 0); if (!nT) return toast('Scrivi quanti biglietti');
+    if (SK && nT > stLiberi(SK)) return toast(`Dell'agenzia restano solo ${stLiberi(SK)} biglietti liberi`);
+    const cliente = String(st.cliente || '').trim(); if (!cliente) return toast('Scrivi il nome del cliente');
+    const emis = SK ? SK.emis : (st.emis || todayISO());
+    const totTkt = r2(righe.reduce((a, r) => a + r.q * r.prezzo, 0)), totDir = r2(nT * dirV);
+    const d = new Date(); const me = ACC.me();
+    const v = { id: 'v' + uid(), at: d.toISOString(), day: dayISO(d), who: me.name, uid: ACC.sess.uid, ag: ACC.sess.ag, dev: STORE.device.id, evId: e.id, evN: e.nome, evD: e.data, sett: sett.nome, circ: e.circ, righe, dir: dirV, nT, totTkt, totDir, tot: r2(totTkt + totDir), emis, stock: SK ? SK.id : '', cliente: cliente.toUpperCase(), tel: String(st.tel || '').trim(), tipo: 'vendita' };
+    bgPutVen(v);
+    ACC.tlog('info', `Biglietteria · ${nT} ${nT === 1 ? 'biglietto' : 'biglietti'} ${e.nome} (${sett.nome}) · ${v.cliente} · ${money(v.tot)} · ${k === 'pay' ? 'da incassare adesso' : 'sospeso'}${SK ? ' · dell\'agenzia' : ''}`);
+    UI.bg = Object.assign(bgS(), { q: {}, pr: {}, cliente: '', tel: '', dirV: null, src: 'new' });
+    render();
+    if (k === 'pay') bgPayModal(v.id); else toast(`Registrato come sospeso: ${v.cliente} · ${money(v.tot)}`);
+  }
+  // ---- incasso di una vendita (finestra come quella del viaggio, più semplice) ----
+  function bgPayModal(id, keep) {
+    const x = bgVend().find(v => v.id === id); if (!x) return; const due = venDue(x);
+    if (!keep) UI.modal = { kind: 'bgpay', id, met: 'contanti', doc: x.totDir > 0 ? 'scontrino' : 'nessuno', imp: due > 0 ? due : x.tot, mix: {}, buono: '', note: '' };
+    const M = UI.modal; const isMix = M.met === 'misto'; const bpart = M.met === 'buono' ? +M.imp || 0 : isMix ? +M.mix.buono || 0 : 0;
+    const buoni = buoniAll().map(b => Object.assign({}, b, { res: buonoRes(b) })).filter(b => b.res > 0.009);
+    openModal(`Incasso biglietti · ${esc(x.cliente)}`, `<div class="bgp">
+      <div class="bgp-ev"><b>${esc(x.evN)}</b> · ${esc(x.sett)} · ${esc(circL(x.circ))}<br><small>${esc((x.righe || []).map(r => `${r.q} ${r.tar.toLowerCase()} × ${fmt2(r.prezzo)} €`).join(' + '))} + diritti ${esc(fmt2(x.dir))} € a biglietto · emessi il ${esc(dd2(x.emis))}</small></div>
+      <div class="pay-sum"><div><span>Totale</span><b>${money(x.tot)}</b></div><div><span>Già pagato</span><b>${money(venPaid(x))}</b></div><div class="hi"><span>Da pagare</span><b>${money(due)}</b></div></div>
+      <div class="pp-sec"><span class="pp-l">Documento</span><div class="seg" role="radiogroup">${[['scontrino', 'Scontrino (diritti)'], ['nessuno', 'Senza documento']].map(([k, l]) => `<button type="button" data-act="bgpdoc" data-k="${k}" aria-pressed="${M.doc === k}">${l}</button>`).join('')}</div></div>
+      <div class="pp-sec"><span class="pp-l">Incassato adesso</span><input class="pay-imp" data-bgp="imp" inputmode="decimal" value="${M.imp ? esc(fmt2(+M.imp)) : ''}" placeholder="0,00"></div>
+      <div class="pay-met" role="radiogroup">${[...METODI, ['misto', 'Misto']].map(([k, l]) => `<button type="button" role="radio" aria-checked="${M.met === k}" data-act="bgpmet" data-k="${k}">${l}</button>`).join('')}</div>
+      ${isMix ? `<div class="pp-mix">${METODI.map(([k, l]) => `<div class="pay-row"><span>${l}</span><input data-bgpm="${k}" inputmode="decimal" value="${M.mix[k] ? esc(fmt2(M.mix[k])) : ''}" placeholder="0,00"></div>`).join('')}</div>` : ''}
+      ${M.met === 'buono' || bpart ? `<label class="bg-f">Buono regalo<select data-bgp="buono"><option value="">— scegli il buono —</option>${buoni.map(b => `<option value="${esc(b.id)}"${M.buono === b.id ? ' selected' : ''}>${esc(b.num)} · ${esc(b.dest || '')} · ${esc(money(b.res))}</option>`).join('')}</select></label>` : ''}
+      <label class="bg-f">Note pratica<input data-bgp="note" value="${esc(M.note || '')}" autocomplete="off"></label>
+      <div class="small">Registrato da <b>${esc(ACC.me().name)}</b> · <b>${esc(agName(ACC.sess.ag))}</b> · ${esc(cassaName(ACC.sess.ag))}</div></div>`,
+      `<button class="btn" data-act="close">Più tardi (resta sospeso)</button><button class="btn primary" data-act="bgpsave">${M.doc === 'scontrino' ? ICON.print + ' Scontrino' : 'Registra'} · ${money(+M.imp || 0)}</button>`);
+  }
+  function bgPaySave() {
+    const M = UI.modal; const x = bgVend().find(v => v.id === M.id); if (!x) return closeModal();
+    if (!ACC.sess.ag) return toast('Scegli prima l\'agenzia in cui lavori (in alto)');
+    const imp = r2(+M.imp || 0); if (imp <= 0) return toast('Scrivi l\'importo incassato adesso');
+    let parts;
+    if (M.met === 'misto') { parts = METODI.map(([k]) => ({ m: k, a: r2(+M.mix[k] || 0) })).filter(p => p.a > 0); const s = r2(parts.reduce((a, p) => a + p.a, 0)); if (parts.length < 2) return toast('Nel pagamento misto scrivi almeno due metodi'); if (Math.abs(s - imp) > 0.009) return toast(`I metodi fanno ${money(s)}, l'importo è ${money(imp)}`); }
+    else parts = [{ m: M.met, a: imp }];
+    { const bErr = buonoCheck({ buono: M.buono }, parts); if (bErr) return toast(bErr); }
+    const agz = x.tot > 0 ? r2(imp * x.totDir / x.tot) : 0; const SK = x.stock && bgStock().find(s => s.id === x.stock);
+    const mv = addMov({ venId: x.id, cliente: x.cliente, tel: x.tel, doc: M.doc, docStato: M.doc === 'scontrino' ? 'da_emettere' : '', cat: x.totDir > 0 ? 'TicketEdiritti' : 'SoloTicket', desc: `${dd2(x.evD)} ${x.evN}`.toLowerCase(), circuito: x.circ, emis: SK ? SK.emis : x.emis, ant: !!SK || x.emis !== dayISO(new Date()),
+      rt: M.doc === 'scontrino' ? { chiusura: '', numero: '', dataOra: '', matricola: '', esito: '' } : undefined, lines: (x.righe || []).map(r => ({ l: r.tar, q: r.q, bus: 0, tkt: r.prezzo })), suppl: 0, dir: x.dir, nT: x.nT, docTot: x.tot, agenzia: agz, biglietti: r2(imp - agz), note: M.note || '', parts, sigla: sigla(ACC.sess.uid, ACC.me().name) });
+    ACC.tlog('info', `Biglietteria · incasso ${money(mv.tot)} (${parts.map(p => MET_L[p.m]).join(' + ')}) · ${x.cliente} · ${x.evN}`);
+    closeModal(); render();
+    const msg = `Incasso registrato: ${money(mv.tot)} · ${x.cliente}`;
+    if (M.doc === 'scontrino') fiscalPrint(mv).then(r => toast(msg + (r.ok ? ' · scontrino emesso' : ` · scontrino dei diritti da emettere (${r.msg})`))); else toast(msg);
+  }
+  // ---- menu di una vendita: incassa, rimborso, cambio nome, annulla ----
+  function bgVenMenu(id, el) {
+    const x = bgVend().find(v => v.id === id); if (!x) return; const paid = venPaid(x);
+    const B = (act, ico, txt, cls = '') => `<button class="${cls}" data-act="${act}" data-id="${esc(id)}">${ico}<span>${txt}</span></button>`;
+    let h = `<div class="ph"><b>${esc(x.cliente)}</b><span>${esc(x.evN)} · ${esc(x.sett)} · ${venQ(x)} ${venQ(x) === 1 ? 'biglietto' : 'biglietti'}</span></div>`;
+    if (bgCan()) {
+      h += `<div class="pm-sec">${venSosp(x) ? B('bgvpay', ICON.euro, `Incassa <small>da pagare ${money(venDue(x))}</small>`) : ''}${x.tipo !== 'cambio' && venQ(x) > 0 ? B('bgvcambio', ICON.edit, 'Cambio nome <small>5,00 € + 5,00 € di diritti (si può cambiare)</small>') : ''}</div>`;
+      h += `<div class="pm-sec">${paid > 0.009 && venQ(x) > 0 ? B('bgvrimb', ICON.undo, 'Rimborso <small>restituisci i biglietti al cliente</small>') : ''}${paid <= 0.009 ? B('bgvdel', ICON.trash, 'Annulla la vendita <small>registrata per sbaglio, senza incassi</small>', 'danger') : ''}</div>`;
+    }
+    openPop(el, h, 'rmenu');
+  }
+  function bgRimbModal(id) {
+    const x = bgVend().find(v => v.id === id); if (!x) return;
+    UI.modal = { kind: 'bgrimb', id, met: 'contanti' };
+    const per = x.nT ? r2(x.totTkt / x.nT) : 0;
+    openModal(`Rimborso biglietti · ${esc(x.cliente)}`, `<div class="bgp"><div class="bgp-ev"><b>${esc(x.evN)}</b> · ${esc(x.sett)}<br><small>${venQ(x)} biglietti · ${money(per)} a biglietto (i diritti non si rimborsano)</small></div>
+      <div class="grid2"><div class="field"><label for="bgr-q">Quanti biglietti</label><input id="bgr-q" inputmode="numeric" value="${venQ(x)}"></div><div class="field"><label for="bgr-a">Importo da restituire</label><input id="bgr-a" inputmode="decimal" value="${esc(fmt2(r2(per * venQ(x))))}"></div></div>
+      <div class="field"><label>Come lo restituisci</label><div class="pay-met">${METODI.filter(([k]) => !['buono', 'voucher'].includes(k)).map(([k, l]) => `<button type="button" role="radio" aria-checked="${k === 'contanti'}" data-act="bgrmet" data-k="${k}">${l}</button>`).join('')}</div></div></div>`,
+      `<button class="btn" data-act="close">Annulla</button><button class="btn primary" data-act="bgrsave">Registra il rimborso</button>`);
+  }
+  function bgRimbSave() {
+    const M = UI.modal; const x = bgVend().find(v => v.id === M.id); if (!x) return closeModal();
+    const q = parseInt($('#bgr-q').value, 10) || 0; const a = parseEuro($('#bgr-a').value) || 0;
+    if (q <= 0 || q > venQ(x)) return toast(`Si possono rimborsare da 1 a ${venQ(x)} biglietti`); if (a < 0) return toast('Importo non valido');
+    const SK = x.stock && bgStock().find(s => s.id === x.stock);
+    if (a > 0) addMov({ venId: x.id, tipo: 'rimborso', cliente: x.cliente, doc: 'nessuno', cat: 'SoloTicket', desc: `${dd2(x.evD)} ${x.evN}`.toLowerCase(), circuito: x.circ, emis: SK ? SK.emis : x.emis, ant: true, lines: [{ l: 'Rimborso', q: -q, bus: 0, tkt: x.nT ? r2(x.totTkt / x.nT) : 0 }], dir: 0, nT: -q, docTot: -a, agenzia: 0, biglietti: -a, parts: [{ m: M.met, a: -a }], note: 'rimborso biglietti', sigla: sigla(ACC.sess.uid, ACC.me().name) });
+    const v = Object.assign({}, x, { rimb: (+x.rimb || 0) + q }); bgPutVen(v);
+    ACC.tlog('avviso', `Biglietteria · rimborso di ${q} ${q === 1 ? 'biglietto' : 'biglietti'} (${money(a)}) · ${x.cliente} · ${x.evN}`);
+    closeModal(); render(); toast(`Rimborso registrato: ${q} ${q === 1 ? 'biglietto' : 'biglietti'} · ${money(a)}`);
+  }
+  function bgCambio(id) {
+    const x = bgVend().find(v => v.id === id); if (!x || !ACC.sess.ag) return;
+    const d = new Date(); const me = ACC.me(); const dir = 5, pr = 5;
+    const v = { id: 'v' + uid(), at: d.toISOString(), day: dayISO(d), who: me.name, uid: ACC.sess.uid, ag: ACC.sess.ag, dev: STORE.device.id, evId: x.evId, evN: x.evN, evD: x.evD, sett: 'cambio nome', circ: x.circ, righe: [{ tar: 'Cambio nome', q: 1, prezzo: pr }], dir, nT: 1, totTkt: pr, totDir: dir, tot: pr + dir, emis: dayISO(d), stock: '', cliente: x.cliente, tel: x.tel, tipo: 'cambio', rif: x.id };
+    bgPutVen(v); ACC.tlog('info', `Biglietteria · cambio nome · ${x.cliente} · ${x.evN}`); render(); bgPayModal(v.id);
+  }
+  // ---- Sospesi ----
+  function bgSospesi(tabs) {
+    const st = bgS(); const f = st.scirc || 'tutti';
+    const L = bgVend().filter(venSosp).filter(x => f === 'tutti' || x.circ === f);
+    const SL = bgStock().filter(s => stLiberi(s) > 0 && (f === 'tutti' || s.circ === f));
+    const G = new Map(); L.forEach(x => { const k = x.evId; if (!G.has(k)) G.set(k, []); G.get(k).push(x); });
+    const tot = r2(L.reduce((a, x) => a + venDue(x), 0)), n = L.reduce((a, x) => a + venQ(x), 0);
+    const circs = [...new Set([...bgVend().filter(venSosp).map(x => x.circ), ...bgStock().filter(s => stLiberi(s) > 0).map(s => s.circ)])];
+    const groups = [...G.entries()].map(([evId, xs]) => ({ e: bgEv(evId), xs: xs.sort((a, b) => a.emis.localeCompare(b.emis)) })).sort((a, b) => String(a.e ? a.e.data : '').localeCompare(String(b.e ? b.e.data : '')));
+    return `${bgHead(`${n} ${n === 1 ? 'biglietto emesso' : 'biglietti emessi'} e non ancora pagati · <b>${money(tot)}</b> da incassare`)}${tabs}
+      <div class="bg-filt"><span class="bg-l">Circuito</span><div class="seg"><button data-act="bgscirc" data-v="tutti" aria-pressed="${f === 'tutti'}">Tutti</button>${circs.map(c => `<button data-act="bgscirc" data-v="${esc(c)}" aria-pressed="${f === c}">${esc(circL(c))}</button>`).join('')}</div></div>
+      ${groups.map(g => { const s = r2(g.xs.reduce((a, x) => a + venDue(x), 0)), q = g.xs.reduce((a, x) => a + venQ(x), 0); return `<section class="box tablecard bg-ev"><div class="bg-evh"><h2>${esc(g.e ? evLbl(g.e) : g.xs[0].evN)}</h2>${circB(g.xs[0].circ)}<span class="bg-evs">${q} ${q === 1 ? 'biglietto' : 'biglietti'} · <b>${money(s)}</b></span></div><div class="tscroll"><table class="rt"><thead><tr><th>Emesso il</th><th>Acquirente</th><th>Settore e tariffa</th><th class="r">N.</th><th class="r">€ a biglietto</th><th class="r">Da incassare</th><th>Agenzia</th><th></th></tr></thead><tbody>
+        ${g.xs.map(x => `<tr><td>${esc(dd2(x.emis))}</td><td><b>${esc(x.cliente)}</b>${x.tel ? `<br><small>${esc(x.tel)}</small>` : ''}</td><td>${esc(x.sett)} · ${esc((x.righe || []).map(r => r.tar.toLowerCase()).join(' + '))}</td><td class="r">${venQ(x)}</td><td class="r">${esc((x.righe || []).map(r => fmt2(r.prezzo)).join(' / '))} €</td><td class="r"><b>${money(venDue(x))}</b></td><td>${esc(agName(x.ag))}</td><td class="r">${bgCan() ? `<button class="btn sm primary" data-act="bgvpay" data-id="${esc(x.id)}">${ICON.euro} Incassa</button>` : ''}</td></tr>`).join('')}</tbody></table></div></section>`; }).join('')}
+      ${SL.length ? `<section class="box tablecard bg-ev"><div class="bg-evh"><h2>Biglietti dell'agenzia ancora liberi</h2><span class="bg-evs">${SL.reduce((a, s) => a + stLiberi(s), 0)} biglietti · <b>${money(r2(SL.reduce((a, s) => a + stLiberi(s) * s.prezzo, 0)))}</b></span></div><div class="tscroll"><table class="rt"><thead><tr><th>Emessi il</th><th>Evento</th><th>Settore</th><th>Circuito</th><th class="r">Liberi</th><th class="r">€ a biglietto</th></tr></thead><tbody>${SL.map(s => `<tr><td>${esc(dd2(s.emis))}</td><td><b>${esc(evLbl(bgEv(s.evId)))}</b></td><td>${esc(s.sett)}</td><td>${circB(s.circ)}</td><td class="r">${stLiberi(s)}</td><td class="r">${money(s.prezzo)}</td></tr>`).join('')}</tbody></table></div></section>` : ''}
+      ${!groups.length && !SL.length ? '<div class="infobox">Nessun biglietto sospeso.</div>' : ''}`;
+  }
+  // ---- Eventi ----
+  function bgEventi(tabs) {
+    const st = bgS(); const today = todayISO(); const all = !!st.evAll;
+    const E = bgEvents().filter(e => all || e.data >= today).sort((a, b) => a.data.localeCompare(b.data));
+    const V = bgVend(); const cnt = id => { const xs = V.filter(x => x.evId === id && x.tipo !== 'rimborso' && x.tipo !== 'cambio'); return { v: xs.reduce((a, x) => a + venQ(x), 0), s: xs.filter(venSosp).reduce((a, x) => a + venQ(x), 0) }; };
+    return `${bgHead('Eventi in vendita, con settori, tariffe e diritti per circuito', bgCan() ? `<button class="btn primary" data-act="bgevnew">${ICON.plus} Nuovo evento</button>` : '')}${tabs}
+      <label class="chk small"><input type="checkbox" data-act="bgevall"${all ? ' checked' : ''}> Mostra anche gli eventi passati</label>
+      <section class="box tablecard"><div class="tscroll"><table class="rt bg-evt"><thead><tr><th>Data</th><th>Evento</th><th>Circuito</th><th>Settori e prezzi (€)</th><th class="r">Diritti</th><th class="r">Venduti</th><th class="r">Sospesi</th><th>Viaggio con il bus</th><th></th></tr></thead><tbody>
+        ${E.map(e => { const c = cnt(e.id); const t = e.tripId && S.trips.find(x => x.id === e.tripId); return `<tr><td class="nowrap">${esc(fmtDate(e.data))}${e.ora ? `<br><small>ore ${esc(e.ora)}</small>` : ''}</td><td><b>${esc(e.nome)}</b>${e.luogo ? `<br><small>${esc(e.luogo)}</small>` : ''}</td><td>${circB(e.circ)}</td><td><small>${(e.settori || []).map(s => `${esc(s.nome)} ${esc(fmt2(+s.intero || 0))}${s.ridotto ? ' (rid. ' + esc(fmt2(+s.ridotto)) + ')' : ''}`).join(' · ') || '—'}</small></td><td class="r">${esc(fmt2(+e.dir || 0))}</td><td class="r"><b>${c.v}</b></td><td class="r">${c.s ? `<span class="pill tbd">${c.s}</span>` : '—'}</td><td>${t ? `<button class="bg-link" data-act="opentrip" data-id="${esc(t.id)}">${ICON.bus} ${esc(t.nome)}</button>` : '<small>solo biglietto</small>'}</td><td class="r">${bgCan() ? `<button class="btn sm" data-act="bgevedit" data-id="${esc(e.id)}">${ICON.edit} Modifica</button>` : ''}</td></tr>`; }).join('') || `<tr><td colspan="9" class="emptyrow">${all ? 'Nessun evento' : 'Nessun evento in programma: premi «Nuovo evento»'}</td></tr>`}
+      </tbody></table></div></section>
+      <div class="small bg-note">Per i concerti con il bus il viaggio resta in «Viaggi» (lista, piantina, cartelli): qui lo colleghi all'evento, così i biglietti dell'agenzia si possono dare alle persone del viaggio.</div>`;
+  }
+  function bgEvModal(id, keep) {
+    const e0 = id && bgEv(id);
+    if (!keep) UI.modal = { kind: 'bgev', ev: JSON.parse(JSON.stringify(e0 || { id: 'e' + uid(), nome: '', luogo: '', data: '', ora: '', circ: 'T.OneRG', dir: 2, settori: [{ id: 's' + uid(), nome: '', intero: '', ridotto: '' }], tripId: '', note: '' })), isNew: !e0 };
+    const E = UI.modal.ev; const today = todayISO();
+    const trips = S.trips.filter(t => (t.fine || t.data) >= today || t.id === E.tripId).sort((a, b) => a.data.localeCompare(b.data));
+    openModal(UI.modal.isNew ? 'Nuovo evento' : 'Modifica evento', `<div class="bge">
+      <div class="field"><label for="bge-n">Evento</label><input id="bge-n" data-bge="nome" value="${esc(E.nome)}" placeholder="es. Laura Pausini"></div>
+      <div class="field"><label for="bge-l">Luogo</label><input id="bge-l" data-bge="luogo" value="${esc(E.luogo)}" placeholder="es. Messina · Stadio San Filippo"></div>
+      <div class="grid3"><div class="field"><label for="bge-d">Data</label><input id="bge-d" type="date" data-bge="data" value="${esc(E.data)}"></div><div class="field"><label for="bge-o">Ora <small>facoltativa</small></label><input id="bge-o" data-bge="ora" value="${esc(E.ora || '')}" placeholder="21:00"></div>
+        <div class="field"><label for="bge-c">Circuito</label><select id="bge-c" data-bge="circ">${CIRCUITI.map(c => `<option value="${esc(c)}"${E.circ === c ? ' selected' : ''}>${esc(circL(c))}</option>`).join('')}</select></div></div>
+      <div class="field"><label for="bge-r">Diritti di prevendita a biglietto €</label><input id="bge-r" data-bge="dir" inputmode="decimal" value="${typeof E.dir === 'number' ? esc(fmt2(E.dir)) : esc(String(E.dir || ''))}" style="max-width:140px"></div>
+      <div class="field"><label>Settori e prezzi</label><div class="bge-s">${(E.settori || []).map((s, i) => `<div class="bge-r"><input data-bges="${i}" data-k="nome" value="${esc(s.nome)}" placeholder="settore (es. Parterre)" aria-label="Settore ${i + 1}"><input data-bges="${i}" data-k="intero" inputmode="decimal" value="${bgNumV(s.intero)}" placeholder="intero €" aria-label="Prezzo intero"><input data-bges="${i}" data-k="ridotto" inputmode="decimal" value="${bgNumV(s.ridotto)}" placeholder="ridotto €" aria-label="Prezzo ridotto"><button class="kebab" data-act="bgesdel" data-i="${i}" aria-label="Togli il settore">${ICON.close}</button></div>`).join('')}</div><button class="btn sm ghost" data-act="bgesadd">${ICON.plus} Aggiungi settore</button></div>
+      <div class="field"><label for="bge-t">Viaggio con il bus <small>facoltativo</small></label><select id="bge-t" data-bge="tripId"><option value="">— solo biglietto, senza bus —</option>${trips.map(t => `<option value="${esc(t.id)}"${E.tripId === t.id ? ' selected' : ''}>${esc(fmtDate(t.data))} · ${esc(t.nome)}</option>`).join('')}</select></div>
+      <div class="field"><label for="bge-x">Note <small>facoltative</small></label><input id="bge-x" data-bge="note" value="${esc(E.note || '')}"></div></div>`,
+      `${!UI.modal.isNew ? `<button class="btn danger" data-act="bgevdel" style="margin-right:auto">${ICON.trash} Togli l'evento</button>` : ''}<button class="btn" data-act="close">Annulla</button><button class="btn primary" data-act="bgevsave">${UI.modal.isNew ? 'Crea l\'evento' : 'Salva'}</button>`);
+  }
+  function bgEvSave() {
+    const E = UI.modal.ev; E.nome = String(E.nome || '').trim(); if (!E.nome) return toast('Scrivi il nome dell\'evento'); if (!E.data) return toast('Scegli la data dell\'evento');
+    E.settori = (E.settori || []).map(s => ({ id: s.id || 's' + uid(), nome: String(s.nome || '').trim(), intero: parseEuro(String(s.intero)) || 0, ridotto: parseEuro(String(s.ridotto)) || 0 })).filter(s => s.nome);
+    if (!E.settori.length) return toast('Scrivi almeno un settore con il prezzo'); E.dir = parseEuro(String(E.dir)) || 0;
+    bgPutMap(BGP.ev, 'eventi', E); ACC.tlog('info', `Biglietteria · evento ${UI.modal.isNew ? 'creato' : 'modificato'}: ${E.nome} (${E.data})`); closeModal(); render(); toast(`Evento «${E.nome}» salvato`);
+  }
+  // ---- Biglietti dell'agenzia ----
+  function bgAgenzia(tabs) {
+    const L = bgStock().sort((a, b) => String((bgEv(a.evId) || {}).data).localeCompare(String((bgEv(b.evId) || {}).data)));
+    return `${bgHead('Biglietti comprati dall\'agenzia per i pacchetti bus + biglietto', bgCan() ? `<button class="btn primary" data-act="bgstnew">${ICON.plus} Biglietti comprati</button>` : '')}${tabs}
+      <section class="box tablecard"><div class="tscroll"><table class="rt"><thead><tr><th>Evento</th><th>Settore</th><th>Circuito</th><th>Emessi il</th><th class="r">Comprati</th><th class="r">Dati ai clienti</th><th class="r">Ancora liberi</th><th class="r">€ a biglietto</th><th>Viaggio</th></tr></thead><tbody>
+        ${L.map(s => { const e = bgEv(s.evId); const t = s.tripId && S.trips.find(x => x.id === s.tripId); const lib = stLiberi(s); return `<tr><td><b>${esc(evLbl(e))}</b>${s.note ? `<br><small>${esc(s.note)}</small>` : ''}</td><td>${esc(s.sett)}</td><td>${circB(s.circ)}</td><td>${esc(dd2(s.emis))}</td><td class="r">${s.q}</td><td class="r">${s.q - lib}</td><td class="r">${lib ? `<span class="pill tbd">${lib} liberi</span>` : '<span class="pill ok">finiti</span>'}</td><td class="r">${money(s.prezzo)}</td><td>${t ? `<button class="bg-link" data-act="opentrip" data-id="${esc(t.id)}">${ICON.bus} ${esc(t.nome)}</button>` : '—'}</td></tr>`; }).join('') || '<tr><td colspan="9" class="emptyrow">Nessun biglietto comprato dall\'agenzia: premi «Biglietti comprati»</td></tr>'}
+      </tbody></table></div></section>
+      <div class="small bg-note">I biglietti comprati entrano tra le emissioni del circuito nel giorno in cui li avete emessi e restano tra i sospesi dell'agenzia finché non li date ai clienti: in «Vendita» (scegli «Biglietto dell'agenzia») oppure nell'incasso del viaggio con il bus collegato.</div>`;
+  }
+  function bgStModal(keep) {
+    const evs = bgEvents().filter(e => e.data >= todayISO()).sort((a, b) => a.data.localeCompare(b.data));
+    if (!keep) UI.modal = { kind: 'bgst', evId: evs[0] ? evs[0].id : '', sett: '', q: '', prezzo: '', emis: todayISO(), tripId: '', note: '' };
+    const M = UI.modal; const e = M.evId && bgEv(M.evId); if (e && !M.sett && (e.settori || [])[0]) M.sett = e.settori[0].nome;
+    const sett = e && (e.settori || []).find(s => s.nome === M.sett); if (sett && (M.prezzo === '' || M.prezzo == null)) M.prezzo = sett.intero;
+    if (e && !M.tripId && e.tripId) M.tripId = e.tripId;
+    const trips = S.trips.filter(t => (t.fine || t.data) >= todayISO()).sort((a, b) => a.data.localeCompare(b.data));
+    openModal('Biglietti comprati dall\'agenzia', evs.length ? `<div class="bge">
+      <div class="field"><label for="bgs-e">Evento</label><select id="bgs-e" data-bgs="evId">${evs.map(x => `<option value="${esc(x.id)}"${x.id === M.evId ? ' selected' : ''}>${esc(fmtDate(x.data))} · ${esc(x.nome)} · ${esc(circL(x.circ))}</option>`).join('')}</select><span class="small">Se l'evento non c'è ancora, crealo prima nella scheda «Eventi».</span></div>
+      ${e ? `<div class="field"><label>Settore</label><div class="bg-chips">${(e.settori || []).map(s => `<button type="button" data-act="bgsset" data-v="${esc(s.nome)}" aria-pressed="${M.sett === s.nome}">${esc(s.nome)} <small>${esc(fmt2(+s.intero || 0))} €</small></button>`).join('')}</div></div>` : ''}
+      <div class="grid2"><div class="field"><label for="bgs-q">Quanti biglietti</label><input id="bgs-q" data-bgs="q" class="pay-imp" inputmode="numeric" value="${esc(String(M.q || ''))}" style="max-width:150px"></div><div class="field"><label for="bgs-p">Prezzo pagato a biglietto €</label><input id="bgs-p" data-bgs="prezzo" inputmode="decimal" value="${M.prezzo !== '' ? esc(fmt2(+M.prezzo)) : ''}"></div></div>
+      <div class="grid2"><div class="field"><label for="bgs-d">Emessi sul circuito il</label><input id="bgs-d" type="date" data-bgs="emis" value="${esc(M.emis)}"></div><div class="field"><label for="bgs-t">Per il viaggio con il bus <small>facoltativo</small></label><select id="bgs-t" data-bgs="tripId"><option value="">—</option>${trips.map(t => `<option value="${esc(t.id)}"${t.id === M.tripId ? ' selected' : ''}>${esc(fmtDate(t.data))} · ${esc(t.nome)}</option>`).join('')}</select></div></div>
+      <div class="field"><label for="bgs-n">Note <small>facoltative</small></label><input id="bgs-n" data-bgs="note" value="${esc(M.note || '')}" placeholder="es. blocco per il pacchetto bus + biglietto"></div>
+      <div class="bg-sum" id="bgs-sum">${bgStSum(M, e)}</div></div>` : '<div class="infobox">Prima crea l\'evento nella scheda «Eventi».</div>',
+      `<button class="btn" data-act="close">Annulla</button>${evs.length ? `<button class="btn primary" data-act="bgstsave">Aggiungi i biglietti</button>` : ''}`);
+  }
+  const bgStSum = (M, e) => { const q = parseInt(M.q, 10) || 0, p = parseEuro(String(M.prezzo)) || 0; return `<div><span>${q} biglietti × ${money(p)}</span><b>${money(r2(q * p))}</b></div><div class="small">Entrano tra le emissioni di ${esc(circL(e && e.circ))} del ${esc(dd2(M.emis))} e restano «sospesi dell'agenzia» finché non li date ai clienti.</div>`; };
+  function bgStSave() {
+    const M = UI.modal; const e = bgEv(M.evId); if (!e) return toast('Scegli l\'evento'); if (!M.sett) return toast('Scegli il settore');
+    const q = parseInt(M.q, 10) || 0; if (q <= 0) return toast('Scrivi quanti biglietti'); const p = parseEuro(String(M.prezzo)) || 0; if (p <= 0) return toast('Scrivi il prezzo a biglietto');
+    const me = ACC.me(); const s = { id: 'k' + uid(), evId: e.id, sett: M.sett, circ: e.circ, q, prezzo: r2(p), emis: M.emis || todayISO(), tripId: M.tripId || '', note: String(M.note || '').trim(), who: me.name, ag: ACC.sess.ag || '', at: new Date().toISOString() };
+    bgPutMap(BGP.st, 'stock', s); ACC.tlog('info', `Biglietteria · comprati dall'agenzia ${q} biglietti ${e.nome} (${M.sett}) a ${money(p)}`); closeModal(); render(); toast(`Aggiunti ${q} biglietti dell'agenzia`);
+  }
+  // ---- Controllo circuiti ----
+  function bgControllo(tabs) {
+    const st = bgS(); const c = st.ccirc || 'T.OneRG'; const w0 = st.week || monday(todayISO()); const E = bgCtl(c);
+    const used = [...new Set([...bgVend().map(x => x.circ), ...bgStock().map(s => s.circ), ...allMovs().filter(m => m.circuito).map(m => m.circuito), 'T.OneRG'])].filter(Boolean);
+    const days = [0, 1, 2, 3, 4, 5, 6].map(i => addDays(w0, i)); const AG = S.cfg.agenzie;
+    const row = d => { const o = E[d] || { em: 0, emN: 0, inc: {}, incN: {} }; const ti = r2(Object.values(o.inc).reduce((a, v) => a + v, 0)), tn = Object.values(o.incN).reduce((a, v) => a + v, 0); const s = r2(o.em - ti), sn = o.emN - tn;
+      return `<tr><td><b>${esc(GIORNI[parseD(d).getDay()].slice(0, 3))} ${esc(dd2(d).slice(0, 5))}</b></td><td class="r">${money(o.em)}<br><small>${o.emN} tkt</small></td>${AG.map(a => `<td class="r">${money(o.inc[a.id] || 0)}<br><small>${o.incN[a.id] || 0} tkt</small></td>`).join('')}<td class="r">${Math.abs(s) < 0.01 ? (o.em ? '<span class="pill ok">tutto incassato</span>' : '—') : `<b class="neg">${money(s)}</b><br><small>${sn} tkt ${s > 0 ? 'da incassare' : '(incassi di emissioni vecchie)'}</small>`}</td></tr>`; };
+    const tot = days.reduce((a, d) => { const o = E[d]; if (!o) return a; a.em += o.em; a.inc += Object.values(o.inc).reduce((x, v) => x + v, 0); return a; }, { em: 0, inc: 0 });
+    let weekly = '';
+    if (CIRC_W.includes(c)) {
+      const A = bgAdd(); const W = []; for (let i = 0; i < 8; i++) W.push(addDays(monday(todayISO()), -7 * (i + 1)));
+      weekly = `<section class="box tablecard"><h2 class="ch">Portafoglio ${esc(circL(c))} · settimane contabili</h2><div class="tscroll"><table class="rt"><thead><tr><th>Settimana</th><th>Addebito del</th><th class="r">Addebitato dal circuito</th><th class="r">Nostre emissioni</th><th class="r">Biglietti</th><th class="r">Differenza</th></tr></thead><tbody>
+        ${W.map(w => { const k = c + '|' + w; const a = A[k] || {}; let em = 0, n = 0; for (let i = 0; i < 7; i++) { const o = E[addDays(w, i)]; if (o) { em += o.em; n += o.emN; } } em = r2(em); const has = a.importo != null && a.importo !== ''; const d = has ? r2(+a.importo - em) : null;
+          return `<tr><td><b>${esc(dd2(w).slice(0, 5))} – ${esc(dd2(addDays(w, 6)).slice(0, 5))}</b></td><td><input type="date" class="bg-inp" data-bgadd="${esc(k)}" data-k="data" value="${esc(a.data || '')}"${bgCan() ? '' : ' disabled'} aria-label="Data dell'addebito"></td><td class="r"><input class="bg-inp r" data-bgadd="${esc(k)}" data-k="importo" inputmode="decimal" value="${has ? esc(fmt2(+a.importo)) : ''}" placeholder="0,00"${bgCan() ? '' : ' disabled'} aria-label="Importo addebitato"></td><td class="r">${money(em)}</td><td class="r">${n}</td><td class="r">${d == null ? '<small>scrivi l\'addebito</small>' : Math.abs(d) < 0.01 ? '<span class="pill ok">0,00 € · torna</span>' : `<b class="neg">${money(d)}</b><br><small>da controllare</small>`}</td></tr>`; }).join('')}
+      </tbody></table></div></section>`;
+    }
+    return `${bgHead('Ogni giorno: emesso sul circuito, incassato nelle tre agenzie, sospesi')}${tabs}
+      <div class="bg-filt"><span class="bg-l">Circuito</span><div class="seg">${used.map(x => `<button data-act="bgccirc" data-v="${esc(x)}" aria-pressed="${x === c}">${esc(circL(x))}</button>`).join('')}</div><span class="bg-l">Settimana</span><div class="seg"><button data-act="bgweek" data-v="-7" aria-label="Settimana prima">‹</button><button aria-pressed="true">${esc(dd2(w0).slice(0, 5))} – ${esc(dd2(addDays(w0, 6)).slice(0, 5))}</button><button data-act="bgweek" data-v="7" aria-label="Settimana dopo">›</button></div></div>
+      <section class="box tablecard"><div class="tscroll"><table class="rt bg-ctl"><thead><tr><th>Emissioni del</th><th class="r">Emesso</th>${AG.map(a => `<th class="r">Incassato ${esc(a.nome)}</th>`).join('')}<th class="r">Sospesi</th></tr></thead><tbody>${days.map(row).join('')}
+        <tr class="tot"><td><b>Settimana</b></td><td class="r"><b>${money(r2(tot.em))}</b></td>${AG.map(() => '<td></td>').join('')}<td class="r"><b>${money(r2(tot.em - tot.inc))}</b></td></tr></tbody></table></div></section>
+      ${weekly}
+      <div class="small bg-note">Gli incassi contano nel giorno in cui il biglietto è stato emesso, in qualsiasi agenzia siano fatti (come i fogli SOSPESI). Valori negativi = quel giorno si sono incassati biglietti emessi prima. L'addebito del circuito si scrive a mano quando arriva.</div>`;
+  }
+  // ---- nell'incasso di un viaggio con il bus collegato a un evento: biglietto dell'agenzia ----
+  function bgTripStockHTML(t, f) {
+    const evs = bgEvents().filter(e => e.tripId === t.id).map(e => e.id); if (!evs.length) return '';
+    const L = bgStock().filter(s => evs.includes(s.evId) && (stLiberi(s) > 0 || s.id === f.stock)); if (!L.length) return '';
+    return `<label class="pp-1">Biglietti dell'agenzia<select data-pf="stock"><option value="">— nessuno (biglietto emesso adesso) —</option>${L.map(s => `<option value="${esc(s.id)}"${f.stock === s.id ? ' selected' : ''}>${esc(s.sett)} · ${esc(circL(s.circ))} · ${stLiberi(s)} liberi · emessi il ${esc(dd2(s.emis))}</option>`).join('')}</select></label>`;
+  }
+  // ---- eventi ----
+  document.addEventListener('click', e => {
+    const el = e.target.closest && e.target.closest('[data-act^="bg"]'); if (!el) return; const a = el.dataset.act; const st = bgS();
+    switch (a) {
+      case 'bgtab': st.tab = el.dataset.v; render(); window.scrollTo(0, 0); break;
+      case 'bgevpick': st.evId = el.dataset.id; st.sett = ''; st.q = {}; st.pr = {}; st.dirV = null; st.src = 'new'; render(); break;
+      case 'bgevclr': st.evId = ''; st.sett = ''; st.q = {}; st.pr = {}; st.dirV = null; render(); setTimeout(() => { const i = $('[data-bgq]'); if (i) i.focus(); }, 30); break;
+      case 'bgsett': st.sett = el.dataset.id; st.q = {}; st.pr = {}; st.src = 'new'; { const ev = bgEv(st.evId); const s = ev && ev.settori.find(x => x.id === st.sett); if (s) st.q.Intero = 1; } render(); break;
+      case 'bgsrc': st.src = el.dataset.v; if (el.dataset.id) st.stockId = el.dataset.id; render(); break;
+      case 'bgsell': if (bgCan()) bgSell(el.dataset.k); break;
+      case 'bgvmenu': e.stopImmediatePropagation(); bgVenMenu(el.dataset.id, el); break;
+      case 'bgvpay': closePop(); if (bgCan()) bgPayModal(el.dataset.id); break;
+      case 'bgvrimb': closePop(); if (bgCan()) bgRimbModal(el.dataset.id); break;
+      case 'bgvcambio': closePop(); if (bgCan()) bgCambio(el.dataset.id); break;
+      case 'bgvdel': { closePop(); const x = bgVend().find(v => v.id === el.dataset.id); if (!x || !bgCan()) break; confirmBox('Annulla la vendita', `Tolgo la vendita di <b>${esc(x.cliente)}</b> (${esc(x.evN)}, ${venQ(x)} biglietti)? Non ha incassi.`, 'Annulla la vendita', () => { bgPutVen(Object.assign({}, x, { del: true })); ACC.tlog('avviso', `Biglietteria · annullata la vendita ${x.cliente} · ${x.evN}`); render(); toast('Vendita annullata'); }); break; }
+      case 'bgpdoc': if (UI.modal && UI.modal.kind === 'bgpay') { UI.modal.doc = el.dataset.k; bgPayModal(UI.modal.id, true); } break;
+      case 'bgpmet': if (UI.modal && UI.modal.kind === 'bgpay') { UI.modal.met = el.dataset.k; if (el.dataset.k === 'misto') UI.modal.mix = {}; bgPayModal(UI.modal.id, true); } break;
+      case 'bgpsave': if (UI.modal && UI.modal.kind === 'bgpay') bgPaySave(); break;
+      case 'bgrmet': if (UI.modal) { UI.modal.met = el.dataset.k; $$('[data-act="bgrmet"]').forEach(x => x.setAttribute('aria-checked', String(x === el))); } break;
+      case 'bgrsave': if (UI.modal && UI.modal.kind === 'bgrimb') bgRimbSave(); break;
+      case 'bgscirc': st.scirc = el.dataset.v; render(); break;
+      case 'bgevnew': if (bgCan()) bgEvModal(null); break;
+      case 'bgevedit': if (bgCan()) bgEvModal(el.dataset.id); break;
+      case 'bgevall': st.evAll = el.checked; render(); break;
+      case 'bgesadd': if (UI.modal && UI.modal.kind === 'bgev') { UI.modal.ev.settori.push({ id: 's' + uid(), nome: '', intero: '', ridotto: '' }); bgEvModal(null, true); const ins = $$('[data-bges][data-k="nome"]'); if (ins.length) ins[ins.length - 1].focus(); } break;
+      case 'bgesdel': if (UI.modal && UI.modal.kind === 'bgev') { UI.modal.ev.settori.splice(+el.dataset.i, 1); bgEvModal(null, true); } break;
+      case 'bgevsave': if (UI.modal && UI.modal.kind === 'bgev') bgEvSave(); break;
+      case 'bgevdel': if (UI.modal && UI.modal.kind === 'bgev') { const E = UI.modal.ev; if (bgVend().some(x => x.evId === E.id) || bgStock().some(s => s.evId === E.id)) { toast('L\'evento ha già vendite o biglietti dell\'agenzia: non si può togliere'); break; } bgPutMap(BGP.ev, 'eventi', Object.assign({}, E, { del: true })); closeModal(); render(); toast('Evento tolto'); } break;
+      case 'bgstnew': if (bgCan()) bgStModal(false); break;
+      case 'bgsset': if (UI.modal && UI.modal.kind === 'bgst') { UI.modal.sett = el.dataset.v; const ev = bgEv(UI.modal.evId); const s = ev && ev.settori.find(x => x.nome === el.dataset.v); if (s) UI.modal.prezzo = s.intero; bgStModal(true); } break;
+      case 'bgstsave': if (UI.modal && UI.modal.kind === 'bgst') bgStSave(); break;
+      case 'bgccirc': st.ccirc = el.dataset.v; render(); break;
+      case 'bgweek': st.week = addDays(st.week || monday(todayISO()), +el.dataset.v); render(); break;
+    }
+  });
+  document.addEventListener('input', e => {
+    const el = e.target; const d = el.dataset || {}; const st = bgS();
+    if (d.bgq) { st.evq = el.value; clearTimeout(el._t); el._t = setTimeout(() => { render(); const i = $('[data-bgq]'); if (i) { i.focus(); i.selectionStart = i.selectionEnd = i.value.length; } }, 200); }
+    else if (d.bgqt) { st.q[d.bgqt] = parseInt(el.value, 10) || 0; bgRecalc(); }
+    else if (d.bgpr) { st.pr[d.bgpr] = parseEuro(el.value) || 0; bgRecalc(); }
+    else if (d.bgf) { st[d.bgf] = d.bgf === 'dirV' ? (parseEuro(el.value) ?? 0) : el.value; if (d.bgf === 'dirV') bgRecalc(); }
+    else if (d.bgp && UI.modal && UI.modal.kind === 'bgpay') { UI.modal[d.bgp] = d.bgp === 'imp' ? (parseEuro(el.value) || 0) : el.value; if (d.bgp === 'imp') { const b = $('[data-act="bgpsave"]'); if (b) b.innerHTML = `${UI.modal.doc === 'scontrino' ? ICON.print + ' Scontrino' : 'Registra'} · ${money(+UI.modal.imp || 0)}`; } }
+    else if (d.bgpm && UI.modal && UI.modal.kind === 'bgpay') { UI.modal.mix[d.bgpm] = parseEuro(el.value) || 0; if (d.bgpm === 'buono' && !$('[data-bgp="buono"]')) bgPayModal(UI.modal.id, true); }
+    else if (d.bge && UI.modal && UI.modal.kind === 'bgev') { UI.modal.ev[d.bge] = el.value; if (d.bge === 'circ') { UI.modal.ev.dir = bgDirDef(el.value); const r = $('#bge-r'); if (r) r.value = fmt2(UI.modal.ev.dir); } }
+    else if (d.bges !== undefined && UI.modal && UI.modal.kind === 'bgev') { UI.modal.ev.settori[+d.bges][d.k] = el.value; }
+    else if (d.bgs && UI.modal && UI.modal.kind === 'bgst') { UI.modal[d.bgs] = el.value; if (d.bgs === 'evId') { UI.modal.sett = ''; UI.modal.prezzo = ''; UI.modal.tripId = ''; bgStModal(true); } else { const sm = $('#bgs-sum'); if (sm) sm.innerHTML = bgStSum(UI.modal, bgEv(UI.modal.evId)); } }
+  });
+  document.addEventListener('change', e => {
+    const el = e.target; const d = el.dataset || {};
+    if (d.bgp === 'buono' && UI.modal && UI.modal.kind === 'bgpay') UI.modal.buono = el.value;
+    if (d.bgadd && bgCan()) { const A = JSON.parse(JSON.stringify(STORE.get(BGP.add) || {})); A.add = A.add || {}; const [circ, week] = d.bgadd.split('|'); const o = A.add[d.bgadd] = Object.assign({ id: d.bgadd, circ, week }, A.add[d.bgadd] || {}); o[d.k] = d.k === 'importo' ? (el.value.trim() === '' ? '' : parseEuro(el.value)) : el.value; o.u = tick(); A.u = o.u; STORE.put(BGP.add, A); ACC.tlog('info', `Biglietteria · addebito ${circL(circ)} settimana del ${dd2(week)}: ${d.k === 'importo' ? money(+o.importo || 0) : o.data}`); render(); }
   });
 
   // ---------- «Apri in Danea»: la fattura preparata nell'app diventa un file Easyfatt-Xml ----------
@@ -4923,6 +5320,176 @@
     const t = UI.view === 'trip' && trip(); if (!t) return; e.preventDefault(); doUndo(t);
   });
 
+  // ---------- MANUALE D'ISTRUZIONI e ricerca «Aiuto» (2.1.7) ----------
+  // Il manuale va aggiornato a ogni versione: mk.py si ferma se HELP_VER non è uguale alla versione dell'app.
+  // Le «Novità» si prendono da sole da CHANGES.txt (le ultime 3 versioni): mk.py le scrive qui sotto, in HELP_NEWS.
+  const HELP_VER = '2.1.7';
+  const HELP_CAT = [['primi', 'Primi passi'], ['viaggi', 'Viaggi e liste'], ['posti', 'Posti sul bus'], ['stampe', 'Stampe e messaggi'], ['cassa', 'Incassi e cassa'], ['bigl', 'Biglietteria'], ['buoni', 'Buoni regalo'], ['rete', 'Internet e computer'], ['imp', 'Account e impostazioni']];
+  const HELP = [
+    // ---- primi passi ----
+    { id: 'accesso', c: 'primi', t: 'Entrare nell\'app e scegliere l\'agenzia', k: 'login accedere password nome agenzia ragusa modica marina entrare ricordami',
+      s: ['Apri l\'app dal suo indirizzo o dall\'icona sul computer.', 'Scrivi il tuo nome e la tua password.', 'Lascia la spunta su «Ricordami su questo computer» se il computer è dell\'agenzia.', 'Clicca «Entra».', 'Scegli l\'agenzia in cui lavori oggi (Ragusa, Modica o Marina di Ragusa): gli incassi vanno nella sua cassa.'],
+      n: 'Per cambiare agenzia durante la giornata clicca il nome dell\'agenzia in alto (con la puntina rossa).' },
+    { id: 'password', c: 'primi', t: 'Cambiare la password o password dimenticata', k: 'password dimenticata cambiare nuova reimpostare account bloccato',
+      s: ['Per cambiarla: in alto clicca «Impostazioni», poi «Il mio account».', 'Scrivi la password di adesso e due volte quella nuova (almeno 8 caratteri).', 'Clicca «Cambia la password».', 'Se l\'hai dimenticata: chiedi a un Master di andare in Impostazioni › «Operatori e permessi» e premere «Reimposta password» accanto al tuo nome.', 'Il Master ti dice una password provvisoria: al primo accesso l\'app ti chiede di sceglierne una nuova.'] },
+    { id: 'menu', c: 'primi', t: 'Il menu in alto: a cosa serve ogni voce', k: 'menu barra voci sezioni dove trovo icone',
+      s: ['«Viaggi»: l\'elenco di gite, tour ed eventi; da qui apri la lista prenotazioni e i posti sul bus.', '«Piantine»: i modelli dei pullman della flotta.', '«Biglietteria»: biglietti di concerti ed eventi, sospesi e controllo dei circuiti.', '«Cassa»: il resoconto del giorno, la chiusura della cassa e i buoni regalo.', '«Contabilità»: resoconto giornaliero e mensile di tutte le agenzie (Master e contabilità).', '«Anagrafica»: i clienti.', '«Impostazioni»: account, agenzie, luoghi di partenza, WhatsApp, registratore e altro.', '«Aiuto» (la lente): questo manuale, con la ricerca. Si apre anche con il tasto F1. Il pallino accanto all\'agenzia dice se i dati sono allineati con gli altri computer.'],
+      n: 'Sugli schermi più piccoli le voci mostrano solo l\'icona: passa sopra con il mouse per leggere il nome.' },
+    // ---- viaggi e liste ----
+    { id: 'nuovoviaggio', c: 'viaggi', t: 'Creare un nuovo viaggio (gita, tour, evento)', k: 'nuovo viaggio gita tour evento creare aggiungere data partenza rientro codice',
+      s: ['In alto clicca «Viaggi».', 'Clicca «Nuovo viaggio».', 'Scrivi il nome, scegli il tipo (Gita, Tour, Evento…) e la data di partenza; per i viaggi di più giorni anche il rientro.', 'Se vuoi, scrivi il codice (es. G07, T08) e accendi i servizi compresi.', 'Clicca «Crea»: il viaggio si apre con un bus da 52 posti, che puoi cambiare.'] },
+    { id: 'importword', c: 'viaggi', t: 'Importare la lista dal file Word', k: 'word docx importare lista file trascinare elenco',
+      s: ['Per un viaggio nuovo: in «Viaggi» clicca «Nuovo viaggio da lista Word».', 'Per un viaggio che c\'è già: apri il viaggio, «Lista prenotazioni», poi «Importa da Word».', 'Trascina il file Word nel riquadro (oppure cliccalo per sceglierlo).', 'Controlla l\'anteprima: persone, lista d\'attesa, annullati, quote e partenze.', 'Clicca il pulsante per importare.'],
+      n: 'Puoi anche trascinare il file Word direttamente sulla pagina del viaggio.' },
+    { id: 'scriverelista', c: 'viaggi', t: 'Scrivere le prenotazioni nella lista', k: 'lista prenotazioni scrivere riga comitiva x 2 x3 gruppo famiglia nomi aggiungere persona',
+      s: ['Apri il viaggio e la scheda «Lista prenotazioni».', 'Scrivi come in Word: nella prima riga il cognome seguito da «x» e il numero di persone (es. «Rossi x 3») e il nome.', 'Nelle righe sotto scrivi le altre persone della comitiva.', 'Premi Invio per andare alla riga sotto.', 'Compila data, contatto, partenza (es. RG, MD), fila e note: si salva da solo.'],
+      n: 'Se scrivi «x 4» su una comitiva da 3, l\'app aggiunge da sola le righe vuote da completare.' },
+    { id: 'menuriga', c: 'viaggi', t: 'Il menu della riga: spostare, staccare, eliminare', k: 'menu riga numero tasto destro eliminare riga sopra sotto staccare capogruppo abituale saldato attesa',
+      s: ['Clicca il numero a sinistra della riga (oppure tasto destro sulla riga).', 'Da qui: incasso, «Mostra sulla piantina», «Stacca» una persona dalla comitiva, «Riga sopra» e «Riga sotto».', 'Accendi «Cliente abituale» (precedenza nelle prime file) o «Saldato» (anche se il prezzo è diverso).', 'Sposta in lista d\'attesa o in «Non parte più» (da rimborsare, già rimborsato, senza rimborso).', '«Elimina questa riga» in fondo, in rosso.'] },
+    { id: 'attesa', c: 'viaggi', t: 'Lista d\'attesa e persone che non partono più', k: 'lista attesa conferma annullati non parte rimborso rinuncia',
+      s: ['Sotto la lista c\'è la «Lista d\'attesa»: scrivi lì chi aspetta un posto.', 'Quando si libera un posto clicca il numero della riga d\'attesa e scegli «Conferma: passa nella lista partecipanti».', 'Chi non parte più: menu della riga › «Non parte più…» e scegli da rimborsare, già rimborsato o senza rimborso.', 'Se ci ripensa: nelle tabelle in fondo clicca il numero della riga › «Riparte».'] },
+    { id: 'listachiusa', c: 'viaggi', t: 'Chiudere la lista (niente nuove prenotazioni)', k: 'lucchetto chiudere lista chiusa bloccare prenotazioni riaprire completo esaurito',
+      s: ['Solo il Master: apri il viaggio e in alto clicca «Chiudi la lista».', 'Con la lista chiusa non si aggiungono righe, le comitive non crescono e non si conferma dalla lista d\'attesa.', 'Si possono ancora correggere i dati, completare i nomi mancanti, sistemare i posti, incassare e scrivere nella lista d\'attesa.', 'Per riaprirla il Master clicca «Lista chiusa · riapri».'] },
+    { id: 'indietro', c: 'viaggi', t: 'Annullare un errore: tasto Indietro e Cronologia', k: 'indietro annullare errore sbagliato ctrl z cronologia versione ripristinare tornare prima chi ha modificato',
+      s: ['Nella pagina del viaggio, accanto alle schede, clicca «Indietro»: annulla l\'ultima modifica fatta da questo computer (anche Ctrl+Z, o ⌘+Z sul Mac).', 'Per tornare più indietro clicca «Cronologia»: vedi le versioni con ora, chi le ha fatte e da quale agenzia.', 'Clicca «Ripristina» sulla versione che vuoi: l\'app ti mostra cosa cambia e chiede conferma.', 'Anche un ripristino si può annullare con «Indietro».'],
+      n: 'Il lucchetto accanto lo usa solo il Master: chiuso, Indietro e Ripristina li può usare solo lui. La lista e la piantina hanno ognuna la sua cronologia.' },
+    { id: 'altrooperatore', c: 'viaggi', t: 'Un altro operatore sta lavorando sullo stesso viaggio', k: 'altro operatore stesso viaggio avviso arancione insieme contemporaneamente conflitto',
+      s: ['Quando un collega apre lo stesso viaggio compare la finestra «Attenzione: non sei solo su questo viaggio»: clicca «Ho capito».', 'In alto resta la fascia arancione con chi c\'è e cosa sta facendo.', 'Mettetevi d\'accordo prima di spostare persone, cambiare posti o incassare.', 'Le modifiche si uniscono da sole; sulla stessa riga resta l\'ultima scritta per ogni campo.'] },
+    { id: 'anagrafica', c: 'viaggi', t: 'Anagrafica clienti', k: 'anagrafica clienti cercare cliente codice fiscale importare excel suggerimenti',
+      s: ['In alto clicca «Anagrafica».', 'Cerca il cliente per nome, telefono o codice fiscale.', 'Clicca il cliente per vedere e correggere i suoi dati e i viaggi fatti.', 'Quando scrivi un cognome nella lista, l\'app propone i clienti dell\'anagrafica: scegli quello giusto.'] },
+    // ---- posti ----
+    { id: 'posti', c: 'posti', t: 'Mettere le persone sui posti', k: 'posti piantina sistemare trascinare mettere posto bus sedile assegnare',
+      s: ['Apri il viaggio e la scheda «Posti sul bus».', 'A sinistra c\'è la lista della gita: trascina una prenotazione sul posto della piantina (si siede tutta la comitiva) oppure un\'etichetta con il nome (solo quella persona).', 'In alternativa: clicca la prenotazione nella lista, poi clicca il posto.', 'Per sistemare tutti da soli con le vostre regole clicca «Sistema chi non ha il posto».'],
+      n: 'Le richieste dei clienti (es. 1ª fila DX) si vedono sotto il nome: verde rispettata, rosso non rispettata.' },
+    { id: 'spostaposto', c: 'posti', t: 'Spostare, scambiare o liberare un posto', k: 'spostare scambiare posto liberare togliere nota posto menu posto',
+      s: ['Clicca il posto occupato sulla piantina: si apre il menu del posto.', '«Sposta o scambia», poi clicca il posto di arrivo (se è occupato, i due si scambiano).', 'Nel menu puoi scrivere una nota sul posto (es. no lattosio) e premere «Salva».', '«Togli dal posto» lascia la persona sul bus senza posto; «Togli dal bus» la toglie da quel bus.'],
+      n: 'Puoi anche trascinare un posto su un altro.' },
+    { id: 'guida', c: 'posti', t: 'Riservare un posto per guida o 2° autista', k: 'guida secondo autista riservare posto accompagnatore',
+      s: ['Clicca un posto libero sulla piantina.', 'Clicca «Riserva per guida / 2° autista».', 'Per togliere la riserva clicca di nuovo il posto e «Togli la riserva».'] },
+    { id: 'piubus', c: 'posti', t: 'Più bus sullo stesso viaggio', k: 'secondo bus aggiungere bus piu bus lista per bus spostare bus cambiare piantina',
+      s: ['Nella scheda «Posti sul bus» clicca il «+» accanto alle linguette dei bus.', 'Scegli la piantina del pullman e clicca «Aggiungi bus».', 'Nella lista prenotazioni ogni bus ha la sua lista: per spostare persone selezionale e usa «Sposta in».', 'Per cambiare il modello di un bus usa «Cambia» sotto «Piantina» nel pannello del bus.'] },
+    // ---- stampe e messaggi ----
+    { id: 'stampe', c: 'stampe', t: 'Stampare piantina, cartelli, lista e rooming list', k: 'stampare stampa piantina cartelli lista rooming autista accompagnatore pdf',
+      s: ['Apri il viaggio.', 'Nella scheda «Posti sul bus» clicca «Stampa piantina» o «Stampa cartelli» (divisi per lato autista e lato hostess).', 'Nella «Lista prenotazioni» clicca «Stampa lista»; per i tour anche «Rooming list».', 'Nell\'anteprima clicca «Stampa» e scegli la stampante o «Salva come PDF».'] },
+    { id: 'programma', c: 'stampe', t: 'Allegare il programma del viaggio (PDF o foto)', k: 'programma pdf foto allegare trascinare locandina',
+      s: ['Apri il viaggio.', 'Trascina il PDF o la foto sul riquadro «Trascina qui il programma» in alto.', 'Per vederlo clicca il suo nome; per toglierlo usa la «x» accanto.'] },
+    { id: 'whatsapp', c: 'stampe', t: 'Mandare ai clienti posto e programma su WhatsApp', k: 'whatsapp messaggio clienti inviare posto programma invia a tutti',
+      s: ['Apri il viaggio, scheda «Posti sul bus».', 'Clicca «Messaggi WhatsApp ai clienti».', 'Controlla il messaggio e le persone pronte.', 'Clicca «Invia a tutti» oppure invia uno per uno.'],
+      n: 'Il testo del messaggio si cambia in Impostazioni › «WhatsApp ai clienti».' },
+    // ---- cassa ----
+    { id: 'incasso', c: 'cassa', t: 'Incassare una prenotazione', k: 'incassare pagamento pagare soldi euro incasso acconto saldo contanti pos bonifico',
+      s: ['Nella lista prenotazioni clicca il pulsante «€» della prenotazione (o dal menu della riga o del posto: «Incasso»).', 'Si apre la finestra al centro: in «Chi paga» scegli tutta la comitiva o una persona sola.', 'Scegli il documento (Scontrino, Caparra, Senza documento; per i tour Fattura).', 'In «Incassato adesso» controlla l\'importo e scegli come paga (Contanti, POS, Bonifico…).', 'Clicca il pulsante grande in basso (es. «Scontrino · 72,00 €»).', 'Per chiudere la finestra clicca la «x» in alto a destra (o Esc).'],
+      n: 'Per le gite lo scontrino si fa solo al saldo: con un acconto scegli «Senza documento».' },
+    { id: 'misto', c: 'cassa', t: 'Pagamento misto (es. contanti + POS)', k: 'misto contanti pos due metodi diviso parte',
+      s: ['Nell\'incasso scrivi l\'importo totale in «Incassato adesso».', 'Clicca «Misto».', 'Scrivi quanto paga in contanti: il POS si riempie da solo con il resto (o viceversa).', 'Per altri metodi apri «Altri metodi» e usa «resto».', 'Quando la somma torna (✓) clicca il pulsante per registrare.'] },
+    { id: 'righedoc', c: 'cassa', t: 'Righe del documento, fattura e dati della pratica', k: 'righe documento quantita prezzo supplemento fila descrizione fattura codice fiscale pratica canale pagante note',
+      s: ['Nella finestra dell\'incasso, a destra, clicca «Righe del documento» per vedere o cambiare quantità, prezzi, supplemento fila e descrizione.', 'Per la fattura (tour) compila i dati sotto «Dati per la fattura»: il codice fiscale si calcola da solo dai dati di nascita.', '«Altri dati» (sotto il pagamento) contiene pratica, canale, pagante, note e «Pagato prima, fuori dall\'app».'] },
+    { id: 'storno', c: 'cassa', t: 'Annullare un incasso sbagliato (storno)', k: 'storno annullare incasso sbagliato errore rimborso nota di credito',
+      s: ['Apri l\'incasso della prenotazione (pulsante «€»).', 'A destra, in «Incassi registrati», clicca «Storna» accanto all\'incasso sbagliato.', 'Conferma: nel resoconto resta un movimento uguale e contrario.'],
+      n: 'Un operatore può stornare solo i suoi incassi di oggi; chi gestisce tutte le casse (Master) anche gli altri.' },
+    { id: 'scontrino', c: 'cassa', t: 'Lo scontrino e il registratore telematico', k: 'scontrino registratore custom stampante fiscale da emettere reparti iva',
+      s: ['Nella finestra dell\'incasso vedi l\'anteprima dello scontrino come uscirà dal registratore.', 'Per ora l\'app non manda nulla al registratore: gli scontrini restano «da emettere» e si battono sul registratore come sempre.', 'Reparti, IVA e intestazione si impostano in Impostazioni › «Registratore telematico».'] },
+    { id: 'resoconto', c: 'cassa', t: 'Chiudere la cassa: resoconto e chiusura della giornata', k: 'resoconto cassa giornata chiusura chiudere cassa contanti fine giornata stampa',
+      s: ['In alto clicca «Cassa»: vedi i movimenti di oggi divisi per metodo.', 'Con «‹ Giorno prima» e «Giorno dopo ›» (o il calendario) cambi giorno.', 'A fine giornata clicca «Chiudi la cassa», conta i contanti e scrivili.', 'Controlla la differenza e clicca il pulsante per salvare; puoi anche stampare.'] },
+    { id: 'prelievo', c: 'cassa', t: 'Prelievi e apporti di contanti', k: 'prelievo apporto contanti versamento banca fondo cassa',
+      s: ['In «Cassa» clicca «Prelievo» (es. versamento in banca) o «Apporto» (es. fondo cassa).', 'Scrivi l\'importo e il motivo.', 'Clicca «Registra»: va nel resoconto e nel conto dei contanti.'] },
+    { id: 'contabilita', c: 'cassa', t: 'Contabilità, Excel e Danea', k: 'contabilita resoconto mensile excel scaricare danea fatture csv',
+      s: ['In alto clicca «Contabilità» (solo Master e contabilità).', '«Resoconto giornaliero»: come il foglio CASSA, con «Scarica per Excel».', '«Mese»: i totali del mese, le chiusure e i viaggi.', 'Per le fatture usa «Apri in Danea» nell\'incasso o «Fatture del giorno per Danea».'] },
+    // ---- biglietteria ----
+    { id: 'bgevento', c: 'bigl', t: 'Biglietteria: creare un evento con settori e prezzi', k: 'biglietteria evento concerto nuovo evento settori prezzi tariffe intero ridotto diritti circuito ticketone boxol vivaticket',
+      s: ['In alto clicca «Biglietteria», poi la scheda «Eventi».', 'Clicca «Nuovo evento».', 'Scrivi nome, luogo, data e scegli il circuito (i diritti di prevendita si propongono da soli: 2 € TicketOne, 3 € gli altri).', 'In «Settori e prezzi» scrivi ogni settore con il prezzo intero e, se c\'è, ridotto; «Aggiungi settore» per gli altri.', 'Se c\'è il bus, in «Viaggio con il bus» scegli il viaggio.', 'Clicca «Crea l\'evento».'] },
+    { id: 'bgvendita', c: 'bigl', t: 'Biglietteria: vendere biglietti', k: 'vendere biglietti vendita biglietto concerto cliente incassare emissione',
+      s: ['In «Biglietteria» resta sulla scheda «Vendita».', 'Scrivi le prime lettere dell\'evento e sceglilo.', 'Clicca il settore e scrivi quanti biglietti interi e ridotti.', 'Scrivi il nome del cliente e controlla «Emesso sul circuito il».', 'Clicca «Incassa» e completa l\'incasso; oppure «Emesso, non pagato (sospeso)» se pagherà dopo.'],
+      n: 'Nello scontrino vanno solo i diritti di prevendita (la parte dell\'agenzia).' },
+    { id: 'bgsospesi', c: 'bigl', t: 'Biglietteria: biglietti sospesi (emessi e non pagati)', k: 'sospesi biglietti non pagati da incassare emessi pagare dopo',
+      s: ['In «Biglietteria» clicca la scheda «Sospesi».', 'Vedi i biglietti per evento: data di emissione, acquirente, settore, prezzo, da incassare, agenzia.', 'Usa i pulsanti in alto per vedere un solo circuito.', 'Quando il cliente paga clicca «Incassa» sulla sua riga.'] },
+    { id: 'bgagenzia', c: 'bigl', t: 'Biglietteria: biglietti comprati dall\'agenzia (pacchetti bus + biglietto)', k: 'biglietti agenzia comprati pre acquistati preacquistati blocco stock pacchetto liberi',
+      s: ['In «Biglietteria» clicca la scheda «Biglietti dell\'agenzia».', 'Clicca «Biglietti comprati».', 'Scegli evento e settore, scrivi quanti biglietti, il prezzo e il giorno in cui li avete emessi; se servono per un viaggio con il bus, sceglilo.', 'Clicca «Aggiungi i biglietti».', 'Per darli ai clienti: in «Vendita» scegli «Biglietto dell\'agenzia», oppure nell\'incasso del viaggio collegato apri «Righe del documento» e scegli «Biglietti dell\'agenzia».'] },
+    { id: 'bgcontrollo', c: 'bigl', t: 'Biglietteria: controllo dei circuiti e portafoglio TicketOne', k: 'controllo circuiti emesso incassato sospesi portafoglio addebito ticketone b-fast settimana differenza',
+      s: ['In «Biglietteria» clicca la scheda «Controllo circuiti».', 'Scegli il circuito e la settimana con ‹ e ›.', 'Per ogni giorno vedi l\'emesso, l\'incassato a Ragusa, Modica e Marina e i sospesi.', 'Per TicketOne e B-Fast, sotto, scrivi l\'addebito della settimana quando arriva: l\'app lo confronta con le vostre emissioni e mostra la differenza.'],
+      n: 'Gli incassi contano nel giorno in cui il biglietto è stato emesso, in qualsiasi agenzia vengano fatti.' },
+    { id: 'bgrimborso', c: 'bigl', t: 'Biglietteria: rimborso, cambio nome, vendita sbagliata', k: 'rimborso biglietto cambio nome annullare vendita sbagliata restituire',
+      s: ['In «Vendita», nelle «Vendite di oggi», clicca i tre puntini «⋯» della vendita.', '«Cambio nome»: registra 5 € + 5 € di diritti e apre l\'incasso.', '«Rimborso»: scegli quanti biglietti e l\'importo da restituire (i diritti non si rimborsano).', '«Annulla la vendita»: solo per vendite registrate per sbaglio e senza incassi.'] },
+    // ---- buoni ----
+    { id: 'buononuovo', c: 'buoni', t: 'Creare un buono regalo', k: 'buono regalo nuovo creare regalare voucher pratica',
+      s: ['In alto clicca «Cassa», poi «Buoni regalo».', 'Clicca «Nuovo buono».', 'Scrivi chi riceve il buono, chi lo fa, l\'importo e scegli come paga.', 'Clicca «Crea il buono e incassa»: il numero di pratica si assegna da solo (es. RAG-26-001) e l\'importo va in cassa.'] },
+    { id: 'buonousa', c: 'buoni', t: 'Pagare con un buono regalo', k: 'pagare buono regalo usare scalare residuo',
+      s: ['Nell\'incasso della prenotazione (o della biglietteria) scegli «Buono regalo» come metodo (o dentro «Misto»).', 'Scrivi il numero o il nome e scegli il buono.', 'L\'importo si scala da solo; se il buono non basta, paga il resto con «Misto».', 'Registra l\'incasso: il buono si aggiorna da solo e, finito, passa nell\'«Archivio buoni».'] },
+    // ---- rete ----
+    { id: 'offline', c: 'rete', t: 'Lavorare senza internet', k: 'senza internet offline connessione linea caduta cade manca non funziona wifi rete fascia rossa telefonare',
+      s: ['Se cade la linea compare «Stai lavorando senza internet» con chi era collegato e il telefono: clicca «Ho capito».', 'Puoi continuare a lavorare: la fascia rossa in alto ricorda che le modifiche partiranno dopo.', 'Prima di vendere posti o incassare telefona a chi era collegato: l\'app ti chiede «hai sentito al telefono…?» la prima volta su ogni viaggio.', 'Quando torna la linea compare «Internet tornato» e poi «Tutto sincronizzato».'] },
+    { id: 'controllocasi', c: 'rete', t: '«Da controllare dopo il ritorno di internet»', k: 'controllare dopo ritorno internet posto doppio incassato due volte bus pieno risolto',
+      s: ['Se mentre eri senza linea un collega ha cambiato le stesse cose, compare la finestra «Da controllare…».', 'Per ogni caso clicca «Apri la piantina» o «Apri la prenotazione» e sistemalo.', 'Poi clicca «Risolto» nel riquadro rosso del viaggio (o in Contabilità).'],
+      n: 'L\'app non cambia nulla da sola: decidi tu.' },
+    { id: 'sync', c: 'rete', t: 'I dati non si aggiornano tra i computer', k: 'sincronizzazione dropbox non aggiorna altri computer dati vecchi pallino rosso errore',
+      s: ['Guarda il pallino in alto accanto all\'agenzia: verde = allineato, giallo = sto inviando, rosso = senza internet o errore.', 'Controlla che il computer sia collegato a internet.', 'In Impostazioni › «Sincronizzazione» clicca «Sincronizza».', 'Ricarica la pagina (F5, o ⌘+R sul Mac).', 'L\'app deve essere aperta in una sola finestra per computer.'] },
+    { id: 'aggiornare', c: 'rete', t: 'Aggiornare l\'app a una nuova versione', k: 'aggiornare versione nuova github zip caricare novita',
+      s: ['Scarica lo zip della nuova versione ed estrailo.', 'Su GitHub, nel repository dell\'app, clicca «Add file», poi «Upload files».', 'Trascina tutto il contenuto della cartella «viaggi-in-pullman» e clicca «Commit changes».', 'Dopo 2–3 minuti apri l\'app e ricaricala due volte.', 'In Impostazioni controlla il numero di versione in basso a sinistra.'] },
+    // ---- impostazioni ----
+    { id: 'operatori', c: 'imp', t: 'Creare un account per un operatore', k: 'nuovo account operatore utente creare permessi ruolo master agenzie cellulare sigla',
+      s: ['Solo il Master: Impostazioni › «Operatori e permessi».', 'Clicca «Nuovo account».', 'Scrivi il nome, scegli il ruolo (Operatore, Master, Contabilità) e le agenzie in cui può entrare.', 'Facoltativo: cellulare (si mostra ai colleghi quando manca internet).', 'Dì alla persona la password provvisoria: al primo accesso ne sceglie una sua.'] },
+    { id: 'agenzie', c: 'imp', t: 'Agenzie, casse e telefoni', k: 'agenzia cassa telefono indirizzo fondo cassa registratore impostazioni',
+      s: ['Solo il Master: Impostazioni › «Agenzie e casse».', 'Per ogni agenzia: nome, nome della cassa, indirizzo, contanti iniziali, telefono dell\'agenzia.', 'Le modifiche si salvano da sole.'] },
+    { id: 'luoghi', c: 'imp', t: 'Luoghi di partenza e mappe', k: 'luoghi partenza fermata google maps link punto salita',
+      s: ['Impostazioni › «Luoghi di partenza e mappe».', 'Clicca «Aggiungi luogo» e scrivi codice (es. RG), città e punto di salita.', 'Clicca «Cerca su Maps», poi su Google Maps «Condividi» › «Copia link» e incolla il link nella colonna.'] },
+    { id: 'backup', c: 'imp', t: 'Copia di sicurezza dei dati', k: 'copia sicurezza backup scaricare salvare dati',
+      s: ['Solo il Master: Impostazioni › «Copia di sicurezza».', 'Clicca il pulsante per scaricare la copia: è un file con tutti i viaggi, i clienti e gli incassi.', 'Conservala in un posto sicuro (es. una cartella di Dropbox).'] }
+  ];
+  // ---- ricerca: parole senza accenti, sinonimi, radici delle parole ----
+  const HSTOP = new Set('il lo la i gli le un uno una di a da in con su per tra fra e o ma se che chi cosa come dove quando non mi ti si ci vi ne del della dei degli delle al allo alla ai agli alle dal dalla dai nel nella nei nelle sul sulla sui è e ho ha hanno fare faccio posso devo voglio vorrei serve servono mio mia miei mie questo questa quello quella app'.split(' '));
+  const HSYN = [['incasso incassare pagare pagamento pagato soldi euro'], ['scontrino ricevuta documento'], ['biglietto biglietti ticket tkt'], ['posto posti piantina sedile sedili'], ['prenotazione prenotazioni lista elenco cliente clienti persona persone'], ['internet offline linea connessione rete'], ['buono buoni regalo voucher'], ['cancellare eliminare togliere rimuovere'], ['annullare indietro errore sbagliato undo'], ['stampare stampa pdf'], ['sospeso sospesi'], ['viaggio viaggi gita gite tour evento'], ['password accesso login entrare'], ['whatsapp messaggio messaggi']].map(x => x[0].split(' '));
+  const hnorm = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+  const hstem = w => (w.length > 5 ? w.replace(/(azione|azioni|amento|amenti|mente|zione|zioni|are|ere|ire|ato|ata|ati|ate|ito|ita|iti|ite|i|e|a|o)$/, '') : w.length > 3 ? w.replace(/[aeio]$/, '') : w);
+  const hwords = s => hnorm(s).split(' ').filter(w => w && !HSTOP.has(w));
+  function hexpand(w) { const st = hstem(w); const out = new Set([st]); HSYN.forEach(g => { if (g.some(x => hstem(x) === st)) g.forEach(x => out.add(hstem(x))); }); return [...out]; }
+  const HIDX = HELP.map(a => ({ a, t: new Set(hwords(a.t).map(hstem)), k: new Set(hwords(a.k).map(hstem)), b: new Set(hwords((a.s || []).join(' ') + ' ' + (a.n || '')).map(hstem)) }));
+  function helpSearch(q) {
+    const ws = [...new Set(hwords(q))]; if (!ws.length) return [];
+    const has = (s, e) => [...s].some(v => v === e || (e.length >= 4 && v.startsWith(e)) || (v.length >= 5 && e.startsWith(v)));
+    const lev = (x, w) => { let best = 0; hexpand(w).forEach(e => { if (has(x.t, e)) best = Math.max(best, 3); else if (has(x.k, e)) best = Math.max(best, 2); else if (has(x.b, e)) best = Math.max(best, 1); }); return best; };
+    const M = HIDX.map(x => ws.map(w => lev(x, w)));
+    // le parole rare (es. «guida», «rooming») pesano più di quelle che compaiono dappertutto (es. «lista», «bus»)
+    const idf = ws.map((w, j) => { const df = M.filter(r => r[j]).length; return df ? 1 + Math.log(HIDX.length / df) : 0; });
+    const R = HIDX.map((x, i) => { const r = M[i]; const hit = r.filter(Boolean).length; return { a: x.a, hit, sc: r.reduce((s, v, j) => s + v * idf[j], 0) * (hit === ws.length ? 1.3 : 1) }; })
+      .filter(r => r.hit && r.sc >= 2).sort((a, b) => b.sc - a.sc);
+    return R.length ? R.filter(r => r.sc >= R[0].sc * 0.4).slice(0, 8) : [];
+  }
+  const HELP_NEWS = "VERSIONE 2.1.7 · 04/11/2026\nAIUTO: IL MANUALE D'ISTRUZIONI DENTRO L'APP\n\n1. Nuovo pulsante «Aiuto» (la lente) nel menu in alto, accanto a Impostazioni; si apre anche con\n   il tasto F1. Scrivi la domanda con parole tue (es. «come incasso un biglietto sospeso?»,\n   «ho sbagliato, come torno indietro?»): l'app trova le istruzioni giuste, passo passo.\n   Senza scrivere nulla si vede l'indice per argomento: primi passi, viaggi e liste, posti sul bus,\n   stampe e messaggi, incassi e cassa, biglietteria, buoni regalo, internet, impostazioni.\n2. Se la ricerca non trova niente, o premi «Non trovo la soluzione» / «Non ho risolto», compare\n   il messaggio: «SE PROPRIO NON STAI TROVANDO SOLUZIONE AL PROBLEMA ALLORA È GIUNTA L'ORA DI\n   CHIAMARE GIOVANNI».\n3. Il manuale segue l'app: in cima c'è «Novità delle ultime versioni», presa da sola da queste\n   note, e ogni nuova versione dell'app si crea solo dopo aver aggiornato anche il manuale.\n4. Contiene anche tutte le novità della 2.1.6 (Biglietteria), se non l'avevi ancora caricata.\n\n\nVERSIONE 2.1.6 · 04/11/2026\nBIGLIETTERIA IN UNA SEZIONE A PARTE\n\nNuova voce «Biglietteria» nel menu in alto (per chi può usare la cassa). Funziona come il foglio\nCASSA e i fogli SOSPESI: ogni biglietto ricorda il giorno in cui è stato emesso sul circuito e ogni\nincasso conta per quel giorno, in qualsiasi agenzia venga fatto.\n1. Vendita: scegli l'evento, il settore, quanti biglietti interi e ridotti, il cliente e il giorno\n   dell'emissione. Il totale separa biglietti e diritti di prevendita (nello scontrino vanno solo i\n   diritti, la parte dell'agenzia). «Incassa» apre l'incasso (contanti, POS, misto, buono regalo…);\n   «Emesso, non pagato» la mette tra i sospesi. Se ci sono biglietti dell'agenzia liberi per quel\n   settore, si può scegliere «Biglietto dell'agenzia». Accanto: le vendite di oggi; dal menu «⋯» di\n   ogni vendita: incassa, cambio nome (5 € + 5 € di diritti), rimborso, annulla (solo senza incassi).\n2. Sospesi: i biglietti emessi e non ancora pagati, divisi per evento, con data di emissione,\n   acquirente, settore e tariffa, prezzo, da incassare e agenzia; filtro per circuito; «Incassa».\n   In fondo i biglietti dell'agenzia ancora liberi.\n3. Eventi: data, luogo, circuito, settori con prezzo intero e ridotto, diritti, venduti e sospesi.\n   Si può collegare il viaggio con il bus (che resta in «Viaggi» con lista, piantina e cartelli).\n4. Biglietti dell'agenzia: i biglietti comprati per i pacchetti bus + biglietto. Entrano tra le\n   emissioni del circuito nel giorno in cui li avete emessi e restano sospesi finché non li date ai\n   clienti (in Vendita, oppure nell'incasso del viaggio collegato: «Biglietti dell'agenzia» nelle\n   righe del documento).\n5. Controllo circuiti: per ogni circuito e settimana, giorno per giorno, emesso, incassato a Ragusa,\n   Modica e Marina, sospesi. Per TicketOne e B-Fast anche le settimane contabili del portafoglio:\n   si scrive l'addebito quando arriva e l'app lo confronta con le emissioni (differenza).\nGli incassi della biglietteria vanno nel resoconto di cassa come sempre (TicketEdiritti o SoloTicket,\ncon circuito, emissione, biglietti e diritti). I vecchi viaggi di tipo «Biglietteria» restano dove sono.\n6. Correzioni grafiche: la barra in alto con la voce nuova resta su una riga anche sugli schermi\n   medi (tra 1100 e 1330 pixel solo le icone); sul telefono l'elenco dei viaggi non fa più scorrere\n   la pagina di lato.\n\n\nVERSIONE 2.1.5 · 04/11/2026\nINCASSO AL CENTRO, INDIETRO E CRONOLOGIA, LISTA CHIUSA, BUONI REGALO\n\n1. Incasso in una finestra al centro dello schermo, con la «x» in alto a destra per chiuderla\n   (anche il tasto Esc). Si apre sia dalla lista sia dal menu di un posto della piantina.\n   Più ordinata: a sinistra chi paga, quanto resta, il documento, quanto e come paga, il pulsante;\n   a destra il dettaglio del documento (righe, totale, anteprima dello scontrino) e gli incassi\n   già registrati. Le righe del documento e gli «Altri dati» (pratica, canale, pagante, note,\n   pagato prima) sono chiusi in una riga con il riassunto: si aprono con un clic.\n   Sul telefono la finestra occupa tutto lo schermo.\n2. Tasto «Indietro» e «Cronologia», sia nella lista sia nella piantina (in alto, accanto alle schede):\n   · Indietro annulla l'ultima modifica fatta da questo computer, toccando solo le righe o i posti\n     di quella modifica (non cancella quello che hanno fatto gli altri). Anche Ctrl+Z / ⌘+Z.\n   · Cronologia: tutte le versioni salvate dai computer, divise per giorno, con ora, chi le ha\n     fatte, da quale agenzia e cosa è cambiato. «Ripristina» riporta tutta la lista (o la piantina)\n     a quella versione, dopo aver mostrato cosa cambia; anche il ripristino si annulla con Indietro.\n   · Lucchetto accanto a Cronologia (solo il Master): chiuso, Indietro e Ripristina li usa solo il Master.\n   · Ogni computer tiene le ultime 150 versioni di ogni viaggio. Il contenuto delle versioni si\n     scarica solo quando si ripristina.\n3. Lucchetto «Chiudi la lista» in testa al viaggio (solo il Master): con la lista chiusa non si\n   prendono nuove prenotazioni (niente righe nuove, niente «x N» che cresce, niente conferme dalla\n   lista d'attesa, niente import da Word). Si possono ancora correggere i dati, completare i nomi\n   delle comitive, sistemare i posti, incassare e scrivere nella lista d'attesa. Gli operatori\n   vedono «Lista chiusa»; tutto va nel registro.\n4. Piantina › Lista della gita più ordinata: nome, partenze e posti sulla stessa riga, richieste\n   in un riquadro sotto, persone in etichette brevi (Cognome N. e numero del posto). Niente esce\n   più dai bordi.\n5. Menu del posto nella piantina con lo stesso stile del menu della riga: sezioni Posto\n   (sposta o scambia, nota sul posto), Prenotazione (seleziona tutta, incasso) e Togli.\n6. Buoni regalo: Cassa › «Buoni regalo».\n   · Tabella con N° pratica (si assegna da solo, es. RAG-26-001), data, chi riceve il buono,\n     importo ancora da spendere, chi fa il buono. Ricerca per numero o nome.\n   · «Nuovo buono»: chi riceve, chi fa il buono, importo, come paga. L'importo si incassa nella\n     cassa dell'agenzia (categoria BuonoRegalo del resoconto).\n   · Nell'incasso di un viaggio: metodo «Buono regalo» (anche dentro «Misto»), si sceglie il buono\n     e l'importo si scala da solo. Si può usare in più volte finché arriva a zero; se non basta,\n     l'app lo dice. Uno storno restituisce l'importo al buono.\n   · «Archivio buoni»: i buoni spesi o annullati, con dove sono stati usati («Dettagli»).\n7. Correzioni grafiche trovate durante le prove: nel tema scuro il pulsante scelto in «Chi paga»\n   aveva il testo bianco su bianco; i pulsanti del documento non si tagliano più sul telefono.\n";
+  const GIOVANNI = 'SE PROPRIO NON STAI TROVANDO SOLUZIONE AL PROBLEMA ALLORA È GIUNTA L\'ORA DI CHIAMARE GIOVANNI';
+  const HUI = { q: '', open: '', giov: false };
+  function helpArt(a) {
+    return `<article class="hl-a"><div class="hl-ac">${esc((HELP_CAT.find(c => c[0] === a.c) || [, ''])[1])}</div><h3>${esc(a.t)}</h3><ol>${(a.s || []).map(s => `<li>${esc(s)}</li>`).join('')}</ol>${a.n ? `<div class="hl-n">${ICON.alert}<span>${esc(a.n)}</span></div>` : ''}
+      <div class="hl-back"><button class="btn sm ghost" data-act="hlback">‹ Torna alla ricerca</button><button class="btn sm" data-act="hlgiov">Non ho risolto</button></div></article>`;
+  }
+  const giovHTML = () => `<div class="hl-giov" role="alert"><div class="hl-gi">☎</div><b>${esc(GIOVANNI)}</b></div>`;
+  function helpBody() {
+    if (HUI.open === '__news') return `<article class="hl-a"><div class="hl-ac">Novità</div><h3>Novità delle ultime versioni</h3><pre class="hl-news">${esc(HELP_NEWS || 'Le novità sono nel file README dello zip.')}</pre><div class="hl-back"><button class="btn sm ghost" data-act="hlback">‹ Torna alla ricerca</button></div></article>`;
+    const a = HUI.open && HELP.find(x => x.id === HUI.open); if (a) return helpArt(a) + (HUI.giov ? giovHTML() : '');
+    const q = HUI.q.trim(); const R = q ? helpSearch(q) : [];
+    if (q && !R.length) return `<div class="hl-none">Nel manuale non ho trovato niente per «${esc(q)}». Prova con altre parole (es. «incassare», «spostare posto», «biglietto sospeso»).</div>${giovHTML()}`;
+    if (q) return `<div class="hl-res">${R.map(r => `<button class="hl-r" data-act="hlopen" data-id="${esc(r.a.id)}"><b>${esc(r.a.t)}</b><span>${esc((r.a.s || [])[0] || '')}</span></button>`).join('')}</div><div class="hl-more"><button class="btn sm" data-act="hlgiov">Non trovo la soluzione</button></div>${HUI.giov ? giovHTML() : ''}`;
+    return `<button class="hl-r hl-newsb" data-act="hlopen" data-id="__news"><b>Novità delle ultime versioni</b><span>Cosa è cambiato con gli ultimi aggiornamenti (questa è la ${esc(VERSION)})</span></button>
+      ${HELP_CAT.map(([k, l]) => { const L = HELP.filter(x => x.c === k); return L.length ? `<div class="hl-cat"><h4>${esc(l)}</h4>${L.map(x => `<button class="hl-l" data-act="hlopen" data-id="${esc(x.id)}">${esc(x.t)}</button>`).join('')}</div>` : ''; }).join('')}
+      <div class="hl-more"><button class="btn sm" data-act="hlgiov">Non trovo la soluzione</button></div>${HUI.giov ? giovHTML() : ''}`;
+  }
+  function helpOpen() {
+    HUI.open = ''; HUI.giov = false;
+    openModal(`${ICON.search} Aiuto`, `<div class="hl"><input class="hl-q" id="hl-q" data-hlq="1" value="${esc(HUI.q)}" placeholder="Scrivi la tua domanda, es. «come incasso un biglietto sospeso?»" autocomplete="off" aria-label="Cerca nel manuale"><div class="hl-v">Manuale d'istruzioni dell'app · aggiornato alla versione ${esc(HELP_VER)}</div><div id="hl-b">${helpBody()}</div></div>`, `<button class="btn" data-act="close">Chiudi</button>`, true);
+    UI.modal = { kind: 'help' }; setTimeout(() => { const i = $('#hl-q'); if (i) { i.focus(); i.select(); } }, 40);
+    DIAG.ev('aiuto', 'Aperto il manuale');
+  }
+  const helpRefresh = () => { const b = $('#hl-b'); if (b) b.innerHTML = helpBody(); const m = $('#modal-root .modal-b'); if (m) m.scrollTop = 0; };
+  document.addEventListener('click', e => {
+    const el = e.target.closest && e.target.closest('[data-act="help"],[data-act="hlopen"],[data-act="hlback"],[data-act="hlgiov"]'); if (!el) return; const a = el.dataset.act;
+    if (a === 'help') { closePop(); helpOpen(); return; }
+    if (a === 'hlopen') { HUI.open = el.dataset.id; HUI.giov = false; DIAG.ev('aiuto', 'Letto: ' + el.dataset.id, { cerca: HUI.q.slice(0, 80) }); }
+    else if (a === 'hlback') { HUI.open = ''; HUI.giov = false; }
+    else if (a === 'hlgiov') { HUI.giov = true; DIAG.ev('aiuto', 'Nessuna soluzione trovata', { cerca: HUI.q.slice(0, 80), articolo: HUI.open }); }
+    helpRefresh(); if (a === 'hlgiov') setTimeout(() => { const g = $('.hl-giov'); if (g) g.scrollIntoView({ block: 'nearest' }); }, 20);
+  });
+  document.addEventListener('input', e => { if (e.target.dataset && e.target.dataset.hlq) { HUI.q = e.target.value; HUI.open = ''; HUI.giov = false; clearTimeout(helpRefresh.t); helpRefresh.t = setTimeout(helpRefresh, 120); } });
+  document.addEventListener('keydown', e => { if (e.key === 'F1' && ACC.me()) { e.preventDefault(); closePop(); helpOpen(); } });
+
   // ---------- render ----------
   const FOCUS_KEYS = ['note', 'st', 'depsel', 'hq', 'aq', 'r', 'ar', 'nr', 'f', 'q', 'qs', 'qt', 'tf', 'dep2', 'dep', 'k', 'bind', 'cl', 'cfgag', 'cfgl', 'pf', 'pl', 'pff', 'pfm', 'usig'];
   const ACT_PERM = { unew: 'users', unewm: 'tech', ureset: 'users', usave: 'users', resetall: 'tech', doresetall: 'tech', savekeys: 'tech', wipelocal: 'tech', lgf: 'tech', lexport: 'tech', diagexport: 'tech', lnew: 'settings', ldel: 'settings', savewa: 'settings', savetel: 'settings', savedanea: 'settings', savert: 'settings', savesuppl: 'settings', filaset: 'viaggi', export: 'settings', pay: 'cassa', paypanel: 'viaggi', paywho: 'viaggi', lmove: 'viaggi', lmove1: 'viaggi', detach: 'viaggi', reattach: 'viaggi', noteadd: 'viaggi', notedel: 'viaggi', suppadd: 'viaggi', suppdel: 'viaggi', pfsave: 'cassa', cashmov: 'cassa', cashsave: 'cassa', storno: 'cassa', cclose: 'cassa', ccsave: 'cassa', clnew: 'anag', cldel: 'anag', impgo: 'anag', newtrip: 'viaggi', deltrip: 'viaggi' };
@@ -4930,7 +5497,7 @@
   let lastNav = '', lastSess = '', lastGateHTML = '';
   function render() {
     const t0 = performance.now();
-    try { renderIn(); document.body.classList.toggle('pm-open', !!$('.paymodal')); if (UI.view === 'home') alignBlocks(); if (UI.pay) setTimeout(cfRecalc, 0); presenceBeat(false); presenceCheck(); offAfterRender(); } catch (e) { DIAG.ev('errore', 'Errore nel disegnare la pagina: ' + e.message, { stack: e.stack, vista: UI.view, sezione: UI.sec }); throw e; }
+    try { renderIn(); topFit(); document.body.classList.toggle('pm-open', !!$('.paymodal')); if (UI.view === 'home') alignBlocks(); if (UI.pay) setTimeout(cfRecalc, 0); presenceBeat(false); presenceCheck(); offAfterRender(); } catch (e) { DIAG.ev('errore', 'Errore nel disegnare la pagina: ' + e.message, { stack: e.stack, vista: UI.view, sezione: UI.sec }); throw e; }
     const ms = performance.now() - t0;
     const sk = ACC.sess ? `${ACC.sess.uid}|${ACC.sess.ag || ''}` : '';
     if (sk !== lastSess) { const me = ACC.me(); DIAG.ev('accesso', sk ? `Dentro come ${me ? me.name + ' (' + ROLE_L[me.role] + ')' : '?'}${ACC.sess.ag ? ' · ' + agName(ACC.sess.ag) : ''}` : 'Nessuno collegato (schermata di accesso)'); lastSess = sk; }
@@ -4961,7 +5528,7 @@
     }
     const keep = ['#bklist', '.mapwrap', '.wtw', '.ldock .mapwrap', '.pp-b'].map(s => { const el = $(s); return el ? [s, el.scrollTop, el.scrollLeft] : null; }).filter(Boolean);
     const y = window.scrollY;
-    const V = { home: homeView, models: modelsView, trip: tripView, anag: anagView, cassa: cassaView, conta: () => casiBoxHTML(null) + contaView(), settings: settingsView, super: superView };
+    const V = { home: homeView, models: modelsView, trip: tripView, anag: anagView, cassa: cassaView, bigl: bglView, conta: () => casiBoxHTML(null) + contaView(), settings: settingsView, super: superView };
     const view = (V[UI.view] || homeView)();
     $('#app').innerHTML = topbar() + `<main class="wrap v-${esc(UI.view)}${UI.view === 'trip' && UI.sec !== 'posti' ? ' wide' : ''}">${view}</main>`;
     keep.forEach(([s, top, left]) => { const el = $(s); if (el) { el.scrollTop = top; el.scrollLeft = left; } });

@@ -222,6 +222,10 @@
       if (path.startsWith('/anagrafica/')) return mergeMap('clienti');
       if (path.startsWith('/controlli/')) return mergeMap('casi');
       if (path.startsWith('/buoni/')) return mergeMap('buoni');
+      if (path.startsWith('/biglietteria/vendite/')) return mergeUnion('ven');
+      if (path === '/biglietteria/eventi.json') return mergeMap('eventi');
+      if (path === '/biglietteria/stock.json') return mergeMap('stock');
+      if (path === '/biglietteria/addebiti.json') return mergeMap('add');
       if (path.startsWith('/cassa/movimenti/')) return mergeUnion('movs');
       if (path.startsWith('/registro/') && !path.startsWith('/registro/dispositivi/')) return mergeUnion('ev');
       return lww;
