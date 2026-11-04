@@ -1,6 +1,6 @@
 (function () {
   'use strict';
-  const VERSION = '2.1.4';
+  const VERSION = '2.1.5';
   const LOGO = './logo.jpg';
   const KEY = 'laterra.prenotazioniPosti.v1';
   const $ = (s, r = document) => r.querySelector(s);
@@ -503,7 +503,8 @@
   function save() { clearTimeout(saveT); saveT = setTimeout(flush, 250); }
   function flush() {
     clearTimeout(saveT); if (!S) return;
-    S.trips.forEach(t => { if (stamp(t)) STORE.put(P.trip(t.id), persistForm(t)); });
+    // ogni viaggio cambiato: si salva e si annota nella cronologia (lista e piantina)
+    S.trips.forEach(t => { if (stamp(t)) { const p = P.trip(t.id); const prev = STORE.get(p); const cur = persistForm(t); STORE.put(p, cur); if (typeof histNote === 'function') try { histNote(t, prev, cur); } catch (e) { DIAG.ev('errore', 'Cronologia: ' + e.message); } } });
     if (stampMap(S.users, 'users', 'users')) STORE.put(P.users, S.users);
     flushClients(false);
     const cj = itemJSON(S.cfg); if (cj !== MSNAP.cfg) { S.cfg.u = tick(); MSNAP.cfg = itemJSON(S.cfg); STORE.put(P.cfg, S.cfg); }
@@ -1823,11 +1824,15 @@
     if (!bus() && t.buses.length) UI.busId = t.buses[0].id;
     const D = syncAll(t); const SI = seatIndex(t); const T = summaryOf(t, D, SI);
     const head = `<div class="crumbs"><a data-act="nav" data-v="home">Viaggi</a><span>›</span><span>${esc(t.nome)}</span></div>
-      <div class="tripbar" data-droptrip="${t.id}"><h1>${esc(t.nome)}</h1><span class="tcat c-${tripCat(t)}">${CAT_L[tripCat(t)]}</span><span class="pill neutral">${esc(fmtTripDate(t, true))}</span>${progBox(t)}<button class="btn sm ghost" data-act="edittrip">${ICON.edit} Modifica gita</button></div>
+      <div class="tripbar" data-droptrip="${t.id}"><h1>${esc(t.nome)}</h1><span class="tcat c-${tripCat(t)}">${CAT_L[tripCat(t)]}</span><span class="pill neutral">${esc(fmtTripDate(t, true))}</span>${progBox(t)}<button class="btn sm ghost" data-act="edittrip">${ICON.edit} Modifica gita</button>${lockBtnHTML(t)}</div>
+      ${closedBannerHTML(t)}
       <div id="presence">${presenceHTML(t)}</div>
       ${casiBoxHTML(t.id)}
-      <div class="ptabs" role="tablist"><button role="tab" data-act="sec" data-v="lista" aria-selected="${UI.sec !== 'posti'}">${ICON.list} ${bigl ? 'Biglietti venduti' : 'Lista prenotazioni'} <span>${T.pers} persone${T.att ? ` · ${T.att} in attesa` : ''}</span></button>${bigl ? '' : `<button role="tab" data-act="sec" data-v="posti" aria-selected="${UI.sec === 'posti'}">${ICON.bus} Posti sul bus <span>${T.seated}/${T.pers} con il posto</span></button>`}</div>`;
-    return head + (UI.sec === 'posti' ? postiView(t, D, SI, T) : listaView(t, D, SI, T));
+      <div class="ptabs-row"><div class="ptabs" role="tablist"><button role="tab" data-act="sec" data-v="lista" aria-selected="${UI.sec !== 'posti'}">${ICON.list} ${bigl ? 'Biglietti venduti' : 'Lista prenotazioni'} <span>${T.pers} persone${T.att ? ` · ${T.att} in attesa` : ''}</span></button>${bigl ? '' : `<button role="tab" data-act="sec" data-v="posti" aria-selected="${UI.sec === 'posti'}">${ICON.bus} Posti sul bus <span>${T.seated}/${T.pers} con il posto</span></button>`}</div>${histBarHTML(t)}</div>`;
+    const body = UI.sec === 'posti' ? postiView(t, D, SI, T) : listaView(t, D, SI, T);
+    // l'incasso si apre in una finestra al centro, sia dalla lista sia dalla piantina
+    const pp = UI.pay && UI.pay.tripId === t.id ? payPanelHTML(t) : ''; if (UI.pay && !pp) UI.pay = null;
+    return head + body + pp;
   }
 
   // ----- sezione 1: la lista prenotazioni, come il file Word -----
@@ -1937,7 +1942,7 @@
     const show = view === 'all' ? Ls : Ls.filter(L => L.id === view);
     const nob = view !== 'all' && Ls.find(L => !L.id);
     return tabs + show.map(L => `<section class="lsec" data-list="${esc(L.id)}">${head(L)}<div class="wtw" data-droplist="${multi ? 'L:' + esc(L.id) : '1'}"><table class="wl">${thead}
-        <tbody>${L.rows.map((r, i) => wRow(t, r, i, cols, ctx, bigl)).join('')}</tbody></table></div></section>`).join('')
+        <tbody>${rowsShown(t, L.rows).map((r, i) => wRow(t, r, i, cols, ctx, bigl)).join('')}</tbody></table></div></section>`).join('')
       + (nob ? `<div class="lnobus small">${ICON.alert} ${nob.full.length} ${nob.full.length === 1 ? 'persona non è' : 'persone non sono'} su nessun bus: le vedi in «Tutti i bus».</div>` : '');
   }
   // lista compatta per la vista «Affiancate»: numero, nome, posto
@@ -1963,7 +1968,6 @@
   }
   function listaView(t, D, SI, T) {
     const bigl = tripCat(t) === 'biglietteria'; const tour = !bigl && isTourT(t); const cols = listCols(tour, bigl);
-    const pp = UI.pay && UI.pay.tripId === t.id ? payPanelHTML(t) : ''; if (UI.pay && !pp) UI.pay = null;
     const byRow = {}; D.forEach((bk, gi) => bk.persone.forEach((p, k) => { byRow[p.id] = { bk, gi, k }; }));
     const ctx = { byRow, SI, parts: partOpts(t), FI: supplPrices(t) ? filaInfo(t, D) : null };
     const Q = t.quota;
@@ -1981,7 +1985,7 @@
         <button class="btn sm" data-act="timport">${ICON.upload} Importa da Word</button>
         <button class="btn sm" data-act="printlist">${ICON.print} Stampa lista</button>
         ${tour ? `<button class="btn sm" data-act="rooming">${ICON.print} Rooming list</button>` : ''}
-        ${bigl ? '' : `<button class="btn sm${UI.dock && !pp ? ' dark' : ' primary'}" data-act="dock" aria-pressed="${!!UI.dock && !pp}">${ICON.dock} ${UI.dock && !pp ? 'Nascondi piantina' : 'Piantina accanto'}</button>`}
+        ${bigl ? '' : `<button class="btn sm${UI.dock ? ' dark' : ' primary'}" data-act="dock" aria-pressed="${!!UI.dock}">${ICON.dock} ${UI.dock ? 'Nascondi piantina' : 'Piantina accanto'}</button>`}
       </div>
       ${listTables(t, cols, ctx, bigl, SI)}
       <div class="whelp small">${bigl ? 'Una riga per cliente: «Rossi x 2» e i nomi sotto. Con il pulsante «€» si registra l\'incasso e si prepara lo scontrino.' : `Si scrive come in Word`}${bigl ? '' : `: «Rossi x 3» sulla prima riga e le altre persone sotto. Invio = riga sotto. Il numero a sinistra apre il menu della riga (anche con il tasto destro). ${gestHint()} Cognome <span class="pos">verde</span> = saldato. Per mettere i posti trascina ${ICON.grip} sulla piantina: dalla prima riga si sposta tutta la prenotazione, dalle altre la singola persona${multiBus(t) ? '; trascinando nell\'altra lista si cambia bus' : ''}. Il pulsante «€» della prima riga apre l'incasso di tutta la comitiva, quello delle altre righe l'incasso della singola persona.`}</div>
@@ -1994,8 +1998,8 @@
       </tbody></table></div>
       ${tour ? staffBox(t) : ''}
       ${bigl ? annTable('vende', 'Vuole vendere il biglietto', 'data richiesta') : annTable('da', 'Non partono più – da rimborsare') + annTable('fatto', 'Non partono più – già rimborsati') + annTable('no', 'Non partono più – hanno rinunciato senza avere rimborso')}`;
-    const side = pp || (UI.dock && !bigl ? mapPanel(t, 'dock') : '');
-    return `<div class="lwrap${side ? ' dock' : ''}${pp ? ' paying' : ''}"><div class="lmain">${main}</div>${side ? `<aside class="ldock">${side}</aside>` : ''}</div>`;
+    const side = UI.dock && !bigl ? mapPanel(t, 'dock') : '';
+    return `<div class="lwrap${side ? ' dock' : ''}"><div class="lmain">${main}</div>${side ? `<aside class="ldock">${side}</aside>` : ''}</div>`;
   }
 
   // ----- sezione 2: posti sul bus (lista + piantina insieme) -----
@@ -2021,11 +2025,16 @@
         const onBus = bk.persone.map(p => SI[p.id] && SI[p.id].b).find(Boolean);
         const ps = onBus ? prefStatus(onBus, bkById(onBus, bk.id) || bk) : null;
         const parts = [...new Set(bk.persone.map(p => p.part).filter(Boolean))];
-        return `<div class="lb${UI.sel === bk.id ? ' sel' : ''}${st.none ? ' todo' : ''}" data-act="selbk" data-id="${bk.id}" draggable="true" data-dragbk="${bk.id}">
-          <div class="lb-h"><span class="ln">${bk.ord}</span><span class="dot" style="background:${bk.head.c != null ? COLORS[bk.head.c % COLORS.length] : 'transparent'}"></span><b>${esc(bkName(bk))}</b> <small>x ${bk.persone.length}${bk.mancano ? ` (mancano ${bk.mancano})` : ''}</small> ${parts.map(p => `<span class="code">${esc(p)}</span>`).join(' ')}
-            <span class="lb-s">${st.txt ? `<span class="pill ${st.none ? 'tbd' : 'ok'}">${esc(st.txt)}${st.none ? ` · ${st.none} senza` : ''}</span>` : '<span class="pill neutral">senza posto</span>'}</span></div>
-          ${rs.text ? `<div class="req ${ps || 'pending'}"><span class="rq-l">${esc(rs.text)}${rs.paid ? ' · pagato' : ''}</span><span class="rq-s">${ps === 'ok' ? '✓ rispettato' : ps === 'ko' ? '✗ non rispettato' : ps === 'pref' ? '≈ preferenza non possibile' : 'da sistemare'}</span></div>` : ''}
-          <div class="chips">${bk.persone.map(p => `<span class="pchip${SI[p.id] ? ' on' : ''}${UI.selP === p.id ? ' sel' : ''}" draggable="true" data-dragp="${p.id}" data-act="selp" data-id="${p.id}" title="Trascina solo questa persona">${esc(p.cognome)} ${esc(p.nome)}${SI[p.id] ? ` <i>${SI[p.id].s}</i>` : ''}</span>`).join('')}</div>
+        const stTxt = st.txt ? `${esc(st.txt)}${st.none ? ` · ${st.none} senza` : ''}` : 'senza posto';
+        const rqS = ps === 'ok' ? '✓ rispettata' : ps === 'ko' ? '✗ non rispettata' : ps === 'pref' ? '≈ non possibile' : 'da sistemare';
+        const short = p => `${esc(p.cognome)} ${esc(String(p.nome || '').trim().slice(0, 1))}${p.nome ? '.' : ''}`;
+        return `<div class="lb lb2${UI.sel === bk.id ? ' sel' : ''}${st.none ? ' todo' : ''}" data-act="selbk" data-id="${bk.id}" draggable="true" data-dragbk="${bk.id}">
+          <div class="lb2-h"><span class="ln">${bk.ord}</span><span class="dot" style="background:${bk.head.c != null ? COLORS[bk.head.c % COLORS.length] : 'transparent'}"></span>
+            <span class="lb2-n" title="${esc(bkName(bk))} x ${bk.persone.length}"><b>${esc(bkName(bk))}</b> <small>x ${bk.persone.length}</small></span>
+            <span class="lb2-c">${parts.map(p => `<span class="code">${esc(p)}</span>`).join('')}</span><span class="lb2-s ${st.none ? (st.txt ? 'part' : 'none') : 'ok'}">${stTxt}</span></div>
+          ${bk.mancano ? `<div class="lb2-m"><span class="lb2-w">mancano ${bk.mancano} ${bk.mancano === 1 ? 'nome' : 'nomi'}</span></div>` : ''}
+          ${rs.text ? `<div class="lb2-r ${ps || 'pending'}"><span>${esc(rs.text)}${rs.paid ? ' · pagato' : ''}</span><b>${rqS}</b></div>` : ''}
+          <div class="lb2-p">${bk.persone.map(p => `<span class="pchip${SI[p.id] ? ' on' : ''}${UI.selP === p.id ? ' sel' : ''}" draggable="true" data-dragp="${p.id}" data-act="selp" data-id="${p.id}" title="${esc(p.cognome)} ${esc(p.nome)} · trascina solo questa persona">${short(p)}${SI[p.id] ? ` <i>${SI[p.id].s}</i>` : ''}</span>`).join('')}</div>
         </div>`;
       }).join('') || '<div class="small" style="padding:14px">La lista è vuota: scrivila nella sezione «Lista prenotazioni» oppure importa il file Word.</div>'}</div>
     </section>`;
@@ -3249,7 +3258,7 @@
     if (allMovs().some(x => x.storno === id)) return toast('Questo incasso è già stato stornato');
     confirmBox('Storna incasso', `Annullo l'incasso di <b>${money(m.tot)}</b> di ${esc(m.cliente)}? Nel resoconto resta segnato, con un movimento uguale e contrario${m.doc === 'scontrino' ? ' (nota di credito dello scontrino)' : m.doc === 'fattura' ? ' (nota di credito della fattura)' : ''}.`, 'Storna', () => {
       const t = S.trips.find(x => x.id === m.tripId);
-      addMov({ tripId: m.tripId, tripN: m.tripN, tripD: m.tripD, bkId: m.bkId, pid: m.pid, pnome: m.pnome, rtRif: m.doc === 'scontrino' ? Object.assign({ chiusura: '', numero: '', dataOra: '', matricola: '' }, m.rt || {}, { mov: m.id }) : undefined, cliente: m.cliente, tipo: 'storno', storno: id, ag: m.ag, cassa: m.cassa, doc: m.doc === 'fattura' ? 'ncfattura' : m.doc === 'scontrino' ? 'ncscontrino' : m.doc, docStato: m.doc === 'fattura' || m.doc === 'scontrino' ? 'da_emettere' : '', cat: m.cat, desc: m.desc, circuito: m.circuito, lines: (m.lines || []).map(l => Object.assign({}, l, { q: -l.q })), suppl: -(m.suppl || 0), dir: m.dir, docTot: -(m.docTot || 0), agenzia: -(m.agenzia || 0), biglietti: -(m.biglietti || 0), parts: m.parts.map(p => ({ m: p.m, a: -p.a })), note: `storno dell'incasso del ${fmtDate(m.day)}${ACC.sess.ag && ACC.sess.ag !== m.ag ? ' (fatto da ' + agName(ACC.sess.ag) + ')' : ''}` });
+      addMov({ tripId: m.tripId, tripN: m.tripN, tripD: m.tripD, bkId: m.bkId, pid: m.pid, pnome: m.pnome, rtRif: m.doc === 'scontrino' ? Object.assign({ chiusura: '', numero: '', dataOra: '', matricola: '' }, m.rt || {}, { mov: m.id }) : undefined, cliente: m.cliente, tipo: 'storno', storno: id, ag: m.ag, cassa: m.cassa, doc: m.doc === 'fattura' ? 'ncfattura' : m.doc === 'scontrino' ? 'ncscontrino' : m.doc, docStato: m.doc === 'fattura' || m.doc === 'scontrino' ? 'da_emettere' : '', cat: m.cat, desc: m.desc, circuito: m.circuito, lines: (m.lines || []).map(l => Object.assign({}, l, { q: -l.q })), suppl: -(m.suppl || 0), dir: m.dir, docTot: -(m.docTot || 0), agenzia: -(m.agenzia || 0), biglietti: -(m.biglietti || 0), parts: m.parts.map(p => Object.assign({ m: p.m, a: -p.a }, p.buono ? { buono: p.buono, bnum: p.bnum } : {})), note: `storno dell'incasso del ${fmtDate(m.day)}${ACC.sess.ag && ACC.sess.ag !== m.ag ? ' (fatto da ' + agName(ACC.sess.ag) + ')' : ''}` });
       ACC.tlog('avviso', `Storno ${money(m.tot)} · ${m.cliente} · ${m.tripN}`);
       commit(); if (UI.pay) payRefresh(); toast('Incasso stornato');
     });
@@ -3257,6 +3266,7 @@
 
   // ---- pagina «Cassa»: il resoconto del giorno ----
   function cassaView() {
+    if (UI.ctabC === 'buoni') return buoniView();
     const day = UI.cday || todayISO(); const all = ACC.can('cassaAll');
     const agf = all ? (UI.cag || 'tutte') : ACC.sess.ag;
     const movs = allMovs().filter(m => m.day === day && (agf === 'tutte' || m.ag === agf)).sort((a, b) => a.at.localeCompare(b.at));
@@ -3268,7 +3278,7 @@
     const ch = closeAg && chiusura(day, closeAg);
     const canClose = !ACC.can('readonly') && closeAg && (ACC.sess.ag === closeAg || ACC.can('cassaAll'));
     const stornati = new Set(movs.filter(m => m.storno).map(m => m.storno));
-    return `<div class="pagehead"><div><h1>${day === todayISO() ? 'Resoconto di oggi' : 'Resoconto del ' + esc(fmtDate(day))}</h1><div class="sub">${esc(fmtDate(day, true))} · ${movs.length} ${movs.length === 1 ? 'movimento' : 'movimenti'}${ch ? ` · <b>cassa ${esc(agName(closeAg))} chiusa</b> da ${esc(ch.who)} alle ${esc(hm(ch.at))}` : ''}</div></div>
+    return `${cassaTabs()}<div class="pagehead"><div><h1>${day === todayISO() ? 'Resoconto di oggi' : 'Resoconto del ' + esc(fmtDate(day))}</h1><div class="sub">${esc(fmtDate(day, true))} · ${movs.length} ${movs.length === 1 ? 'movimento' : 'movimenti'}${ch ? ` · <b>cassa ${esc(agName(closeAg))} chiusa</b> da ${esc(ch.who)} alle ${esc(hm(ch.at))}` : ''}</div></div>
         <div class="hbtns">${agBtns}<button class="btn" data-act="cday" data-v="${dayISO(prev)}">‹ Giorno prima</button>${day < todayISO() ? `<button class="btn" data-act="cday" data-v="${dayISO(next)}">Giorno dopo ›</button>` : ''}<input type="date" class="btn" data-cdate="1" value="${esc(day)}" aria-label="Scegli il giorno"><button class="btn" data-act="cprint">${ICON.print} Stampa</button>${!ACC.can('readonly') && ACC.sess.ag ? '<button class="btn" data-act="cashmov" data-k="prelievo">Prelievo</button><button class="btn" data-act="cashmov" data-k="apporto">Apporto</button>' : ''}${canClose ? `<button class="btn primary" data-act="cclose">${ch ? 'Rivedi la chiusura' : 'Chiudi la cassa'}${agf === 'tutte' ? ' di ' + esc(agName(closeAg)) : ''}</button>` : ''}</div></div>
       <div class="tiles"><div class="tile dark"><span>Totale del giorno</span><b>${money(tot)}</b></div>${METG.map(([k, l]) => `<div class="tile"><span><i class="mdot ${MET_C[k]}"></i>${l}</span><b>${money(per[k] || 0)}</b><small>${cnt(k)} ${cnt(k) === 1 ? 'incasso' : 'incassi'}</small></div>`).join('')}</div>
       <section class="box tablecard"><div class="tscroll"><table class="rt"><thead><tr><th>Ora</th><th>Cliente</th><th>Viaggio</th><th>Documento</th><th>Operatore</th><th>Agenzia</th><th>Metodo</th><th class="r">Importo</th><th></th></tr></thead><tbody>
@@ -3424,12 +3434,23 @@
   function payOpen(bkId, pid) {
     const t = trip(); if (!t) return; const bk = deriveBookings(t).find(x => x.id === bkId); if (!bk) return;
     if (pid && (pid === bk.id && bk.persone.length < 2 || !bk.persone.some(p => p.id === pid))) pid = '';
-    UI.pay = { tripId: t.id, bkId, pid: pid || '', f: payDraft(t, bk, pid || '') }; UI.sec = 'lista'; render();
-    setTimeout(() => { const i = $('#pf-imp'); if (i) { i.focus(); i.select(); } const p = $('.paypanel'); if (p && p.scrollIntoView && window.innerWidth < 1100) p.scrollIntoView({ block: 'start' }); }, 30);
+    UI.pay = { tripId: t.id, bkId, pid: pid || '', f: payDraft(t, bk, pid || '') }; render();
+    setTimeout(() => { const i = $('#pf-imp'); if (i) { i.focus({ preventScroll: true }); i.select(); } }, 30);
   }
   function payClose() { UI.pay = null; render(); }
+  // sezioni apribili del riquadro: restano aperte o chiuse anche quando la finestra si ridisegna
+  document.addEventListener('toggle', e => { const d = e.target; if (d && d.dataset && d.dataset.pdet && UI.pay) { UI.pay.open = UI.pay.open || {}; UI.pay.open[d.dataset.pdet] = d.open; } }, true);
   function payRefresh() { if (!UI.pay) return; const t = trip(); const bk = t && t.id === UI.pay.tripId && deriveBookings(t).find(x => x.id === UI.pay.bkId); if (!bk) UI.pay = null; render(); }
   const nIn = (k, v, extra = '') => `<input class="pf-in num" data-pf="${k}" inputmode="decimal" value="${v === '' || v == null ? '' : esc(fmtNum(+v))}" ${extra} autocomplete="off">`;
+  // riepilogo delle righe in una frase, per la sezione chiusa «Righe del documento»
+  function linesSummary(f, T) {
+    const L = f.lines.filter(l => +l.q).map(l => `${l.q} × ${l.l || 'quota'} ${fmtNum((+l.bus || 0) + (+l.tkt || 0))} €`);
+    if (T.sup) L.push(`suppl. fila ${fmtNum(T.sup)} €`); if (T.dirT) L.push(`diritti ${fmtNum(T.dirT)} €`);
+    return L.length ? L.join(' · ') : 'nessuna riga';
+  }
+  // il riquadro dell'incasso: una finestra al centro dello schermo, con la «x» in alto a destra.
+  // A sinistra quello che serve sempre (chi paga, documento, quanto e come paga, il pulsante),
+  // a destra il dettaglio del documento (righe, totale, anteprima) e gli incassi già registrati.
   function payPanelHTML(t) {
     const D = deriveBookings(t); const bk = D.find(x => x.id === UI.pay.bkId); if (!bk) return '';
     const f = UI.pay.f; const pid = UI.pay.pid || ''; const m0 = bkMoney(t, bk); bk._m = m0; const m = payMoney(t, bk, pid); const T = payTotals(f);
@@ -3440,37 +3461,46 @@
     const canPay = ACC.can('cassa') && ACC.sess.ag;
     const tkOn = f.lines.some(l => +l.tkt) || tripCat(t) === 'biglietteria' || tripCat(t) === 'evento';
     const mainBtn = f.doc === 'fattura' ? 'Fattura' : f.doc === 'scontrino' ? 'Scontrino' : f.doc === 'caparra' ? 'Registra la caparra' : 'Registra senza documento';
-    return `<section class="panel paypanel" aria-label="Incasso e documento">
-      <div class="panel-h"><h3>${P ? `${esc(P.cognome)} ${esc(P.nome)} <small>della comitiva ${esc(bkName(bk))} x ${bk.persone.length}</small>` : `${esc(bkName(bk))} x ${Math.max(bk.n || 0, bk.persone.length)}`}</h3><button class="btn sm ghost" data-act="pfclose" aria-label="Chiudi il riquadro">${ICON.close}</button></div>
-      <div class="pp-b">
-        <div id="pay-presence">${payPresenceHTML()}</div>
-        ${comit ? `<div class="pp-sec"><span class="pp-l">Chi paga</span><div class="pp-who" role="radiogroup" aria-label="Chi paga">
-          <button type="button" role="radio" data-act="paywho" data-id="${bk.id}" data-pid="" aria-checked="${!pid}">${ICON.users} Tutta la comitiva</button>
-          ${bk.persone.map(p => { const pm = personMoney(t, bk, p.id); return `<button type="button" role="radio" data-act="paywho" data-id="${bk.id}" data-pid="${p.id}" aria-checked="${pid === p.id}">${esc(p.cognome)} ${esc(p.nome)}${pm.paid ? ` <small>${pm.rest === 0 ? '✓ ' : ''}${esc(fmtNum(pm.paid))}</small>` : ''}</button>`; }).join('')}</div></div>` : ''}
-        <div class="pay-sum"><div><span>${P ? 'Quota' : m.indiv && m.indiv.length ? 'Totale (senza chi paga da sé)' : 'Totale'}</span><b>${m.due != null ? money(m.due) : '—'}</b></div><div><span>Già pagato</span><b>${money(m.paid)}</b></div><div class="hi"><span>Da pagare</span><b>${m.rest != null ? money(m.rest) : '—'}</b></div></div>
-        ${P ? `<div class="small pp-gsum">Tutta la comitiva: totale ${m0.due != null ? money(m0.due) : '—'} · pagato ${money(m0.paid)} · da pagare ${m0.rest != null ? money(m0.rest) : '—'}</div>` : m.indiv && m.indiv.length ? `<div class="small pp-gsum">Pagano per conto loro: <b>${m.indiv.map(id => esc(pName(id))).join(', ')}</b> — non sono compresi qui.</div>` : ''}
-        ${m.due == null ? '<div class="warnbox small">Mancano i prezzi del viaggio in testa alla lista: il totale si calcola dalle righe qui sotto.</div>' : ''}
-        ${f.tour ? '<div class="pp-sec"><span class="pp-l">Documento</span><div class="pp-doc1">Fattura</div></div>' : `<div class="pp-sec"><span class="pp-l">Documento</span><div class="seg wrap" role="radiogroup" aria-label="Documento">${DOCS.filter(([k]) => k !== 'fattura').map(([k, l]) => `<button type="button" role="radio" data-act="pfdoc" data-k="${k}" aria-pressed="${f.doc === k}">${l}</button>`).join('')}</div></div>`}
-        <label class="pp-1">Cognome e nome${f.doc === 'fattura' ? ' (come appare nel resoconto)' : ''}<input data-pf="cliente" value="${esc(f.cliente)}" autocomplete="off"></label>
+    const op = UI.pay.open = UI.pay.open || {}; const isOpen = (k, def) => (op[k] != null ? op[k] : def);
+    const easy = f.met === 'contanti' || f.met === 'pos';
+    const altri = `<div class="pp-g3"><label>N. pratica<input data-pf="pratica" value="${esc(f.pratica)}"></label><label>Canale<select data-pf="canale">${CANALI.map(c => `<option${c === f.canale ? ' selected' : ''}>${c}</option>`).join('')}</select></label><label>Data pagamento<input type="date" data-pf="dataPag" value="${esc(f.dataPag)}"></label></div>
+      <label class="pp-1">Pagante (se diverso)<input data-pf="pagante" value="${esc(f.pagante)}"></label>
+      <label class="pp-1">Note pratica<input data-pf="note" value="${esc(f.note)}"></label>
+      ${P ? '' : `<label class="pp-1">Pagato prima, fuori dall'app (come nella lista Word)<input data-pf="legacy" class="num" inputmode="decimal" value="${esc(f.legacy)}" placeholder="0"></label>`}`;
+    const colA = `
+      ${comit ? `<div class="pp-sec"><span class="pp-l">Chi paga</span><div class="pp-who" role="radiogroup" aria-label="Chi paga">
+        <button type="button" role="radio" data-act="paywho" data-id="${bk.id}" data-pid="" aria-checked="${!pid}">${ICON.users} Tutta la comitiva</button>
+        ${bk.persone.map(p => { const pm = personMoney(t, bk, p.id); return `<button type="button" role="radio" data-act="paywho" data-id="${bk.id}" data-pid="${p.id}" aria-checked="${pid === p.id}">${esc(p.cognome)} ${esc(p.nome)}${pm.paid ? ` <small>${pm.rest === 0 ? '✓ ' : ''}${esc(fmtNum(pm.paid))}</small>` : ''}</button>`; }).join('')}</div></div>` : ''}
+      <div class="pay-sum"><div><span>${P ? 'Quota' : m.indiv && m.indiv.length ? 'Totale (senza chi paga da sé)' : 'Totale'}</span><b>${m.due != null ? money(m.due) : '—'}</b></div><div><span>Già pagato</span><b>${money(m.paid)}</b></div><div class="hi"><span>Da pagare</span><b>${m.rest != null ? money(m.rest) : '—'}</b></div></div>
+      ${P ? `<div class="small pp-gsum">Tutta la comitiva: totale ${m0.due != null ? money(m0.due) : '—'} · pagato ${money(m0.paid)} · da pagare ${m0.rest != null ? money(m0.rest) : '—'}</div>` : m.indiv && m.indiv.length ? `<div class="small pp-gsum">Pagano per conto loro: <b>${m.indiv.map(id => esc(pName(id))).join(', ')}</b> — non sono compresi qui.</div>` : ''}
+      ${m.due == null ? '<div class="warnbox small">Mancano i prezzi del viaggio in testa alla lista: il totale si calcola dalle righe del documento.</div>' : ''}
+      <div class="pp-sec"><span class="pp-l">Documento</span>${f.tour ? '<div class="pp-doc1">Fattura</div>' : `<div class="seg wrap" role="radiogroup" aria-label="Documento">${DOCS.filter(([k]) => k !== 'fattura').map(([k, l]) => `<button type="button" role="radio" data-act="pfdoc" data-k="${k}" aria-pressed="${f.doc === k}">${l}</button>`).join('')}</div>`}</div>
+      <label class="pp-1">Cognome e nome${f.doc === 'fattura' ? ' (come appare nel resoconto)' : ''}<input data-pf="cliente" value="${esc(f.cliente)}" autocomplete="off"></label>
+      <div class="pp-sec pp-paybox"><span class="pp-l">Incassato adesso</span><div class="pp-impr"><input id="pf-imp" class="pf-in num pay-imp" data-pf="imp" inputmode="decimal" value="${f.imp === '' ? '' : esc(fmtNum(+f.imp))}" placeholder="0,00" autocomplete="off" aria-label="Importo incassato adesso"><span class="pay-warn" id="pp-warn" role="status">${payWarnTxt(f, m)}</span></div>
+        <div class="pay-met" role="radiogroup" aria-label="Metodo di pagamento">${[...METODI, ['misto', 'Misto']].map(([k, l]) => `<button type="button" role="radio" aria-checked="${f.met === k}" data-act="pfmet" data-k="${k}"${k === 'misto' ? ' title="Più metodi insieme, es. contanti + POS"' : ''}>${l}</button>`).join('')}</div>
+        ${f.met === 'misto' ? mixHTML(f) : ''}
+        <div id="pp-buono">${typeof buonoPayHTML === 'function' ? buonoPayHTML(f) : ''}</div></div>
+      <details class="pp-det" data-pdet="altri"${isOpen('altri', !easy) ? ' open' : ''}><summary><span>Altri dati: pratica, canale, pagante, note</span>${(() => { const x = [f.pratica ? 'pratica ' + f.pratica : '', f.pagante ? 'pagante ' + f.pagante : '', f.note ? 'note' : '', !P && f.legacy ? 'pagato prima ' + f.legacy + ' €' : ''].filter(Boolean); return x.length ? `<small>${esc(x.join(' · '))}</small>` : ''; })()}</summary><div class="pp-detb">${altri}</div></details>
+      <div class="pp-foot"><div class="small">${canPay ? `Registrato da <b>${esc(ACC.me().name)}</b> · <b>${esc(agName(ACC.sess.ag))}</b> · ${esc(cassaName(ACC.sess.ag))}` : 'Per incassare scegli l\'agenzia in cui lavori (in alto).'}</div>
+        ${canPay ? `<div class="pp-act"><button class="btn primary big" data-act="pfsave">${f.doc === 'scontrino' ? ICON.print + ' ' : ''}${mainBtn}${+f.imp ? ' · ' + money(+f.imp) : ''}</button></div>` : ''}</div>`;
+    const colB = `
+      ${f.doc === 'fattura' ? fattHTML(f.fatt) : ''}
+      <details class="pp-det" data-pdet="righe"${isOpen('righe', m.due == null) ? ' open' : ''}><summary><span>Righe del documento</span><small id="pp-lsum">${esc(linesSummary(f, T))}</small></summary><div class="pp-detb">
         <label class="pp-1">Descrizione<input data-pf="desc" value="${esc(f.desc)}" autocomplete="off"></label>
-        ${f.doc === 'fattura' ? fattHTML(f.fatt) : ''}
         <table class="pp-lines"><thead><tr><th></th><th>Q</th>${f.bigl ? '' : '<th>€ bus</th>'}${tkOn ? '<th>€ biglietto</th>' : ''}<th class="r">Totale</th></tr></thead><tbody>
           ${f.lines.map((l, i) => `<tr><td><input class="pf-in lab" data-pl="${i}" data-k="l" value="${esc(l.l)}" aria-label="Riga ${i + 1}"></td><td><input class="pf-in num q" data-pl="${i}" data-k="q" inputmode="numeric" value="${l.q ? esc(String(l.q)) : ''}" aria-label="Quantità riga ${i + 1}"></td>${f.bigl ? '' : `<td><input class="pf-in num" data-pl="${i}" data-k="bus" inputmode="decimal" value="${+l.bus ? esc(fmtNum(+l.bus)) : ''}" aria-label="Euro bus riga ${i + 1}"></td>`}${tkOn ? `<td><input class="pf-in num" data-pl="${i}" data-k="tkt" inputmode="decimal" value="${+l.tkt ? esc(fmtNum(+l.tkt)) : ''}" aria-label="Euro biglietto riga ${i + 1}"></td>` : ''}<td class="r" id="pl-t${i}">${l.q ? money((+l.q) * ((+l.bus || 0) + (+l.tkt || 0))) : ''}</td></tr>`).join('')}
         </tbody></table>
         <div class="pp-g3">${f.bigl ? '' : `<label>Suppl. fila €${nIn('suppl', f.suppl)}</label>`}${tkOn ? `<label>Diritti € (per biglietto)${nIn('dir', f.dir)}</label><label>Circuito<select data-pf="circuito"><option value="">—</option>${CIRCUITI.map(c => `<option${c === f.circuito ? ' selected' : ''}>${c}</option>`).join('')}</select></label>` : ''}</div>
         ${tkOn ? `<div class="pp-g2"><label>Emissione biglietti<input type="date" data-pf="emis" value="${esc(f.emis)}"></label><label class="chk pp-chk"><input type="checkbox" data-pfc="ant"${f.ant ? ' checked' : ''}> Emissione anticipata</label></div>` : ''}
-        <div class="pp-tot" id="pp-tot">${payTotHTML(T, f.bigl)}</div>
-        <div id="pp-rt">${rtPreviewHTML(f)}</div>
-        <div class="pp-sec"><span class="pp-l">Incassato adesso</span><input id="pf-imp" class="pf-in num pay-imp" data-pf="imp" inputmode="decimal" value="${f.imp === '' ? '' : esc(fmtNum(+f.imp))}" placeholder="0,00" autocomplete="off"><span class="pay-warn" id="pp-warn" role="status">${payWarnTxt(f, m)}</span></div>
-        <div class="pay-met" role="radiogroup" aria-label="Metodo di pagamento">${[...METODI, ['misto', 'Misto (es. contanti + POS)']].map(([k, l]) => `<button type="button" role="radio" aria-checked="${f.met === k}" data-act="pfmet" data-k="${k}">${l}</button>`).join('')}</div>
-        ${f.met === 'misto' ? mixHTML(f) : ''}
-        ${f.met !== 'contanti' && f.met !== 'pos' ? `<div class="pp-g3"><label>N. pratica<input data-pf="pratica" value="${esc(f.pratica)}"></label><label>Canale<select data-pf="canale">${CANALI.map(c => `<option${c === f.canale ? ' selected' : ''}>${c}</option>`).join('')}</select></label><label>Data pagamento<input type="date" data-pf="dataPag" value="${esc(f.dataPag)}"></label></div><label class="pp-1">Pagante (se diverso)<input data-pf="pagante" value="${esc(f.pagante)}"></label>` : ''}
-        <label class="pp-1">Note pratica<input data-pf="note" value="${esc(f.note)}" placeholder="es. buono n° 26001"></label>
-        ${P ? '' : `<label class="pp-1">Pagato prima, fuori dall'app (come nella lista Word)<input data-pf="legacy" class="num" inputmode="decimal" value="${esc(f.legacy)}" placeholder="0"></label>`}
-        <div class="small">${canPay ? `Registrato da <b>${esc(ACC.me().name)}</b> · <b>${esc(agName(ACC.sess.ag))}</b> · ${esc(cassaName(ACC.sess.ag))}` : 'Per incassare scegli l\'agenzia in cui lavori (in alto).'}</div>
-        ${canPay ? `<div class="pp-act"><button class="btn primary big" data-act="pfsave">${f.doc === 'scontrino' ? ICON.print + ' ' : ''}${mainBtn}${+f.imp ? ' · ' + money(+f.imp) : ''}</button></div>` : ''}
-        ${hist.length ? `<div class="pp-sec"><span class="pp-l">Incassi registrati</span><div class="pay-hist">${hist.map(x => `<div class="${x.tipo === 'storno' ? 'neg' : ''}${storn.has(x.id) ? ' gone' : ''}"><span>${esc(fmtDate(x.day).slice(0, 5))} · ${esc(x.who)}${x.pid && !pid ? ` · <b>${esc(pName(x.pid) || x.pnome || '')}</b>` : ''}<br>${docPill(x)}${rtInfo(x) ? `<br><small class="rt-num">${esc(rtInfo(x))}</small>` : ''}</span><span>${(x.parts || []).map(p => `<span class="mpill ${MET_C[p.m] || 'm-alt'}">${esc(MET_L[p.m] || p.m)}</span>`).join(' ')}</span><b>${money(x.tot)}</b>${x.doc === 'fattura' && x.tipo !== 'storno' && !storn.has(x.id) ? `<button class="btn sm${x.danea ? '' : ' primary'}" data-act="danea1" data-id="${x.id}" title="Scarica la fattura per Danea">${x.danea ? 'Di nuovo in Danea' : 'Apri in Danea'}</button>` : ''}${x.tipo !== 'storno' && !storn.has(x.id) && ACC.can('cassa') && (ACC.can('cassaAll') || (x.uid === ACC.sess.uid && x.day === todayISO())) ? `<button class="btn sm ghost" data-act="storno" data-id="${x.id}">Storna</button>` : ''}</div>`).join('')}</div></div>` : ''}
-      </div></section>`;
+      </div></details>
+      <div class="pp-tot" id="pp-tot">${payTotHTML(T, f.bigl)}</div>
+      <div id="pp-rt">${rtPreviewHTML(f)}</div>
+      ${hist.length ? `<div class="pp-sec"><span class="pp-l">Incassi registrati</span><div class="pay-hist">${hist.map(x => `<div class="${x.tipo === 'storno' ? 'neg' : ''}${storn.has(x.id) ? ' gone' : ''}"><span>${esc(fmtDate(x.day).slice(0, 5))} · ${esc(x.who)}${x.pid && !pid ? ` · <b>${esc(pName(x.pid) || x.pnome || '')}</b>` : ''}<br>${docPill(x)}${rtInfo(x) ? `<br><small class="rt-num">${esc(rtInfo(x))}</small>` : ''}</span><span>${(x.parts || []).map(p => `<span class="mpill ${MET_C[p.m] || 'm-alt'}">${esc(MET_L[p.m] || p.m)}${p.bnum ? ' ' + esc(p.bnum) : ''}</span>`).join(' ')}</span><b>${money(x.tot)}</b>${x.doc === 'fattura' && x.tipo !== 'storno' && !storn.has(x.id) ? `<button class="btn sm${x.danea ? '' : ' primary'}" data-act="danea1" data-id="${x.id}" title="Scarica la fattura per Danea">${x.danea ? 'Di nuovo in Danea' : 'Apri in Danea'}</button>` : ''}${x.tipo !== 'storno' && !storn.has(x.id) && ACC.can('cassa') && (ACC.can('cassaAll') || (x.uid === ACC.sess.uid && x.day === todayISO())) ? `<button class="btn sm ghost" data-act="storno" data-id="${x.id}">Storna</button>` : ''}</div>`).join('')}</div></div>` : ''}`;
+    return `<div class="paymodal" role="dialog" aria-modal="true" aria-label="Incasso e documento"><div class="pm-scrim"></div>
+      <section class="panel paypanel">
+      <div class="panel-h"><div class="pp-ht"><h3>${P ? `${esc(P.cognome)} ${esc(P.nome)}` : `${esc(bkName(bk))} x ${Math.max(bk.n || 0, bk.persone.length)}`}</h3><span>${P ? `della comitiva ${esc(bkName(bk))} x ${bk.persone.length} · ` : ''}${esc(t.nome)} · ${esc(fmtTripDate(t))}</span></div><button class="pm-x" data-act="pfclose" aria-label="Chiudi l'incasso">${ICON.close}</button></div>
+      <div class="pp-b"><div id="pay-presence">${payPresenceHTML()}</div><div class="pp-cols"><div class="pp-col a">${colA}</div><div class="pp-col b">${colB}</div></div></div>
+      </section></div>`;
   }
   // dati per la fattura, con il calcolo del codice fiscale
   function fattHTML(F) {
@@ -3520,6 +3550,7 @@
     else if (MIX_MAIN.includes(k)) { const o = MIX_MAIN.find(x => x !== k); if (!f.mixT[o]) { const rest = r2(+f.imp - METODI.filter(([x]) => x !== o).reduce((a, [x]) => a + (+f.mix[x] || 0), 0)); f.mix[o] = rest > 0 ? rest : 0; const i = $(`[data-pfm="${o}"]`); if (i) i.value = f.mix[o] ? fmtNum(f.mix[o]) : ''; } }
     const el = $('#pp-mixsum'); if (el) el.innerHTML = mixSumTxt(f);
     const rt = $('#pp-rt'); if (rt) rt.innerHTML = rtPreviewHTML(f);
+    if (k === 'buono' || f.buono) { const bx = $('#pp-buono'); if (bx && !bx.contains(document.activeElement)) bx.innerHTML = buonoPayHTML(f); }
   }
   function mixRest(k) {
     const f = UI.pay.f; const rest = r2(+f.imp - METODI.filter(([x]) => x !== k).reduce((a, [x]) => a + (+f.mix[x] || 0), 0));
@@ -3534,10 +3565,11 @@
   function payWarnTxt(f, m) { const v = +f.imp; if (!v || m.rest == null) return ''; return v > m.rest + 0.009 ? (m.rest <= 0 ? 'Attenzione: risulta già pagato tutto.' : `Attenzione: è più del dovuto di ${money(v - m.rest)}.`) : v < m.rest - 0.009 ? `Acconto: restano ${money(m.rest - v)}.` : ''; }
   // aggiorna i totali senza ridisegnare il riquadro (così non si perde il cursore)
   function payRecalc() {
-    const f = UI.pay && UI.pay.f; if (!f) return; const T = payTotals(f); const el = $('#pp-tot'); if (el) el.innerHTML = payTotHTML(T, f.bigl);
+    const f = UI.pay && UI.pay.f; if (!f) return; const T = payTotals(f); const el = $('#pp-tot'); if (el) el.innerHTML = payTotHTML(T, f.bigl); const ls = $('#pp-lsum'); if (ls) ls.textContent = linesSummary(f, T);
     f.lines.forEach((l, i) => { const c = $('#pl-t' + i); if (c) c.textContent = l.q ? money((+l.q) * ((+l.bus || 0) + (+l.tkt || 0))) : ''; });
     const t = trip(); const bk = t && deriveBookings(t).find(x => x.id === UI.pay.bkId); const w = $('#pp-warn'); if (bk) { bk._m = bkMoney(t, bk); const pm = payMoney(t, bk, UI.pay.pid || ''); f.rest = pm.rest != null ? r2(pm.rest) : null; if (w) w.textContent = payWarnTxt(f, pm); }
     const rt = $('#pp-rt'); if (rt) rt.innerHTML = rtPreviewHTML(f);
+    if (f.buono) { const bx = $('#pp-buono'); if (bx) bx.innerHTML = buonoPayHTML(f); }
   }
   function payInput(el) {
     const f = UI.pay && UI.pay.f; if (!f) return false; const d = el.dataset;
@@ -3561,6 +3593,7 @@
       if (parts.length < 2) return toast('Nel pagamento misto scrivi almeno due metodi');
       if (Math.abs(s - imp) > 0.009) return toast(`I metodi fanno ${money(s)}, l'importo è ${money(imp)}`);
     } else parts = [{ m: f.met, a: imp }];
+    { const bErr = buonoCheck(f, parts); if (bErr) return toast(bErr); }
     if (f.doc === 'fattura' && !String(f.fatt.cf || '').trim()) return toast('Per la fattura scrivi il codice fiscale o la partita IVA');
     if (f.doc === 'fattura') { const c = CF.check(f.fatt.cf); if (c !== 'ok' && c !== 'piva') return toast(c === 'piva-errata' ? 'La partita IVA non è valida: ricontrollala' : 'Il codice fiscale non è valido: ricontrollalo'); }
     const T = payTotals(f); bk._m = bkMoney(t, bk); const pid = UI.pay.pid || ''; const m = payMoney(t, bk, pid); const P = pid && bk.persone.find(p => p.id === pid);
@@ -3661,6 +3694,124 @@
           return `<tr class="${m.tipo === 'storno' || m.tipo === 'prelievo' ? 'neg' : ''}"><td>${esc(hm(m.at))}</td><td>${esc(x[1])}</td><td>${esc(x[2])}${m.docStato === 'da_emettere' ? '<br><small>da emettere</small>' : ''}${rtInfo(m) ? `<br><small class="rt-num">${esc(rtInfo(m))}</small>` : ''}</td><td>${esc(x[5])}</td><td>${esc(x[6])}</td><td>${esc(x[7])}</td><td>${esc(m.circuito || '')}</td><td class="r">${L.reduce((a, l) => a + l.q, 0) || ''}</td><td class="r">${L.length ? money(L.reduce((a, l) => a + l.q * l.bus, 0)) : ''}</td><td class="r">${L.some(l => l.tkt) ? money(L.reduce((a, l) => a + l.q * l.tkt, 0)) : ''}</td><td class="r">${m.suppl ? money(m.suppl) : ''}</td><td class="r">${x[38] ? money(x[38]) : ''}</td><td class="r"><b>${isInc(m) ? money(x[23]) : ''}</b></td><td class="r">${x[25] ? money(x[25]) : ''}</td><td class="r">${x[26] ? money(x[26]) : ''}</td><td class="r">${x[27] ? money(x[27]) + '<br><small>' + esc(x[28]) + '</small>' : ''}</td><td class="r">${isInc(m) ? money(x[33]) : ''}</td><td class="r">${money(run)}</td><td>${esc(x[42])}</td></tr>`; }).join('') || '<tr><td colspan="19" class="emptyrow">Nessun movimento.</td></tr>'}
       </tbody></table></div></section>`;
   }
+
+  // ---------- buoni regalo (2.1.5) ----------
+  // Un buono nasce incassando l'importo in cassa (categoria «BuonoRegalo» del foglio CASSA) e si può spendere
+  // anche in più volte, fino a zero. Quanto resta si calcola dagli incassi pagati con «Buono regalo»
+  // (ogni pagamento ricorda il numero del buono; uno storno lo restituisce al buono).
+  // File: /buoni/buoni.json · { u, buoni: { id: { num, at, day, dest, from, tel, importo, note, who, uid, ag, movId, u } } }
+  const BPATH = '/buoni/buoni.json';
+  const buoniAll = () => Object.values((STORE.get(BPATH) || {}).buoni || {}).filter(x => x && x.id);
+  const buonoById = id => buoniAll().find(x => x.id === id);
+  // quanto è stato speso di un buono (gli storni tornano indietro da soli: hanno importi negativi)
+  function buonoUsed(id) { let s = 0; allMovs().forEach(m => (m.parts || []).forEach(p => { if (p.m === 'buono' && p.buono === id) s += +p.a || 0; })); return r2(s); }
+  const buonoAnnullato = b => !!(b.movId && allMovs().some(m => m.storno === b.movId));
+  const buonoRes = b => (buonoAnnullato(b) ? 0 : Math.max(0, r2((+b.importo || 0) - buonoUsed(b.id))));
+  const buonoUses = id => allMovs().filter(m => (m.parts || []).some(p => p.m === 'buono' && p.buono === id)).sort((a, b) => a.at.localeCompare(b.at));
+  function buonoNum(ag) {
+    const yy = todayISO().slice(2, 4); const pre = `${AGC[ag] || 'BR'}-${yy}-`;
+    const n = buoniAll().filter(b => String(b.num || '').startsWith(pre)).reduce((a, b) => Math.max(a, parseInt(String(b.num).slice(pre.length), 10) || 0), 0);
+    return pre + String(n + 1).padStart(3, '0');
+  }
+  const cassaTabs = () => `<div class="ctabs seg" role="tablist" aria-label="Cassa"><button role="tab" data-act="ctabc" data-v="cassa" aria-pressed="${UI.ctabC !== 'buoni'}">Resoconto di cassa</button><button role="tab" data-act="ctabc" data-v="buoni" aria-pressed="${UI.ctabC === 'buoni'}">${ICON.star} Buoni regalo</button></div>`;
+  function buoniView() {
+    const q = String(UI.bq || '').trim().toLowerCase(); const arch = UI.btab === 'arch';
+    const L = buoniAll().map(b => Object.assign({}, b, { res: buonoRes(b), ann: buonoAnnullato(b) }))
+      .filter(b => (arch ? b.res <= 0.009 : b.res > 0.009))
+      .filter(b => !q || [b.num, b.dest, b.from, b.tel].some(v => String(v || '').toLowerCase().includes(q)))
+      .sort((a, b) => String(b.at).localeCompare(String(a.at)));
+    const act = buoniAll().filter(b => buonoRes(b) > 0.009); const totRes = r2(act.reduce((a, b) => a + buonoRes(b), 0));
+    const canNew = ACC.can('cassa') && ACC.sess.ag && !ACC.can('readonly');
+    const lastUse = b => { const u = buonoUses(b.id); return u.length ? u[u.length - 1] : null; };
+    return `${cassaTabs()}<div class="pagehead"><div><h1>Buoni regalo</h1><div class="sub">${act.length} ${act.length === 1 ? 'buono attivo' : 'buoni attivi'} · ancora da spendere <b>${money(totRes)}</b></div></div>
+        <div class="hbtns"><input class="search" data-bq="1" value="${esc(UI.bq || '')}" placeholder="Cerca numero o nome" aria-label="Cerca un buono">${canNew ? `<button class="btn primary" data-act="bnew">${ICON.plus} Nuovo buono</button>` : ''}</div></div>
+      <div class="seg bu-tabs" role="tablist"><button role="tab" data-act="btab" data-v="att" aria-pressed="${!arch}">Attivi</button><button role="tab" data-act="btab" data-v="arch" aria-pressed="${arch}">Archivio buoni · spesi o annullati</button></div>
+      <section class="box tablecard"><div class="tscroll"><table class="rt bu-t"><thead><tr><th>N° pratica</th><th>Data</th><th>Chi riceve il buono</th><th class="r">${arch ? 'Importo' : 'Ancora da spendere'}</th><th>Chi fa il buono</th>${arch ? '<th>Speso</th>' : ''}<th></th></tr></thead><tbody>
+        ${L.map(b => { const lu = arch ? lastUse(b) : null; return `<tr${b.ann ? ' class="gone"' : ''}><td><b class="bu-n">${esc(b.num)}</b></td><td>${esc(fmtDate(b.day || String(b.at).slice(0, 10)))}</td><td><b>${esc(b.dest || '—')}</b></td>
+          <td class="r">${arch ? `${money(b.importo)}${b.ann ? '<br><small>annullato</small>' : ''}` : `<b class="bu-res">${money(b.res)}</b>${b.res < (+b.importo || 0) - 0.009 ? `<br><small>su ${money(b.importo)}</small>` : ''}`}</td>
+          <td>${esc(b.from || '—')}<br><small>${esc(b.who || '')}${b.ag ? ' · ' + esc(agName(b.ag)) : ''}</small></td>${arch ? `<td>${b.ann ? 'annullato' : lu ? esc(fmtDate(lu.day)) + '<br><small>' + esc(lu.tripN || lu.desc || '') + '</small>' : '—'}</td>` : ''}
+          <td class="r"><button class="btn sm" data-act="bdet" data-id="${esc(b.id)}">Dettagli</button></td></tr>`; }).join('') || `<tr><td colspan="${arch ? 7 : 6}" class="emptyrow">${q ? 'Nessun buono trovato' : arch ? 'Nessun buono speso o annullato' : 'Nessun buono attivo: premi «Nuovo buono»'}</td></tr>`}
+      </tbody></table></div></section>
+      <div class="small bu-help">Il buono si incassa quando si crea (va nel resoconto di cassa come «BuonoRegalo»). Quando il cliente paga un viaggio, nell'incasso scegli <b>Buono regalo</b> e il numero del buono: l'importo si scala da solo. Un buono si può usare anche in più volte, finché arriva a zero; poi passa nell'archivio.</div>`;
+  }
+  function buonoModal() {
+    if (!ACC.sess.ag) return toast('Scegli prima l\'agenzia in cui lavori (in alto)');
+    UI.modal = { kind: 'buono', met: 'contanti' };
+    openModal('Nuovo buono regalo', `<div class="bu-f">
+      <div class="field"><label>N° pratica</label><div class="bu-num">${esc(buonoNum(ACC.sess.ag))} <small>si assegna da solo</small></div></div>
+      <div class="field"><label for="bu-dest">Chi riceve il buono</label><input id="bu-dest" autocomplete="off" placeholder="es. Rossi Maria"></div>
+      <div class="grid2"><div class="field"><label for="bu-from">Chi fa il buono (paga)</label><input id="bu-from" autocomplete="off" placeholder="es. Bianchi Ugo"></div><div class="field"><label for="bu-tel">Telefono di chi lo fa <small>facoltativo</small></label><input id="bu-tel" inputmode="tel" autocomplete="off"></div></div>
+      <div class="field"><label for="bu-imp">Importo del buono</label><input id="bu-imp" class="pay-imp" inputmode="decimal" placeholder="0,00" autocomplete="off"></div>
+      <div class="field"><label>Pagato con</label><div class="pay-met" role="radiogroup" aria-label="Pagato con">${METODI.filter(([k]) => k !== 'buono' && k !== 'voucher').map(([k, l]) => `<button type="button" role="radio" data-act="bmet" data-k="${k}" aria-checked="${k === 'contanti'}">${l}</button>`).join('')}</div></div>
+      <div class="field"><label for="bu-note">Note <small>facoltative</small></label><input id="bu-note" autocomplete="off" placeholder="es. regalo di compleanno"></div>
+      <div class="small">L'incasso va nella <b>${esc(cassaName(ACC.sess.ag))}</b>, registrato da <b>${esc(ACC.me().name)}</b>.</div></div>`,
+      `<button class="btn" data-act="close">Annulla</button><button class="btn primary" data-act="bsave">Crea il buono e incassa</button>`);
+  }
+  function buonoSave() {
+    const dest = ($('#bu-dest').value || '').trim(), from = ($('#bu-from').value || '').trim(), imp = parseEuro($('#bu-imp').value);
+    if (!dest) return toast('Scrivi chi riceve il buono'); if (!from) return toast('Scrivi chi fa il buono'); if (!imp || imp <= 0) return toast('Scrivi l\'importo del buono');
+    const ag = ACC.sess.ag; const num = buonoNum(ag); const id = 'b' + uid(); const met = UI.modal.met || 'contanti'; const note = ($('#bu-note').value || '').trim();
+    const mv = addMov({ tipo: 'buono', cat: 'BuonoRegalo', doc: 'nessuno', cliente: from.toUpperCase(), desc: `buono regalo ${num} per ${dest}`.toLowerCase(), note: `Buono ${num}${note ? ' · ' + note : ''}`, buonoId: id, parts: [{ m: met, a: r2(imp) }], sigla: sigla(ACC.sess.uid, ACC.me().name) });
+    const cur = JSON.parse(JSON.stringify(STORE.get(BPATH) || { buoni: {} })); cur.buoni = cur.buoni || {}; const now = tick();
+    cur.buoni[id] = { id, num, at: mv.at, day: mv.day, dest, from, tel: ($('#bu-tel').value || '').trim(), importo: r2(imp), note, who: ACC.me().name, uid: ACC.sess.uid, ag, movId: mv.id, u: now }; cur.u = now;
+    STORE.put(BPATH, cur);
+    ACC.tlog('info', `Buono regalo ${num} · ${money(imp)} (${MET_L[met]}) · per ${dest}, fatto da ${from}`);
+    closeModal(); UI.btab = 'att'; render(); toast(`Buono ${num} creato: ${money(imp)} per ${dest}`);
+  }
+  function buonoDet(id) {
+    const b = buonoById(id); if (!b) return; const res = buonoRes(b); const uses = buonoUses(b.id); const ann = buonoAnnullato(b);
+    UI.modal = { kind: 'bdet', id };
+    openModal(`Buono ${esc(b.num)}`, `<div class="bu-d">
+      <div class="bu-dt"><div><span>Chi riceve</span><b>${esc(b.dest || '—')}</b></div><div><span>Chi fa il buono</span><b>${esc(b.from || '—')}</b>${b.tel ? `<small>${esc(b.tel)}</small>` : ''}</div><div><span>Creato</span><b>${esc(fmtDate(b.day))}</b><small>${esc(b.who || '')}${b.ag ? ' · ' + esc(agName(b.ag)) : ''}</small></div></div>
+      <div class="pay-sum"><div><span>Importo</span><b>${money(b.importo)}</b></div><div><span>Speso</span><b>${money(ann ? 0 : buonoUsed(b.id))}</b></div><div class="hi"><span>${ann ? 'Annullato' : 'Ancora da spendere'}</span><b>${money(res)}</b></div></div>
+      ${b.note ? `<div class="small">Note: ${esc(b.note)}</div>` : ''}
+      <h3 class="bu-h">Dove è stato usato</h3>
+      ${uses.length ? `<div class="pay-hist">${uses.map(m => { const a = r2((m.parts || []).filter(p => p.m === 'buono' && p.buono === b.id).reduce((x, p) => x + p.a, 0)); return `<div class="${a < 0 ? 'neg' : ''}"><span>${esc(fmtDate(m.day).slice(0, 5))} · ${esc(m.tripN || m.desc || '')}<br><small>${esc(m.cliente || '')} · ${esc(m.who || '')}${m.ag ? ' · ' + esc(agName(m.ag)) : ''}${a < 0 ? ' · storno' : ''}</small></span><b>${money(a)}</b></div>`; }).join('')}</div>` : '<div class="small">Non ancora usato.</div>'}</div>`,
+      `<button class="btn" data-act="close">Chiudi</button>`);
+  }
+  // ---- nel riquadro dell'incasso: scegliere il buono con cui si paga ----
+  const buonoPart = f => (f.met === 'buono' ? +f.imp || 0 : f.met === 'misto' ? +(f.mix || {}).buono || 0 : 0);
+  function buonoPayHTML(f) {
+    if (f.met !== 'buono' && !(f.met === 'misto' && +(f.mix || {}).buono > 0)) return '';
+    const b = f.buono && buonoById(f.buono);
+    if (b) { const res = buonoRes(b); const over = buonoPart(f) > res + 0.009;
+      return `<div class="bu-pick sel"><div><span class="pp-l">Buono regalo</span><b>${esc(b.num)}</b> · per ${esc(b.dest || '—')}<br><small>ancora da spendere <b>${money(res)}</b>${buonoPart(f) ? ` · dopo questo incasso restano <b>${money(Math.max(0, res - buonoPart(f)))}</b>` : ''}</small>${over ? `<div class="bu-warn">Il buono copre solo ${money(res)}: scegli «Misto» e paga il resto con un altro metodo.</div>` : ''}</div><button type="button" class="btn sm ghost" data-act="bclr">Cambia</button></div>`; }
+    const q = String(f.bq || '').trim().toLowerCase();
+    const L = buoniAll().map(x => Object.assign({}, x, { res: buonoRes(x) })).filter(x => x.res > 0.009 && (!q || [x.num, x.dest, x.from].some(v => String(v || '').toLowerCase().includes(q)))).sort((a, c) => String(c.at).localeCompare(String(a.at))).slice(0, 6);
+    return `<div class="bu-pick"><label class="pp-1">Quale buono regalo?<input data-bpq="1" value="${esc(f.bq || '')}" placeholder="numero (es. RAG-26-001) o nome" autocomplete="off"></label>
+      <div class="bu-list">${L.map(x => `<button type="button" data-act="bsel" data-id="${esc(x.id)}"><b>${esc(x.num)}</b><span>${esc(x.dest || '—')}</span><i>${money(x.res)}</i></button>`).join('') || `<div class="small">${q ? 'Nessun buono attivo trovato' : 'Nessun buono attivo'}</div>`}</div></div>`;
+  }
+  function buonoPick(id) {
+    const f = UI.pay && UI.pay.f; const b = buonoById(id); if (!f || !b) return; const res = buonoRes(b);
+    f.buono = id;
+    if (f.met === 'buono') { const want = f.rest != null && f.rest > 0 ? f.rest : +f.imp || res; if (want > res + 0.009) { f.imp = res; toast(`Il buono copre ${money(res)}: per il resto scegli «Misto»`); } else if (!(+f.imp > 0)) f.imp = r2(want); }
+    else if (f.met === 'misto' && +f.mix.buono > res) { f.mix.buono = res; toast(`Il buono copre ${money(res)}: il resto va con un altro metodo`); }
+    render();
+  }
+  // controllo prima di registrare l'incasso; restituisce un messaggio se qualcosa non va
+  function buonoCheck(f, parts) {
+    const bp = parts.filter(p => p.m === 'buono'); if (!bp.length) return '';
+    const b = f.buono && buonoById(f.buono); if (!b) return 'Scegli il buono regalo con cui paga il cliente';
+    const tot = r2(bp.reduce((a, p) => a + p.a, 0)); const res = buonoRes(b); if (tot > res + 0.009) return `Il buono ${b.num} copre solo ${money(res)}`;
+    bp.forEach(p => { p.buono = b.id; p.bnum = b.num; }); return '';
+  }
+  document.addEventListener('click', e => {
+    const el = e.target.closest && e.target.closest('[data-act="ctabc"],[data-act="btab"],[data-act="bnew"],[data-act="bsave"],[data-act="bdet"],[data-act="bmet"],[data-act="bsel"],[data-act="bclr"]'); if (!el) return;
+    const a = el.dataset.act;
+    if (a === 'ctabc') { UI.ctabC = el.dataset.v; render(); window.scrollTo(0, 0); }
+    else if (a === 'btab') { UI.btab = el.dataset.v; render(); }
+    else if (a === 'bnew') { if (ACC.can('cassa') && !ACC.can('readonly')) buonoModal(); }
+    else if (a === 'bsave') { if (ACC.can('cassa') && !ACC.can('readonly')) buonoSave(); }
+    else if (a === 'bdet') buonoDet(el.dataset.id);
+    else if (a === 'bmet') { if (UI.modal) UI.modal.met = el.dataset.k; $$('[data-act="bmet"]').forEach(x => x.setAttribute('aria-checked', String(x === el))); }
+    else if (a === 'bsel') buonoPick(el.dataset.id);
+    else if (a === 'bclr') { if (UI.pay) { UI.pay.f.buono = ''; render(); } }
+  });
+  document.addEventListener('input', e => {
+    const el = e.target;
+    if (el.dataset && el.dataset.bq) { UI.bq = el.value; clearTimeout(el._t); el._t = setTimeout(render, 200); }
+    else if (el.dataset && el.dataset.bpq && UI.pay) { UI.pay.f.bq = el.value; clearTimeout(el._t); el._t = setTimeout(() => { const box = $('#pp-buono'); if (box) { box.innerHTML = buonoPayHTML(UI.pay.f); const i = box.querySelector('[data-bpq]'); if (i) { i.focus(); i.selectionStart = i.selectionEnd = i.value.length; } } }, 150); }
+  });
 
   // ---------- «Apri in Danea»: la fattura preparata nell'app diventa un file Easyfatt-Xml ----------
   // Facendo doppio clic sul file scaricato (oppure in Danea: Documenti › Utilità › Importa documenti Easyfatt-Xml)
@@ -4532,6 +4683,246 @@
     }
   });
 
+  // ---------- lista chiusa, tasto «Indietro» e cronologia (2.1.5) ----------
+  ICON.lock = I('<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>');
+  ICON.unlock = I('<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 7.7-1.5"/>');
+  ICON.undo = I('<path d="M9 14L4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-3"/>');
+  ICON.hist = I('<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/>');
+  const isMaster = () => ACC.can('settings');
+  const hmS = ms => { const d = new Date(+ms); return isNaN(d) ? '' : `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
+  const ddS = ms => { const d = new Date(+ms); return isNaN(d) ? '' : `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}`; };
+
+  // ---- 1. lista chiusa: niente nuove prenotazioni (chiude e riapre solo il Master) ----
+  // Restano possibili: correggere i dati, completare i nomi che mancano nelle comitive, sistemare i posti,
+  // incassare e scrivere nella lista d'attesa.
+  // riga vuota che serve a completare una comitiva già prenotata («Rossi x 3» con un nome che manca)
+  function isSlotRow(t, r) {
+    const rows = listRows(t, listKey(t, r)); const i = rows.indexOf(r); if (i < 0) return false;
+    let k = i - 1, gap = 1; while (k >= 0 && isEmptyRow(rows[k])) { k--; gap++; }
+    if (k < 0) return false;
+    const bk = deriveBookings(t).find(b => b.persone.some(p => p.id === rows[k].id)); return !!(bk && bk.mancano && gap <= bk.mancano);
+  }
+  // le righe vuote in fondo alla lista non si vedono quando la lista è chiusa
+  function rowsShown(t, rows) {
+    if (!t.chiusa) return rows; let n = rows.length;
+    while (n > 0 && isEmptyRow(rows[n - 1]) && !isSlotRow(t, rows[n - 1])) n--;
+    return rows.slice(0, n);
+  }
+  const closedMsg = t => `Lista chiusa${t.chiusa && t.chiusa.by ? ' da ' + t.chiusa.by : ''}: non si prendono nuove prenotazioni${isMaster() ? '' : ' (la riapre il Master)'}`;
+  function lockBtnHTML(t) {
+    if (tripCat(t) === 'biglietteria' && !t.chiusa && !isMaster()) return '';
+    if (isMaster()) return `<button class="btn sm ${t.chiusa ? 'lk-on' : 'ghost'}" data-act="tlock" title="${t.chiusa ? 'Riapri la lista: si possono di nuovo prendere prenotazioni' : 'Chiudi la lista: niente nuove prenotazioni'}">${t.chiusa ? ICON.lock + ' Lista chiusa · riapri' : ICON.unlock + ' Chiudi la lista'}</button>`;
+    return t.chiusa ? `<span class="pill lk-pill">${ICON.lock} Lista chiusa</span>` : '';
+  }
+  function closedBannerHTML(t) {
+    if (!t.chiusa) return '';
+    const c = t.chiusa;
+    return `<div class="lk-ban" role="status">${ICON.lock}<div><b>Lista chiusa</b><span>Chiusa da ${esc(c.by || '—')}${c.ag ? ' (' + esc(agName(c.ag)) + ')' : ''} il ${esc(ddS(c.at))} alle ${esc(hmS(c.at))}: non si prendono nuove prenotazioni. Si possono ancora correggere i dati, completare i nomi delle comitive, sistemare i posti, incassare e usare la lista d'attesa.</span></div></div>`;
+  }
+  function toggleLock(t) {
+    if (!isMaster()) return toast('Solo il Master può chiudere o riaprire la lista');
+    const me = ACC.me();
+    if (t.chiusa) { delete t.chiusa; ACC.tlog('avviso', `Lista riaperta · ${t.nome} (${t.data})`); toast('Lista riaperta: si possono di nuovo prendere prenotazioni'); }
+    else { t.chiusa = { by: me ? me.name : '', ag: ACC.sess && ACC.sess.ag || '', at: Date.now() }; ACC.tlog('avviso', `Lista chiusa · ${t.nome} (${t.data}): niente nuove prenotazioni`); toast('Lista chiusa: niente nuove prenotazioni'); }
+    commit();
+  }
+  const LK_ACTS = { attconf: 'confermare dalla lista d\'attesa', annrest: 'rimettere nella lista chi non partiva più', rowins: 'aggiungere righe' };
+  window.addEventListener('click', e => {
+    const el = e.target.closest && e.target.closest('[data-act]'); if (!el) return; const a = el.dataset.act;
+    const t = UI.view === 'trip' ? trip() : null; if (!t) return;
+    if (a === 'tlock') { e.stopImmediatePropagation(); closePop(); toggleLock(t); return; }
+    if (!t.chiusa) return;
+    if (LK_ACTS[a] || (a === 'doimport' && UI.modal && UI.modal.mode !== 'new')) { e.preventDefault(); e.stopImmediatePropagation(); closePop(); toast(`${closedMsg(t)}: per ${LK_ACTS[a] || 'importare la lista'} va riaperta`); }
+  }, true);
+  // scrivere in una riga vuota della lista chiusa (che non completa una comitiva) = prenotazione nuova
+  window.addEventListener('input', e => {
+    const el = e.target; const d = el.dataset || {}; if (!d.r) return; const t = UI.view === 'trip' ? trip() : null; if (!t || !t.chiusa) return;
+    const r = rowById(t, d.r); if (!r || !isEmptyRow(r) || isSlotRow(t, r)) return;
+    e.stopImmediatePropagation(); el.value = ''; el.blur(); toast(closedMsg(t));
+  }, true);
+
+  // ---- 2. tasto «Indietro» e cronologia della lista e della piantina ----
+  // Indietro: annulla le ultime modifiche fatte da QUESTO computer (solo le righe o i posti toccati, senza
+  // cancellare quello che hanno fatto gli altri nel frattempo).
+  // Cronologia: le versioni salvate da tutti i computer, con chi le ha fatte e da quale agenzia; si può
+  // ripristinare una versione intera. Con il lucchetto chiuso Indietro e Ripristina li usa solo il Master.
+  // Dove stanno: /cronologia/<viaggio>/<computer>.json è l'elenco delle versioni (piccolo, arriva a tutti);
+  // il contenuto di ogni versione è un file a parte (/cronologia/<viaggio>/<versione>.ver) che si scarica
+  // solo quando serve, così l'archivio non si appesantisce.
+  const H = { undo: new Map(), burst: new Map(), applying: false, label: '' };
+  const HSEC_L = { lista: 'lista', posti: 'piantina' };
+  const histCan = t => !(t && t.histLock) || isMaster();
+  const clean = x => JSON.parse(JSON.stringify(x || null, (k, v) => (k === 'u' || k === 'uf' || k === 'by' || k === 'bya' || k === 'bookings' ? undefined : v)));
+  const snapOf = (d, sec) => sec === 'lista'
+    ? { rows: clean(d.rows || []), attesa: clean(d.attesa || []), annullati: clean(d.annullati || []) }
+    : { buses: (d.buses || []).map(b => ({ id: b.id, label: b.label, seats: Object.fromEntries(Object.entries(b.seats || {}).map(([s, a]) => [s, clean(Object.assign({}, a, { b: undefined }))])) })) };
+  // chi ha fatto per ultimo la versione di partenza (per la versione «com'era prima»)
+  function lastEditor(d, sec) {
+    let best = { u: 0, by: '', ag: '' };
+    const see = x => { if (x && (+x.u || 0) > best.u && x.by) best = { u: +x.u, by: x.by, ag: x.bya || '' }; };
+    if (sec === 'lista') ['rows', 'attesa', 'annullati'].forEach(k => (d[k] || []).forEach(see));
+    else (d.buses || []).forEach(b => Object.values(b.seats || {}).forEach(see));
+    return best;
+  }
+  const LIST_L = { rows: 'lista', attesa: 'lista d\'attesa', annullati: 'non partono più' };
+  const F_L = { cognome: 'cognome', nome: 'nome', nascita: 'data', tel: 'contatto', natoA: 'luogo di nascita', part: 'partenza', hotel: 'hotel', cam: 'camera', fila: 'fila', note: 'note', pagato: '€', bus: 'bus', stato: 'stato' };
+  const nmOf = x => `${String(x.cognome || '').replace(RX, '$1').trim()} ${x.nome || ''}`.trim() || 'riga senza nome';
+  const few = (a, n = 3) => a.length <= n ? a.join(', ') : a.slice(0, n).join(', ') + ` e altri ${a.length - n}`;
+  function sumLista(a, b) {
+    const flat = s => { const m = new Map(); ['rows', 'attesa', 'annullati'].forEach(k => (s[k] || []).forEach((x, i) => m.set(x.id, { k, i, x }))); return m; };
+    const A = flat(a), B = flat(b); const add = [], del = [], mov = [], chg = [];
+    B.forEach((v, id) => { const o = A.get(id); if (!o) { if (!isEmptyRow(v.x)) add.push(nmOf(v.x)); return; } if (o.k !== v.k) { mov.push(`${nmOf(v.x)} in ${LIST_L[v.k]}`); return; }
+      if (JSON.stringify(o.x) !== JSON.stringify(v.x)) { const f = [...new Set([...Object.keys(o.x), ...Object.keys(v.x)])].filter(k => k !== 'id' && JSON.stringify(o.x[k]) !== JSON.stringify(v.x[k])).map(k => F_L[k] || k);
+        if (f.length) chg.push(`${nmOf(isEmptyRow(v.x) ? o.x : v.x)} (${few(f, 2)})`); } });
+    A.forEach((v, id) => { if (!B.has(id) && !isEmptyRow(v.x)) del.push(nmOf(v.x)); });
+    const p = []; if (add.length) p.push(`aggiunt${add.length > 1 ? 'i' : 'o'} ${few(add)}`); if (del.length) p.push(`tolt${del.length > 1 ? 'i' : 'o'} ${few(del)}`); if (mov.length) p.push(`spostat${mov.length > 1 ? 'i' : 'o'} ${few(mov, 2)}`); if (chg.length) p.push(`cambiat${chg.length > 1 ? 'i' : 'o'} ${few(chg, 2)}`);
+    return p.join(' · ') || 'ordine delle righe';
+  }
+  function sumPosti(a, b, t) {
+    const nm = pid => { if (pid === 'res') return 'riserva guida'; const r = t && (t.rows.find(x => x.id === pid)); return r ? `${String(r.cognome || '').replace(RX, '$1').trim()} ${String(r.nome || '').slice(0, 1)}${r.nome ? '.' : ''}`.trim() : 'persona tolta'; };
+    const out = []; const multi = (b.buses || []).length > 1;
+    (b.buses || []).forEach(bb => {
+      const ba = (a.buses || []).find(x => x.id === bb.id) || { seats: {} };
+      const pos = s => { const m = {}; Object.entries(s || {}).forEach(([k, v]) => { const id = v.pid || (v.res ? 'res' : ''); if (id) (m[id] = m[id] || []).push(+k); }); return m; };
+      const pa = pos(ba.seats), pb = pos(bb.seats); const L = [];
+      Object.keys(pb).forEach(id => { const x = (pa[id] || []).sort((p, q) => p - q).join(','), y = pb[id].sort((p, q) => p - q).join(','); if (x === y) return; L.push(x ? `${nm(id)} dal ${fmtSeats(pa[id])} al ${fmtSeats(pb[id])}` : `${nm(id)} al ${fmtSeats(pb[id])}`); });
+      Object.keys(pa).forEach(id => { if (!pb[id]) L.push(`tolto ${nm(id)} dal ${fmtSeats(pa[id])}`); });
+      const notes = Object.keys(bb.seats || {}).filter(s => ((ba.seats || {})[s] || {}).np !== (bb.seats[s] || {}).np && (ba.seats || {})[s] && bb.seats[s]).length; if (notes) L.push(notes === 1 ? 'nota sul posto' : `${notes} note sui posti`);
+      if (L.length) out.push((multi ? bb.label + ': ' : '') + few(L, 3));
+    });
+    return out.join(' · ') || 'posti';
+  }
+  const sumOf = (sec, a, b, t) => (sec === 'lista' ? sumLista(a, b) : sumPosti(a, b, t));
+  // ogni salvataggio di un viaggio fatto da questo computer passa da qui (vedi flush in m_state.js)
+  function histNote(t, prev, cur) {
+    if (!prev || !cur || prev.deleted || !ACC.sess) return;
+    ['lista', 'posti'].forEach(sec => {
+      const a = snapOf(prev, sec), b = snapOf(cur, sec); const ja = JSON.stringify(a), jb = JSON.stringify(b); if (ja === jb) return;
+      const now = Date.now();
+      if (!H.applying) {
+        const st = H.undo.get(t.id) || []; const last = st[st.length - 1];
+        if (last && last.sec === sec && now - last.at < 2500 && !H.label && !last.label) { last.after = b; last.at = now; } else st.push({ sec, before: a, after: b, at: now, label: H.label || '' });
+        while (st.length > 60) st.shift(); H.undo.set(t.id, st);
+      }
+      const key = t.id + '|' + sec; let B = H.burst.get(key);
+      if (!B) { B = { tid: t.id, sec, start: a, jstart: ja, first: now, base: lastEditor(prev, sec) }; H.burst.set(key, B); }
+      B.last = b; if (H.label) B.label = H.label;
+      clearTimeout(B.tm); B.tm = setTimeout(() => histCapture(key), H.label || now - B.first > 60000 ? 50 : 8000);
+    });
+    histBtns();
+  }
+  const hashS = s => hash36(s);
+  const idxPath = tid => `/cronologia/${tid}/${STORE.device.id}.json`;
+  function histList(tid, sec) {
+    return STORE.list(`/cronologia/${tid}/`).flatMap(([p, d]) => ((d && d.v) || []).map(v => Object.assign({ dev: d.dev || p.split('/').pop().replace('.json', '') }, v)))
+      .filter(v => !sec || v.sec === sec).sort((a, b) => (+b.at || 0) - (+a.at || 0));
+  }
+  function saveVersion(tid, sec, snap, meta) {
+    const id = 'v' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); const js = JSON.stringify(snap);
+    STORE.putBlob(`/cronologia/${tid}/${id}.ver`, new Blob([js], { type: 'application/json' }));
+    const cur = JSON.parse(JSON.stringify(STORE.get(idxPath(tid)) || { dev: STORE.device.id, v: [] })); cur.v = cur.v || [];
+    cur.v.push(Object.assign({ id, sec, h: hashS(js), kb: Math.round(js.length / 102.4) / 10 }, meta));
+    // ogni computer tiene le ultime 150 versioni di ogni viaggio
+    while (cur.v.length > 150) { const x = cur.v.shift(); STORE.delBlob(`/cronologia/${tid}/${x.id}.ver`).catch(() => {}); }
+    cur.u = Date.now(); STORE.put(idxPath(tid), cur);
+  }
+  function histCapture(key) {
+    const B = H.burst.get(key); if (!B) return; H.burst.delete(key);
+    try {
+      const jl = JSON.stringify(B.last); if (jl === B.jstart) return;
+      const last = histList(B.tid, B.sec)[0]; const t = S.trips.find(x => x.id === B.tid);
+      // la prima volta (o se nel frattempo è cambiato qualcosa che non era salvato) si salva anche com'era prima
+      if (!last || last.h !== hashS(B.jstart)) saveVersion(B.tid, B.sec, B.start, { at: B.base.u || B.first - 1, by: B.base.by || '', ag: B.base.ag || '', txt: 'Com\'era prima di queste modifiche', base: 1 });
+      const me = ACC.me();
+      saveVersion(B.tid, B.sec, B.last, { at: Date.now(), by: me ? me.name : '', ag: ACC.sess && ACC.sess.ag || '', txt: (B.label ? B.label + ' · ' : '') + sumOf(B.sec, B.start, B.last, t) });
+    } catch (e) { DIAG.ev('errore', 'Cronologia non salvata: ' + e.message, { stack: e.stack }); }
+  }
+  // ---- applicare una versione o annullare una modifica ----
+  const cp = x => JSON.parse(JSON.stringify(x));
+  function applyLista(t, snap) { t.rows = cp(snap.rows || []); t.attesa = cp(snap.attesa || []); t.annullati = cp(snap.annullati || []); ensureBlank(t); }
+  function applyPosti(t, snap) { (snap.buses || []).forEach(sb => { const b = t.buses.find(x => x.id === sb.id); if (b) b.seats = cp(sb.seats || {}); }); }
+  // inverso di un passo: solo le righe o i posti che quel passo aveva cambiato
+  function undoStep(t, st) {
+    if (st.sec === 'posti') {
+      (st.after.buses || []).forEach(ab => { const bb = (st.before.buses || []).find(x => x.id === ab.id) || { seats: {} }; const b = t.buses.find(x => x.id === ab.id); if (!b) return;
+        new Set([...Object.keys(ab.seats || {}), ...Object.keys(bb.seats || {})]).forEach(s => { const x = (bb.seats || {})[s], y = (ab.seats || {})[s]; if (JSON.stringify(x) === JSON.stringify(y)) return; if (x) b.seats[s] = cp(x); else delete b.seats[s]; }); });
+      return;
+    }
+    const K = ['rows', 'attesa', 'annullati'];
+    const where = (s, id) => { for (const k of K) { const i = (s[k] || []).findIndex(x => x.id === id); if (i >= 0) return { k, i, x: s[k][i] }; } return null; };
+    const ids = new Set(); K.forEach(k => { (st.before[k] || []).forEach(x => ids.add(x.id)); (st.after[k] || []).forEach(x => ids.add(x.id)); });
+    ids.forEach(id => {
+      const b0 = where(st.before, id), a0 = where(st.after, id); if (b0 && a0 && b0.k === a0.k && JSON.stringify(b0.x) === JSON.stringify(a0.x)) return;
+      K.forEach(k => { const i = t[k].findIndex(x => x.id === id); if (i >= 0) t[k].splice(i, 1); });
+      if (b0) { const L = t[b0.k]; L.splice(Math.min(b0.i, L.length), 0, cp(b0.x)); }
+    });
+    ensureBlank(t);
+  }
+  function doUndo(t) {
+    if (!histCan(t)) return toast('Il tasto Indietro è bloccato dal Master');
+    flush(); const sec = UI.sec === 'posti' ? 'posti' : 'lista'; const st = H.undo.get(t.id) || [];
+    let i = st.length - 1; while (i >= 0 && st[i].sec !== sec) i--;
+    if (i < 0) return toast(`Nessuna modifica da annullare fatta da questo computer sulla ${HSEC_L[sec]}: per tornare a una versione precedente usa la Cronologia`);
+    const step = st.splice(i, 1)[0]; const txt = step.label ? step.label.toLowerCase() : sumOf(sec, step.before, step.after, t);
+    H.applying = true; H.label = 'Indietro (annullata: ' + txt + ')';
+    try { undoStep(t, step); syncAll(t); flush(); } finally { H.applying = false; H.label = ''; }
+    ACC.tlog('info', `Indietro sulla ${HSEC_L[sec]} · ${t.nome} (${t.data}) · annullato: ${txt}`);
+    render(); toast(`Annullato: ${txt}`);
+  }
+  async function restoreVersion(t, v) {
+    if (!histCan(t)) return toast('Il ripristino è bloccato dal Master');
+    let snap = null;
+    try { const bl = await STORE.getBlob(`/cronologia/${t.id}/${v.id}.ver`); if (bl) snap = JSON.parse(await bl.text()); } catch (e) { snap = null; }
+    if (!snap) return toast('Non riesco a leggere questa versione: serve internet per scaricarla');
+    flush(); const sec = v.sec; const cur = snapOf(persistForm(t), sec);
+    if (JSON.stringify(cur) === JSON.stringify(snap)) return toast('La ' + HSEC_L[sec] + ' è già uguale a questa versione');
+    const diff = sumOf(sec, cur, snap, t);
+    let warn = '';
+    if (sec === 'lista') { const ids = new Set((snap.rows || []).map(x => x.id)); const paid = deriveBookings(t).filter(bk => !ids.has(bk.id) && paidMovs(t.id, bk.id) > 0); if (paid.length) warn = `<div class="warnbox" style="margin-top:10px">Attenzione: ${paid.map(bk => esc(bkName(bk))).join(', ')} ${paid.length === 1 ? 'ha' : 'hanno'} incassi registrati e con questa versione ${paid.length === 1 ? 'esce' : 'escono'} dalla lista. Gli incassi restano nel resoconto.</div>`; }
+    closeModal();
+    confirmBox(`Ripristina la ${HSEC_L[sec]}`, `Versione di <b>${esc(v.by || (v.base ? 'Versione di partenza' : '—'))}</b>${v.ag ? ' (' + esc(agName(v.ag)) + ')' : ''} del ${esc(ddS(v.at))} alle ${esc(hmS(v.at))}: «${esc(v.txt || '')}».<br><br>La ${HSEC_L[sec]} torna com'era allora. Cosa cambia rispetto a adesso: <b>${esc(diff)}</b>.<br><small>Le modifiche fatte dopo restano nella cronologia, se servono.</small>${warn}`, 'Ripristina', () => {
+      // il ripristino si può annullare con Indietro
+      H.label = `Ripristinata la versione ${v.by ? 'di ' + v.by + ' ' : ''}delle ${hmS(v.at)} del ${ddS(v.at)}`;
+      try { if (sec === 'lista') applyLista(t, snap); else applyPosti(t, snap); syncAll(t); flush(); } finally { H.label = ''; }
+      ACC.tlog('avviso', `Ripristinata la ${HSEC_L[sec]} · ${t.nome} (${t.data}) · versione di ${v.by || '—'} del ${ddS(v.at)} alle ${hmS(v.at)}`);
+      render(); toast(`${sec === 'lista' ? 'Lista ripristinata' : 'Piantina ripristinata'}: versione di ${v.by || '—'} delle ${hmS(v.at)}`);
+    });
+  }
+  function histModal(t) {
+    flush(); Object.keys(Object.fromEntries(H.burst)).forEach(k => { if (k.startsWith(t.id + '|')) histCapture(k); });
+    const sec = UI.sec === 'posti' ? 'posti' : 'lista'; const L = histList(t.id, sec); const can = histCan(t);
+    UI.modal = { kind: 'hist', tripId: t.id, sec };
+    const days = []; L.forEach(v => { const d = ddS(v.at); let g = days.find(x => x.d === d); if (!g) days.push(g = { d, v: [] }); g.v.push(v); });
+    openModal(`Cronologia della ${HSEC_L[sec]}`, `<div class="hi-top"><span>${esc(t.nome)} · ${esc(fmtTripDate(t))}</span>${t.histLock ? `<span class="pill lk-pill">${ICON.lock} Indietro e Ripristina bloccati dal Master</span>` : ''}</div>
+      ${L.length ? days.map(g => `<div class="hi-day">${esc(g.d)}</div>${g.v.map((v, i) => `<div class="hi-v${v === L[0] ? ' now' : ''}"><div class="hi-t">${esc(hmS(v.at))}</div><div class="hi-b"><div class="hi-w"><b>${esc(v.by || (v.base ? 'Versione di partenza' : '—'))}</b>${v.ag ? `<span class="code">${esc(agName(v.ag))}</span>` : ''}${v === L[0] ? '<span class="pill ok">ultima versione</span>' : ''}</div><div class="hi-x">${esc(v.txt || '')}</div></div>${v === L[0] ? '' : `<button class="btn sm" data-act="hrest" data-id="${esc(v.id)}"${can ? '' : ' disabled title="Bloccato dal Master"'}>Ripristina</button>`}</div>`).join('')}`).join('')
+        : `<div class="infobox">Ancora nessuna versione salvata per la ${HSEC_L[sec]} di questo viaggio. Da adesso ogni modifica viene salvata qui, con chi l'ha fatta.</div>`}`,
+      `<button class="btn" data-act="close">Chiudi</button>`, true);
+  }
+  function histBarHTML(t) {
+    const sec = UI.sec === 'posti' ? 'posti' : 'lista'; const st = (H.undo.get(t.id) || []).filter(x => x.sec === sec); const can = histCan(t);
+    const last = st[st.length - 1];
+    return `<div class="hbar" role="group" aria-label="Indietro e cronologia">
+      <button class="btn sm" id="h-undo" data-act="hundo"${!st.length || !can ? ' disabled' : ''} title="${!can ? 'Bloccato dal Master' : last ? 'Annulla: ' + esc(sumOf(sec, last.before, last.after, t)) : 'Nessuna modifica da annullare fatta da questo computer'}">${ICON.undo} Indietro</button>
+      <button class="btn sm" data-act="hlist">${ICON.hist} Cronologia</button>
+      ${isMaster() ? `<button class="btn sm ${t.histLock ? 'lk-on' : 'ghost'} ico-only" data-act="hlock" title="${t.histLock ? 'Sblocca: anche gli operatori possono usare Indietro e Ripristina' : 'Blocca Indietro e Ripristina per gli operatori'}" aria-label="${t.histLock ? 'Sblocca Indietro' : 'Blocca Indietro'}">${t.histLock ? ICON.lock : ICON.unlock}</button>` : t.histLock ? `<span class="lk-ico" title="Indietro e Ripristina bloccati dal Master">${ICON.lock}</span>` : ''}</div>`;
+  }
+  // aggiorna i pulsanti senza ridisegnare la pagina (si chiama a ogni salvataggio)
+  function histBtns() { const t = UI.view === 'trip' && trip(); const el = $('.hbar'); if (t && el) el.outerHTML = histBarHTML(t); }
+  window.addEventListener('click', e => {
+    const el = e.target.closest && e.target.closest('[data-act="hundo"],[data-act="hlist"],[data-act="hlock"],[data-act="hrest"]'); if (!el) return;
+    e.stopImmediatePropagation(); const t = trip(); if (!t) return; const a = el.dataset.act;
+    if (a === 'hundo') doUndo(t);
+    else if (a === 'hlist') histModal(t);
+    else if (a === 'hlock') { if (!isMaster()) return; if (t.histLock) { delete t.histLock; ACC.tlog('avviso', `Sbloccato Indietro · ${t.nome} (${t.data})`); toast('Indietro e Ripristina di nuovo disponibili per tutti'); } else { const me = ACC.me(); t.histLock = { by: me ? me.name : '', at: Date.now() }; ACC.tlog('avviso', `Bloccato Indietro · ${t.nome} (${t.data})`); toast('Indietro e Ripristina bloccati: li usa solo il Master'); } commit(); }
+    else if (a === 'hrest') { const v = histList(t.id).find(x => x.id === el.dataset.id); if (v) restoreVersion(t, v); }
+  }, true);
+  // Ctrl+Z / ⌘+Z fuori dai campi di testo = Indietro
+  document.addEventListener('keydown', e => {
+    if (!(e.key === 'z' || e.key === 'Z') || !(e.ctrlKey || e.metaKey) || e.shiftKey) return; const tg = e.target;
+    if (tg && (tg.tagName === 'INPUT' || tg.tagName === 'TEXTAREA' || tg.isContentEditable)) return; if ($('#modal-root').innerHTML || $('.paymodal')) return;
+    const t = UI.view === 'trip' && trip(); if (!t) return; e.preventDefault(); doUndo(t);
+  });
+
   // ---------- render ----------
   const FOCUS_KEYS = ['note', 'st', 'depsel', 'hq', 'aq', 'r', 'ar', 'nr', 'f', 'q', 'qs', 'qt', 'tf', 'dep2', 'dep', 'k', 'bind', 'cl', 'cfgag', 'cfgl', 'pf', 'pl', 'pff', 'pfm', 'usig'];
   const ACT_PERM = { unew: 'users', unewm: 'tech', ureset: 'users', usave: 'users', resetall: 'tech', doresetall: 'tech', savekeys: 'tech', wipelocal: 'tech', lgf: 'tech', lexport: 'tech', diagexport: 'tech', lnew: 'settings', ldel: 'settings', savewa: 'settings', savetel: 'settings', savedanea: 'settings', savert: 'settings', savesuppl: 'settings', filaset: 'viaggi', export: 'settings', pay: 'cassa', paypanel: 'viaggi', paywho: 'viaggi', lmove: 'viaggi', lmove1: 'viaggi', detach: 'viaggi', reattach: 'viaggi', noteadd: 'viaggi', notedel: 'viaggi', suppadd: 'viaggi', suppdel: 'viaggi', pfsave: 'cassa', cashmov: 'cassa', cashsave: 'cassa', storno: 'cassa', cclose: 'cassa', ccsave: 'cassa', clnew: 'anag', cldel: 'anag', impgo: 'anag', newtrip: 'viaggi', deltrip: 'viaggi' };
@@ -4539,7 +4930,7 @@
   let lastNav = '', lastSess = '', lastGateHTML = '';
   function render() {
     const t0 = performance.now();
-    try { renderIn(); if (UI.view === 'home') alignBlocks(); if (UI.pay) setTimeout(cfRecalc, 0); presenceBeat(false); presenceCheck(); offAfterRender(); } catch (e) { DIAG.ev('errore', 'Errore nel disegnare la pagina: ' + e.message, { stack: e.stack, vista: UI.view, sezione: UI.sec }); throw e; }
+    try { renderIn(); document.body.classList.toggle('pm-open', !!$('.paymodal')); if (UI.view === 'home') alignBlocks(); if (UI.pay) setTimeout(cfRecalc, 0); presenceBeat(false); presenceCheck(); offAfterRender(); } catch (e) { DIAG.ev('errore', 'Errore nel disegnare la pagina: ' + e.message, { stack: e.stack, vista: UI.view, sezione: UI.sec }); throw e; }
     const ms = performance.now() - t0;
     const sk = ACC.sess ? `${ACC.sess.uid}|${ACC.sess.ag || ''}` : '';
     if (sk !== lastSess) { const me = ACC.me(); DIAG.ev('accesso', sk ? `Dentro come ${me ? me.name + ' (' + ROLE_L[me.role] + ')' : '?'}${ACC.sess.ag ? ' · ' + agName(ACC.sess.ag) : ''}` : 'Nessuno collegato (schermata di accesso)'); lastSess = sk; }
@@ -4668,15 +5059,17 @@
       <button data-act="annrest" data-id="${id}">Riparte: rimetti nella lista partecipanti</button>
       <button class="danger" data-act="anndel" data-id="${id}">Elimina questa riga</button>`);
   }
+  // menu del posto: stesso stile del menu della riga, diviso in Posto, Prenotazione e Togli
   function seatMenu(s, el) {
     const t = trip(), b = bus(); const a = b.seats[s]; const bk = bkById(b, a.b); const p = bk.persone.find(x => x.id === a.pid);
-    openPop(el, `<div class="ph"><b>${esc(p.cognome)} ${esc(p.nome)}</b><span>Posto ${s} · ${esc(bkName(bk))} x ${bk.full ? bk.full.persone.length : bk.persone.length}${p.tel ? ' · ' + esc(p.tel) : ''}</span></div>
-      <button data-act="mv" data-s="${s}">Sposta o scambia con un altro posto</button>
-      <button data-act="selbk" data-id="${bk.id}">Seleziona tutta la prenotazione</button>
-      <div class="npin"><input id="np-in" placeholder="Nota sul posto (es. no lattosio)" value="${esc(p.np || '')}" data-s="${s}" maxlength="40"><button class="btn sm" data-act="savenp" data-s="${s}">OK</button></div>
-      <button data-act="freeseat" data-s="${s}">Togli dal posto (resta su questo bus)</button>
-      <button data-act="unbus" data-s="${s}">Togli dal bus</button>
-      <button class="danger" data-act="freebk" data-id="${bk.id}">Togli tutta la prenotazione dal bus</button>`);
+    const n = bk.full ? bk.full.persone.length : bk.persone.length; const ss = seatsOf(b, bk.id);
+    const B = (act, ico, txt, extra = '', cls = '') => `<button class="${cls}" data-act="${act}" ${extra}>${ico}<span>${txt}</span></button>`;
+    let h = `<div class="ph"><b>${esc(p.cognome)} ${esc(p.nome)}</b><span>Posto ${s}${multiBus(t) ? ' · ' + esc(b.label) : ''}${p.tel ? ' · ' + esc(p.tel) : ''}</span></div>`;
+    h += `<div class="pm-sec"><div class="pm-t">Posto ${s}</div>${B('mv', ICON.move, 'Sposta o scambia <small>poi tocca il posto dove metterlo</small>', `data-s="${s}"`)}
+      <div class="pm-note"><label for="np-in">Nota sul posto</label><div class="npin"><input id="np-in" placeholder="es. no lattosio" value="${esc(p.np || '')}" data-s="${s}" maxlength="40"><button class="btn sm" data-act="savenp" data-s="${s}">Salva</button></div></div></div>`;
+    h += `<div class="pm-sec"><div class="pm-t">Prenotazione ${esc(bkName(bk))}${n > 1 ? ' x ' + n : ''}</div>${B('selbk', ICON.sel, `Seleziona tutta la prenotazione <small>${ss.length ? (ss.length > 1 ? 'posti ' : 'posto ') + esc(fmtSeats(ss)) : 'nessun posto'}</small>`, `data-id="${bk.id}"`)}${ACC.can('cassa') ? B('pay', ICON.euro, n > 1 ? 'Incasso di tutta la comitiva' : 'Incasso e documento', `data-id="${bk.id}"`) : ''}</div>`;
+    h += `<div class="pm-sec"><div class="pm-t">Togli</div>${B('freeseat', ICON.erase, 'Togli dal posto <small>resta su questo bus, senza posto</small>', `data-s="${s}"`)}${B('unbus', ICON.out, 'Togli dal bus <small>resta nella lista, senza bus</small>', `data-s="${s}"`)}${B('freebk', ICON.trash, n > 1 ? `Togli dal bus tutta la comitiva <small>${n} persone</small>` : 'Togli dal bus la prenotazione', `data-id="${bk.id}"`, 'danger')}</div>`;
+    openPop(el, h, 'rmenu');
   }
   const insertAt = t => { let i = t.rows.length; while (i > 0 && isEmptyRow(t.rows[i - 1])) i--; return i; };
   function moveBookingOut(t, bkId) {
@@ -4906,7 +5299,7 @@
       case 'openbus': UI.view = 'trip'; UI.tripId = el.dataset.trip; UI.busId = el.dataset.bus; UI.sel = UI.selP = null; UI.sec = 'posti'; render(); window.scrollTo(0, 0); break;
       case 'sec': UI.sec = el.dataset.v; UI.sel = UI.selP = null; UI.move = null; render(); window.scrollTo(0, 0); break;
       case 'tab': UI.busId = el.dataset.id; UI.move = null; render(); break;
-      case 'dock': if (UI.pay) { UI.pay = null; UI.dock = true; } else UI.dock = !UI.dock; render(); break;
+      case 'dock': UI.dock = !UI.dock; render(); break;
       case 'onlyfree': UI.onlyFree = el.checked; render(); break;
       case 'newtrip': tripModal(null); break;
       case 'svtoggle': { const k = el.dataset.k; const L = UI.modal && UI.modal.serv; if (!L) break; const i = L.indexOf(k); if (i >= 0) L.splice(i, 1); else L.push(k); el.classList.toggle('on', i < 0); el.setAttribute('aria-pressed', String(i < 0)); break; }
@@ -5048,6 +5441,7 @@
     if (d.r && t) { const r = rowById(t, d.r); if (r && !AC.el) upsertFromRow(r);
       if (r && d.f === 'cognome' && (d.r in OLDC)) { const oldV = OLDC[d.r]; delete OLDC[d.r]; const mo = RX.exec(String(oldV || '').trim()), mn = RX.exec(String(r.cognome || '').trim());
         const nOld = mo ? +mo[2] : (String(oldV || '').trim() ? 1 : 0), nNew = mn ? +mn[2] : 0;
+        if (nNew > 1 && nNew > nOld && t.chiusa) { r.cognome = oldV; toast(closedMsg(t) + ': la comitiva non può crescere'); save(); later(); return; }
         if (nNew > 1 && nNew > nOld) { const added = growGroup(t, r, oldV, nNew); if (added) toast(`${mn[1].trim()} x ${nNew}: ${added === 1 ? 'aggiunta 1 riga vuota' : `aggiunte ${added} righe vuote`} sotto la comitiva`); setTimeout(() => capCheck(t, listKey(t, r), `${mn[1].trim()} x ${nNew}`), 60); }
       }
       save(); later(); return; }

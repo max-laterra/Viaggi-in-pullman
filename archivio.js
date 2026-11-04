@@ -221,6 +221,7 @@
       if (path === '/config/utenti.json') return mergeMap('users');
       if (path.startsWith('/anagrafica/')) return mergeMap('clienti');
       if (path.startsWith('/controlli/')) return mergeMap('casi');
+      if (path.startsWith('/buoni/')) return mergeMap('buoni');
       if (path.startsWith('/cassa/movimenti/')) return mergeUnion('movs');
       if (path.startsWith('/registro/') && !path.startsWith('/registro/dispositivi/')) return mergeUnion('ev');
       return lww;

@@ -1,14 +1,55 @@
 VIAGGI IN PULLMAN · LA TERRA
 ============================
 
-Versione: 2.1.4
-Pacchetto creato il: 30/10/2026
+Versione: 2.1.5
+Pacchetto creato il: 04/11/2026
 
 Come installarla o aggiornarla: vedi LEGGIMI.txt.
 Aggiornamento: carica su GitHub TUTTI i file, config.js compreso (contiene già la chiave di Dropbox).
 
 MODIFICHE
 ---------
+
+VERSIONE 2.1.5 · 04/11/2026
+INCASSO AL CENTRO, INDIETRO E CRONOLOGIA, LISTA CHIUSA, BUONI REGALO
+
+1. Incasso in una finestra al centro dello schermo, con la «x» in alto a destra per chiuderla
+   (anche il tasto Esc). Si apre sia dalla lista sia dal menu di un posto della piantina.
+   Più ordinata: a sinistra chi paga, quanto resta, il documento, quanto e come paga, il pulsante;
+   a destra il dettaglio del documento (righe, totale, anteprima dello scontrino) e gli incassi
+   già registrati. Le righe del documento e gli «Altri dati» (pratica, canale, pagante, note,
+   pagato prima) sono chiusi in una riga con il riassunto: si aprono con un clic.
+   Sul telefono la finestra occupa tutto lo schermo.
+2. Tasto «Indietro» e «Cronologia», sia nella lista sia nella piantina (in alto, accanto alle schede):
+   · Indietro annulla l'ultima modifica fatta da questo computer, toccando solo le righe o i posti
+     di quella modifica (non cancella quello che hanno fatto gli altri). Anche Ctrl+Z / ⌘+Z.
+   · Cronologia: tutte le versioni salvate dai computer, divise per giorno, con ora, chi le ha
+     fatte, da quale agenzia e cosa è cambiato. «Ripristina» riporta tutta la lista (o la piantina)
+     a quella versione, dopo aver mostrato cosa cambia; anche il ripristino si annulla con Indietro.
+   · Lucchetto accanto a Cronologia (solo il Master): chiuso, Indietro e Ripristina li usa solo il Master.
+   · Ogni computer tiene le ultime 150 versioni di ogni viaggio. Il contenuto delle versioni si
+     scarica solo quando si ripristina.
+3. Lucchetto «Chiudi la lista» in testa al viaggio (solo il Master): con la lista chiusa non si
+   prendono nuove prenotazioni (niente righe nuove, niente «x N» che cresce, niente conferme dalla
+   lista d'attesa, niente import da Word). Si possono ancora correggere i dati, completare i nomi
+   delle comitive, sistemare i posti, incassare e scrivere nella lista d'attesa. Gli operatori
+   vedono «Lista chiusa»; tutto va nel registro.
+4. Piantina › Lista della gita più ordinata: nome, partenze e posti sulla stessa riga, richieste
+   in un riquadro sotto, persone in etichette brevi (Cognome N. e numero del posto). Niente esce
+   più dai bordi.
+5. Menu del posto nella piantina con lo stesso stile del menu della riga: sezioni Posto
+   (sposta o scambia, nota sul posto), Prenotazione (seleziona tutta, incasso) e Togli.
+6. Buoni regalo: Cassa › «Buoni regalo».
+   · Tabella con N° pratica (si assegna da solo, es. RAG-26-001), data, chi riceve il buono,
+     importo ancora da spendere, chi fa il buono. Ricerca per numero o nome.
+   · «Nuovo buono»: chi riceve, chi fa il buono, importo, come paga. L'importo si incassa nella
+     cassa dell'agenzia (categoria BuonoRegalo del resoconto).
+   · Nell'incasso di un viaggio: metodo «Buono regalo» (anche dentro «Misto»), si sceglie il buono
+     e l'importo si scala da solo. Si può usare in più volte finché arriva a zero; se non basta,
+     l'app lo dice. Uno storno restituisce l'importo al buono.
+   · «Archivio buoni»: i buoni spesi o annullati, con dove sono stati usati («Dettagli»).
+7. Correzioni grafiche trovate durante le prove: nel tema scuro il pulsante scelto in «Chi paga»
+   aveva il testo bianco su bianco; i pulsanti del documento non si tagliano più sul telefono.
 
 VERSIONE 2.1.4 · 30/10/2026
 LAVORO SENZA INTERNET E ARCHIVIO IN UN FILE SEPARATO
