@@ -1,14 +1,40 @@
 VIAGGI IN PULLMAN · LA TERRA
 ============================
 
-Versione: 2.1.7
-Pacchetto creato il: 04/11/2026
+Versione: 2.1.9
+Pacchetto creato il: 05/11/2026
 
 Come installarla o aggiornarla: vedi LEGGIMI.txt.
 Aggiornamento: carica su GitHub TUTTI i file, config.js compreso (contiene già la chiave di Dropbox).
 
 MODIFICHE
 ---------
+
+VERSIONE 2.1.9 · 05/11/2026
+CORREZIONI DOPO UN SECONDO CONTROLLO DELLA 2.1.8 (da caricare al posto della 2.1.8)
+
+1. Eventi creati prima della 2.1.8: restano come erano (biglietto a tutti, la fila resta una richiesta di posto sul bus). Nel riquadro del biglietto c'è l'avviso «Regola di prima» con il pulsante «Usa la regola nuova». Gli eventi nuovi e quelli collegati alla Biglietteria usano la regola nuova.
+2. «Vendi biglietto + bus»: il cliente entra sempre come prenotazione a sé («Cognome x N»), dopo le righe riservate alle comitive, mai dentro una comitiva sopra che aspetta ancora dei nomi; si vende solo per i viaggi di tipo «Evento».
+3. Posti finiti: si contano riga per riga nella lista di ogni bus, così chi viene spostato da solo in un bus pieno è lui a risultare «senza posto». L'avviso rosso compare anche quando è pieno un solo bus.
+4. Biglietti dell'agenzia: con persone che hanno biglietti di tipi diversi si incassa una persona alla volta.
+5. Diritti contati anche per i biglietti a 0 € (es. bambini gratis).
+6. Un tipo di biglietto senza prezzo non prende più il prezzo del primo tipo: la quota resta «—» finché non scrivi il prezzo.
+7. Biglietteria: si collegano solo i viaggi di tipo «Evento»; se scolleghi un viaggio da «Modifica evento» i prezzi restano scritti nella lista; un evento collegato non si può togliere (prima va scollegato).
+8. Excel della cassa: con più di 3 righe, dalla terza in poi si uniscono in Q3 con i totali giusti (scritto nelle note).
+9. Piccole cose: «Apri il viaggio» chiude la finestra; la data di emissione senza anno nel futuro (es. 28/12 scritta a gennaio) è dell'anno scorso; nell'incasso il nome lungo della riga si legge passando sopra con il mouse.
+
+VERSIONE 2.1.8 · 05/11/2026
+EVENTI CON IL BUS E BIGLIETTERIA INSIEME, SENZA DOPPIE VENDITE
+
+1. Tolto il tipo «Biglietteria» dai viaggi (filtro in «Viaggi» e scelta del tipo): i biglietti si vendono nella sezione Biglietteria. I vecchi viaggi di quel tipo restano visibili in «Tutte».
+2. Eventi, riquadro in alto: «Date e hotel» si chiama «Data». In «Biglietto dell'evento» si possono aggiungere più tipi di biglietto (es. Parterre, Tribuna), ognuno con prezzo intero e ridotto.
+3. Il biglietto si somma solo a chi ha la colonna «fila» scritta: se la fila è vuota la persona paga solo il bus (nella colonna «quota» c'è scritto «solo bus»). Se nella fila c'è il nome di un tipo (es. «Tribuna 12») si usa il prezzo di quel tipo; ridotto per i bambini. Negli eventi la «fila» è quella del biglietto e non dà più indicazioni sul posto del bus. Gli eventi creati prima di questa versione restano come erano (biglietto a tutti): nel riquadro del biglietto c'è il pulsante «Usa la regola nuova» per passarli alla regola nuova quando la fila è scritta per tutti.
+4. Lista degli eventi: nuova colonna «emissione» con la data di emissione del biglietto (l'incasso la usa al posto della data di oggi). Colonne più compatte solo in questa tabella.
+5. «Collega alla Biglietteria» nella lista dell'evento: scegli o crei l'evento in Biglietteria. I tipi di biglietto, i diritti e il circuito diventano quelli dell'evento; in Biglietteria › Eventi e › Sospesi si vedono anche i biglietti venduti con il bus e quelli non ancora saldati. «Scollega» lo toglie e lascia i prezzi scritti nella lista. Si collegano solo i viaggi di tipo «Evento».
+6. Niente doppie vendite: in Biglietteria › Vendita, per un evento con il bus, «Vendi biglietto + bus» mette il cliente nella lista del viaggio e apre l'incasso; se i posti sono finiti la vendita è bloccata. Nella lista dell'evento chi è oltre i posti del bus è segnato «senza posto» e non si può incassare. I biglietti dell'agenzia non si possono usare oltre quelli liberi né per un settore diverso; quelli comprati per il bus non si vendono da soli. Chi compra biglietto + bus entra sempre come prenotazione a sé («Cognome x N»), mai dentro una comitiva sopra che aspetta ancora dei nomi.
+7. Eventi: la piantina accanto alla lista parte nascosta (si apre con «Piantina accanto»; l'app ricorda la scelta per ogni viaggio).
+8. Incasso: i diritti si contano anche per i biglietti a 0 € (es. bambini gratis). Nel file Excel della cassa, se ci sono più di 3 righe, dalla terza in poi si uniscono nella colonna Q3 con i totali giusti (scritto nelle note).
+9. Manuale «Aiuto» aggiornato.
 
 VERSIONE 2.1.7 · 04/11/2026
 AIUTO: IL MANUALE D'ISTRUZIONI DENTRO L'APP

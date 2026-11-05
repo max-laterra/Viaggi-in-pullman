@@ -1,6 +1,6 @@
 (function () {
   'use strict';
-  const VERSION = '2.1.7';
+  const VERSION = '2.1.9';
   const LOGO = './logo.jpg';
   const KEY = 'laterra.prenotazioniPosti.v1';
   const $ = (s, r = document) => r.querySelector(s);
@@ -671,19 +671,59 @@
     else if (tipo === 'bam') base = Q.bambini ?? Q.adulti;
     else if (tipo === '3l') base = Q.terzo ?? Q.adulti;
     else base = room && room.persone.length === 1 && Q.singola != null ? Q.singola : Q.adulti;
-    const tk = ticketOf(t, tipo);
+    const tk = ticketOf(t, tipo, p); if (tk == null) return null;
     if (base == null && (tk || isBigl(t))) base = 0;
     if (base == null) return null;
     return base + supplOf(t, bk, p) + tk;
   }
   // biglietto dell'evento (intero o ridotto) + diritti di prevendita, per chi lo compra con l'agenzia
   const isBigl = t => t.cat === 'biglietteria';
-  function ticketOf(t, tipo) {
-    const Q = t.quota || {}; if (Q.tkt1 == null && Q.tkt2 == null) return 0;
-    if (tipo === 'free') return 0;
-    const tk = tipo === 'bam' || tipo === 'inf' ? (Q.tkt2 ?? Q.tkt1) : Q.tkt1;
-    return (+tk || 0) + (+Q.diritti || 0);
+  // ---- tipi di biglietto (2.1.8) ----
+  // Negli eventi si possono avere più tipi di biglietto (es. Parterre, Tribuna), ognuno con intero e ridotto.
+  // Se il viaggio è collegato a un evento della Biglietteria valgono i settori, i diritti e il circuito di quell'evento;
+  // altrimenti quelli scritti in testa alla lista (quota.tsett). Prima della 2.1.8: un solo biglietto, quota.tkt1 e quota.tkt2.
+  const tkN = v => (v === '' || v == null || isNaN(+v) ? null : +v);
+  // regola della 2.1.8 (biglietto solo a chi ha la «fila» scritta, fila = fila del biglietto, prezzi dalla Biglietteria se collegato):
+  // vale per gli eventi creati dalla 2.1.8 e per quelli passati alla regola nuova (t.tkFila). Gli eventi di prima restano come erano.
+  const evFila = t => !!t && tripCat(t) === 'evento' && !!t.tkFila;
+  function tripTkt(t) {
+    const c = t ? tripCat(t) : ''; const Q = (t && t.quota) || {};
+    if (c !== 'evento' && c !== 'biglietteria') return { ev: null, sett: [], dir: 0, circ: '' };
+    const e = evFila(t) && typeof bgTripEv === 'function' ? bgTripEv(t) : null;
+    if (e) return { ev: e, sett: (e.settori || []).map(s => ({ id: s.id, nome: String(s.nome || '').trim(), intero: tkN(s.intero), ridotto: +s.ridotto ? +s.ridotto : null })), dir: +e.dir || 0, circ: e.circ || '' };
+    const L = Array.isArray(Q.tsett) ? Q.tsett : (Q.tkt1 != null || Q.tkt2 != null ? [{ id: 'tk', nome: '', intero: Q.tkt1, ridotto: Q.tkt2 }] : []);
+    // un tipo con il nome ma senza prezzo resta (chi lo ha nella fila ha la quota «—» finché non si scrive il prezzo)
+    const sett = L.map(s => ({ id: s.id, nome: String(s.nome || '').trim(), intero: tkN(s.intero), ridotto: tkN(s.ridotto) })).filter(s => s.nome || s.intero != null || s.ridotto != null);
+    return { ev: null, sett, dir: sett.length ? +Q.diritti || 0 : 0, circ: Q.circuito || '' };
   }
+  const tkNorm = v => String(v || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+  // il biglietto di una persona (null = non lo compra con noi, paga solo il bus).
+  // Eventi: il biglietto c'è solo se la colonna «fila» è scritta; se nella fila c'è il nome di un tipo si usa quello, altrimenti il primo.
+  // Ridotto per bambini e neonati, se il tipo ha il prezzo ridotto.
+  function personTkt(t, p, tipo, TK) {
+    TK = TK || tripTkt(t); if (!TK.sett.length || tipo === 'free') return null;
+    const fila = String((p && p.row ? p.row.fila : p && p.fila) || '').trim();
+    if (evFila(t) && !fila) return null;
+    const f = ' ' + tkNorm(fila) + ' '; let s = null;
+    TK.sett.forEach(x => { const n = tkNorm(x.nome); if (n && f.includes(' ' + n + ' ') && (!s || n.length > tkNorm(s.nome).length)) s = x; });
+    s = s || TK.sett[0];
+    const rid = (tipo === 'bam' || tipo === 'inf') && s.ridotto != null;
+    const prezzo = rid ? s.ridotto : (s.intero != null ? s.intero : s.ridotto);
+    return { s, nome: s.nome || 'Biglietto', rid, prezzo: prezzo == null ? null : +prezzo, dir: TK.dir };
+  }
+  // data di emissione scritta nella lista («05/11/26», «5/11/2026», «5/11» o «2026-11-05») → «2026-11-05»; '' se non si capisce
+  function emisISO(v) {
+    v = String(v || '').trim(); if (!v) return ''; let m;
+    if ((m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v))) return v;
+    if (!(m = /^(\d{1,2})[\/.\-](\d{1,2})(?:[\/.\-](\d{2}|\d{4}))?$/.exec(v))) return '';
+    const d = +m[1], mo = +m[2]; const T0 = todayISO(); let y = m[3] ? +m[3] : +T0.slice(0, 4); if (y < 100) y += 2000;
+    // senza anno: l'emissione è già avvenuta, quindi una data che cadrebbe nel futuro è dell'anno scorso (es. 28/12 scritto a gennaio)
+    if (!m[3] && `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}` > T0) y--;
+    if (mo < 1 || mo > 12 || d < 1 || d > new Date(y, mo, 0).getDate()) return '';
+    return `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+  }
+  // null = il tipo di biglietto non ha ancora il prezzo
+  function ticketOf(t, tipo, p) { const x = personTkt(t, p, tipo); return x ? (x.prezzo == null ? null : x.prezzo + x.dir) : 0; }
   function bkMoney(t, bk) {
     const ctx = new Map(); roomsOf(bk).forEach(r => r.persone.forEach((p, i) => ctx.set(p.id, { room: r, idx: i })));
     let due = 0, unknown = false;
@@ -1385,8 +1425,8 @@
   // ---------- la lista della gita (come il file Word) ----------
   // t.rows = righe della tabella partecipanti, scritte come in Word: «Rossi x 3» sulla prima riga e poi le altre persone.
   // Le prenotazioni si ricavano dalle righe; ogni riga sa su quale bus è (row.bus) e i bus sanno quale posto ha ogni persona.
-  const ROWF = ['cognome', 'nome', 'nascita', 'tel', 'natoA', 'part', 'hotel', 'cam', 'fila', 'note', 'pagato'];
-  const blankRow = () => ({ id: uid(), cognome: '', nome: '', nascita: '', tel: '', natoA: '', part: '', hotel: '', cam: '', fila: '', note: '', pagato: '' });
+  const ROWF = ['cognome', 'nome', 'nascita', 'tel', 'natoA', 'part', 'hotel', 'cam', 'fila', 'emis', 'note', 'pagato'];
+  const blankRow = () => ({ id: uid(), cognome: '', nome: '', nascita: '', tel: '', natoA: '', part: '', hotel: '', cam: '', fila: '', emis: '', note: '', pagato: '' });
   const blankAtt = () => ({ id: uid(), cognome: '', nome: '', nascita: '', tel: '', part: '', note: '', richiesta: '', avviso: '', risposta: '' });
   const isEmptyRow = r => !ROWF.some(f => String(r[f] || '').trim()) && !['richiesta', 'avviso', 'risposta', 'dataAnn'].some(f => String(r[f] || '').trim());
   function tripInit(t) {
@@ -1416,12 +1456,13 @@
   }
   // le righe si leggono come in Word: «Rossi x 3» e sotto le altre due persone. Ogni lista si legge per conto suo.
   // Chi è stato spostato da solo in un'altra lista resta nella sua comitiva: la riga porta row.g = id della riga del capogruppo.
-  function rowPerson(r, i, m, isHead, prevFila) {
+  // ev = evento: la «fila» è quella del biglietto del concerto, non dà richieste per il posto sul bus (2.1.8)
+  function rowPerson(r, i, m, isHead, prevFila, ev) {
     let filaTxt = String(r.fila || '').trim();
     if (/^fila\.?$/i.test(filaTxt) && !isHead && prevFila) filaTxt = prevFila + ' fila';
     const cg = String(r.cognome || '').trim(), nm = String(r.nome || '').trim();
     const note = String(r.note || '').trim();
-    const fr = filaTxt ? reqFromFila(filaTxt) : null;
+    const fr = filaTxt && !ev ? reqFromFila(filaTxt) : null;
     const nr = (!isHead && note) ? reqFromNote(note) : null;
     const p = { id: r.id, row: r, riga: i + 1, cognome: m ? m[1].trim() : cg, nome: nm, tel: r.tel || '', part: String(r.part || '').toUpperCase(), nascita: r.nascita || '', natoA: r.natoA || '', note: [filaTxt, note].filter(Boolean).join(' · '), np: r.np || '', req: fr, _nr: nr, reqTxt: filaTxt, _fila: filaTxt };
     const hot = String(r.hotel || '').trim(), cam = String(r.cam || '').trim();
@@ -1433,7 +1474,7 @@
   }
   // lettura «una riga dopo l'altra» di un elenco di righe (con le righe fissate a un capogruppo messe da parte)
   function seqGroups(t, rows, pinned, pinCount, ix) {
-    ix = ix || new Map(t.rows.map((r, i) => [r.id, i])); const out = []; let cur = null, left = 0, prevFila = '';
+    ix = ix || new Map(t.rows.map((r, i) => [r.id, i])); const out = []; let cur = null, left = 0, prevFila = ''; const ev = evFila(t);
     rows.forEach(r => {
       const cg = String(r.cognome || '').trim(), nm = String(r.nome || '').trim();
       // riga vuota dentro una comitiva non ancora completa: è il posto riservato per chi manca (non fa entrare chi sta sotto)
@@ -1442,9 +1483,9 @@
       const i = ix.get(r.id); const m = RX.exec(cg);
       const note = String(r.note || '').trim();
       // persona staccata dalla sua comitiva: prenotazione a sé, la comitiva sopra continua
-      if (r.solo && !m) { const p = rowPerson(r, i, null, true, ''); delete p._fila; out.push({ id: r.id, n: 1, persone: [p], ord: i + 1, pref: note ? reqFromNote(note) : null, head: r, last: r.id }); return; }
+      if (r.solo && !m) { const p = rowPerson(r, i, null, true, '', ev); delete p._fila; out.push({ id: r.id, n: 1, persone: [p], ord: i + 1, pref: note ? reqFromNote(note) : null, head: r, last: r.id }); return; }
       const isHead = !!m || left === 0;
-      const p = rowPerson(r, i, m, isHead, prevFila); prevFila = p._fila; delete p._fila;
+      const p = rowPerson(r, i, m, isHead, prevFila, ev); prevFila = p._fila; delete p._fila;
       if (m) { cur = { id: r.id, n: +m[2], persone: [p], ord: i + 1, pref: note ? reqFromNote(note) : null, head: r, last: r.id }; out.push(cur); left = Math.max(0, cur.n - 1 - ((pinCount && pinCount[r.id]) || 0)); }
       else if (left > 0) { cur.persone.push(p); cur.last = r.id; left--; }
       else { cur = { id: r.id, n: 1, persone: [p], ord: i + 1, pref: note ? reqFromNote(note) : null, head: r, last: r.id }; out.push(cur); }
@@ -1465,7 +1506,7 @@
       const byP = new Map(); out.forEach(g => g.persone.forEach(p => byP.set(p.id, g)));
       t.rows.forEach((r, i) => {
         if (!pinned.has(r.id)) return; let g = byP.get(r.g);
-        const p = rowPerson(r, i, null, false, ''); delete p._fila;
+        const p = rowPerson(r, i, null, false, '', evFila(t)); delete p._fila;
         if (!g) { g = { id: r.id, n: 1, persone: [], ord: i + 1, pref: null, head: r }; out.push(g); }
         g.persone.push(p); byP.set(r.id, g);
       });
@@ -1604,6 +1645,24 @@
     D.forEach(bk => { bk.persone.forEach(p => { if (listKey(t, p.row) === lk) n++; }); if (listKey(t, bk.head) === lk) n += Math.max(0, bk.n - bk.persone.length); });
     return n;
   }
+  // ---- posti finiti (2.1.8) ----
+  // Chi in lista è oltre i posti dei bus (contando anche i nomi che mancano nelle comitive «x N»).
+  // Ogni bus: posti del modello meno quelli bloccati. Chi è in «Senza bus» occupa i posti rimasti liberi negli altri bus.
+  const busCap = b => LMAP[b.layout].info.cap - Object.values(b.seats || {}).filter(x => x.res).length;
+  function overCap(t, D) {
+    const out = { ids: new Set(), cap: 0, n: 0, free: 0 }; if (!t || !t.buses || !t.buses.length || tripCat(t) === 'biglietteria') return out;
+    D = D || deriveBookings(t); const multi = multiBus(t);
+    // si conta riga per riga, nell'ordine della lista (anche chi è stato spostato da solo in un altro bus conta dove si trova);
+    // i nomi che mancano in una comitiva «x N» occupano posti subito dopo la sua ultima riga
+    const pids = new Set(); const miss = new Map();
+    D.forEach(bk => { bk.persone.forEach(p => pids.add(p.id)); const k = Math.max(0, bk.n - bk.persone.length); if (k) { const at = bk.last || bk.head.id; miss.set(at, (miss.get(at) || 0) + k); } });
+    const walk = (rows, cap) => { let n = 0; rows.forEach(r => { if (pids.has(r.id)) { n++; if (n > cap) out.ids.add(r.id); } if (miss.has(r.id)) n += miss.get(r.id); }); return n; };
+    let spare = 0;
+    const lists = multi ? t.buses.map(b => ({ id: b.id, cap: busCap(b) })) : [{ id: '', cap: t.buses.reduce((a, b) => a + busCap(b), 0) }];
+    lists.forEach(L => { const n = walk(listRows(t, L.id), L.cap); out.cap += L.cap; out.n += n; spare += Math.max(0, L.cap - n); });
+    if (multi) { const n = walk(listRows(t, ''), spare); out.n += n; spare = Math.max(0, spare - n); }
+    out.free = spare; return out;
+  }
   // staccare una persona dalla sua comitiva (resta traccia sulla riga).
   // Se si stacca il capogruppo, il suo posto lo prende il secondo: diventa «Cognome x N-1» e la prenotazione
   // (incassi, colore, cliente abituale, saldato) passa a lui.
@@ -1686,11 +1745,14 @@
   }
 
   // ---------- viste ----------
-  const listCols = (tour, bigl) => bigl
+  // ev (2.1.8): negli eventi c'è anche la colonna «emissione» (data di emissione del biglietto) dopo «fila»
+  const listCols = (tour, bigl, ev) => { const c = bigl
     ? [['cognome', 'cognome'], ['nome', 'nome'], ['tel', 'contatto'], ['note', 'note / mail'], ['pagato', '€']]
     : tour
     ? [['cognome', 'cognome'], ['nome', 'nome'], ['nascita', 'data'], ['tel', 'contatto'], ['natoA', 'nato/a a'], ['part', 'P'], ['hotel', 'hotel'], ['cam', 'C'], ['fila', 'fila'], ['note', 'note / mail'], ['pagato', '€']]
     : [['cognome', 'cognome'], ['nome', 'nome'], ['nascita', 'data'], ['tel', 'contatto'], ['part', 'part'], ['fila', 'fila'], ['note', 'note / mail'], ['pagato', '€']];
+    if (ev && !bigl) c.splice(c.findIndex(([f]) => f === 'fila') + 1, 0, ['emis', 'emissione']);
+    return c; };
   const ATTC = [['cognome', 'Cognome'], ['nome', 'Nome'], ['nascita', 'data di nascita'], ['tel', 'contatto'], ['part', 'part'], ['note', 'note'], ['richiesta', 'data di richiesta'], ['avviso', 'data di avviso'], ['risposta', 'risposta del cliente']];
   function syncInfo(st) {
     st = st || STORE.status();
@@ -1737,6 +1799,7 @@
     const ofYear = S.trips.filter(t => t.data.slice(0, 4) === y);
     const cnt = c => ofYear.filter(t => tripCat(t) === c).length;
     let list = ofYear.slice();
+    if (UI.cat === 'biglietteria') UI.cat = 'tutte';   // 2.1.8: il tipo «Biglietteria» non c'è più (c'è la sezione Biglietteria)
     const cat = UI.cat || 'tutte';
     if (cat !== 'tutte') list = list.filter(t => tripCat(t) === cat);
     if (UI.hidePast) list = list.filter(t => (t.fine || t.data) >= today);
@@ -1754,7 +1817,7 @@
         </div></div>
       <div class="hfilters">
         <label class="ysel"><span>Anno</span><select data-year="1" aria-label="Anno da vedere">${years.map(yy => `<option value="${yy}"${yy === y ? ' selected' : ''}>${yy}</option>`).join('')}</select></label>
-        <div class="seg catseg" role="group" aria-label="Tipo">${[['tutte', 'Tutte'], ['gita', 'Gite'], ['tour', 'Tour'], ['evento', 'Eventi'], ['biglietteria', 'Biglietteria']].map(([v, l]) => `<button data-act="hcat" data-v="${v}" aria-pressed="${cat === v}" class="c-${v}">${l}</button>`).join('')}</div>
+        <div class="seg catseg" role="group" aria-label="Tipo">${[['tutte', 'Tutte'], ['gita', 'Gite'], ['tour', 'Tour'], ['evento', 'Eventi']].map(([v, l]) => `<button data-act="hcat" data-v="${v}" aria-pressed="${cat === v}" class="c-${v}">${l}</button>`).join('')}</div>
         <label class="chk small"><input type="checkbox" data-act="hidepast"${UI.hidePast ? ' checked' : ''}> Nascondi quelle già fatte</label>
         <input class="search" type="search" data-hq="1" placeholder="Cerca viaggio o codice (es. T08)" value="${esc(UI.hq || '')}" aria-label="Cerca">
       </div>
@@ -1830,6 +1893,8 @@
   function tripView() {
     const t = trip(); if (!t) { UI.view = 'home'; return homeView(); }
     tripInit(t); ensureBlank(t); const bigl = tripCat(t) === 'biglietteria'; if (bigl) UI.sec = 'lista';
+    // piantina accanto alla lista: negli eventi parte nascosta; la scelta si ricorda per ogni viaggio
+    if (UI.dockT !== t.id) { UI.dockT = t.id; const dm = UI.dockMap || {}; UI.dock = t.id in dm ? dm[t.id] : tripCat(t) !== 'evento'; }
     if (!bus() && t.buses.length) UI.busId = t.buses[0].id;
     const D = syncAll(t); const SI = seatIndex(t); const T = summaryOf(t, D, SI);
     const head = `<div class="crumbs"><a data-act="nav" data-v="home">Viaggi</a><span>›</span><span>${esc(t.nome)}</span></div>
@@ -1847,6 +1912,31 @@
   // ----- sezione 1: la lista prenotazioni, come il file Word -----
   // testa della lista: prezzi, date e pagamenti, partenze, note (il nome del viaggio è già in alto e si cambia da «Modifica gita»)
   const notesOf = t => Array.isArray(t.notes) ? t.notes : [t.note1, t.note2].filter(x => x && String(x).trim());
+  // ---- eventi (2.1.8): tipi di biglietto, diritti, circuito; collegamento alla Biglietteria ----
+  function evTktSec(t) {
+    const Q = t.quota; const TK = tripTkt(t); const e = TK.ev; const can = !ACC.can('readonly');
+    const D = deriveBookings(t); const P = D.flatMap(bk => bk.persone);
+    const withT = P.filter(p => personTkt(t, p, p.tipo || 'ad', TK)).length, noT = P.length - withT;
+    const nv = v => (v == null || v === '' ? '' : esc(String(v).replace('.', ',')));
+    const rows = e ? TK.sett : (Array.isArray(Q.tsett) ? Q.tsett : TK.sett.length ? TK.sett : [{ id: 'tk', nome: '', intero: null, ridotto: null }]);
+    const tbl = `<table class="tk-t${e ? '' : ' ed'}"><thead><tr><th>Tipo di biglietto</th><th>Intero</th><th>Ridotto</th>${e ? '' : '<th></th>'}</tr></thead><tbody>${rows.map((x, i) => e
+      ? `<tr><td><b>${esc(x.nome || 'Biglietto')}</b></td><td>${x.intero != null ? money(x.intero) : '—'}</td><td>${x.ridotto != null ? money(x.ridotto) : '—'}</td></tr>`
+      : `<tr><td><span class="th-in"><input class="hc" data-tks="${i}" data-k="nome" value="${esc(x.nome || '')}" placeholder="${i ? 'es. Tribuna' : 'es. Parterre'}" aria-label="Tipo di biglietto ${i + 1}"></span></td><td><span class="th-in eur"><input class="hc num" data-tks="${i}" data-k="intero" inputmode="decimal" value="${nv(x.intero)}" placeholder="intero" aria-label="Prezzo intero ${i + 1}"><i>€</i></span></td><td><span class="th-in eur"><input class="hc num" data-tks="${i}" data-k="ridotto" inputmode="decimal" value="${nv(x.ridotto)}" placeholder="ridotto" aria-label="Prezzo ridotto ${i + 1}"><i>€</i></span></td><td>${rows.length > 1 && can ? `<button class="kebab" data-act="tksdel" data-i="${i}" aria-label="Togli il tipo ${i + 1}">${ICON.close}</button>` : ''}</td></tr>`).join('')}</tbody></table>`;
+    const dirCirc = e
+      ? `<div class="tk-ro"><span>Diritti a biglietto <b>${money(TK.dir)}</b></span><span>Circuito <b>${esc(typeof circL === 'function' ? circL(TK.circ) : TK.circ)}</b></span></div>`
+      : `<div class="tk-dc"><label class="th-f"><span>Diritti <small>a biglietto</small></span><span class="th-in eur"><input class="hc num" data-q="diritti" inputmode="decimal" value="${Q.diritti != null ? esc(String(Q.diritti).replace('.', ',')) : ''}" aria-label="Diritti a biglietto"><i>€</i></span></label><label class="th-f"><span>Circuito</span><span class="th-in"><select class="hc" data-qt="circuito"><option value="">—</option>${CIRCUITI.map(c => `<option${Q.circuito === c ? ' selected' : ''}>${c}</option>`).join('')}</select></span></label></div>`;
+    const stk = e && typeof bgTripInfo === 'function' ? bgTripInfo(t, e) : '';
+    const nuova = evFila(t);
+    const old = nuova ? '' : `<div class="tk-old"><span><b>Regola di prima:</b> il biglietto si somma a tutti. Dalla versione 2.1.8 si somma solo a chi ha la «fila» scritta.</span>${can ? '<button class="btn sm" data-act="tkfila">Usa la regola nuova</button>' : ''}</div>`;
+    return `<section class="th-sec tks"><div class="th-h">Biglietto dell'evento <small>${nuova ? 'si somma solo a chi ha la «fila» scritta' : 'si somma a tutti'}</small></div>${old}
+      ${e ? `<div class="tk-ev">${ICON.tkt}<span>Collegato alla Biglietteria<br><b>${esc(e.nome)}</b> · ${esc(fmtDate(e.data))}</span><button class="btn sm ghost" data-act="tkbgopen">Apri in Biglietteria</button></div>` : ''}
+      ${tbl}${e || !can ? '' : `<button class="btn sm ghost tk-add" data-act="tksadd">${ICON.plus} Aggiungi tipo di biglietto</button>`}
+      ${dirCirc}
+      <div class="tk-foot"><span class="small">${P.length ? `<b>${withT}</b> con biglietto · <b>${noT}</b> solo bus` : nuova ? 'Nella fila scrivi il tipo (es. «Parterre») o la fila del biglietto: se è vuota la persona paga solo il bus.' : ''}</span>${e || !can || !bgSee2() ? '' : `<button class="btn sm" data-act="tklink">${ICON.tkt} Collega alla Biglietteria</button>`}</div>
+      ${stk}
+      ${TK.sett.some(x => x.nome) ? `<datalist id="tk-dl">${TK.sett.filter(x => x.nome).map(x => `<option value="${esc(x.nome)}">`).join('')}</datalist>` : ''}</section>`;
+  }
+  const bgSee2 = () => ACC.can('cassa') || ACC.can('cassaAll');
   function headBlock(t) {
     const Q = t.quota; const tour = isTourT(t); const cat = tripCat(t); const bigl = cat === 'biglietteria'; const tk = bigl || cat === 'evento';
     const money = (k, l, ph = '') => `<label class="th-f"><span>${l}</span><span class="th-in eur"><input class="hc num" data-q="${k}" inputmode="decimal" value="${Q[k] != null ? esc(String(Q[k]).replace('.', ',')) : ''}" placeholder="${ph}" aria-label="${esc(String(l).replace(/<[^>]+>/g, ''))}"><i>€</i></span></label>`;
@@ -1857,7 +1947,7 @@
     const deps = !LU.length
       ? Array.from({ length: 3 }, (_, i) => { const d = t.partenze[i] || {}; return `<div class="hdep"><input class="hc" data-dep2="${i}" data-k="citta" value="${esc(d.citta || '')}" placeholder="città"><input class="hc" data-dep2="${i}" data-k="luogo" value="${esc(d.luogo || '')}" placeholder="luogo"><input class="hc" data-dep2="${i}" data-k="ora" value="${esc(d.ora || '')}" placeholder="ora"></div>`; }).join('') + '<div class="small dephint">Per scegliere i luoghi da un elenco, aggiungili in Impostazioni › Luoghi di partenza.</div>'
       : Array.from({ length: nDep }, (_, i) => { const d = t.partenze[i] || {}; const cur = depLuogo(d); return `<div class="hdep sel"><select class="hc" data-depsel="${i}" aria-label="Partenza ${i + 1}"><option value="">${i ? '+ altra partenza' : 'Scegli il luogo'}</option>${LU.map((l, j) => `<option value="${j}"${cur === l ? ' selected' : ''}>${esc([l.code, l.citta, l.luogo].filter(Boolean).join(' · '))}</option>`).join('')}${!cur && (d.citta || d.luogo) ? `<option value="cur" selected>${esc([d.citta, d.luogo].filter(Boolean).join(' · '))} (non in elenco)</option>` : ''}</select><input class="hc" data-dep2="${i}" data-k="ora" value="${esc(d.ora || '')}" placeholder="ora" aria-label="Ora partenza ${i + 1}"></div>`; }).join('');
-    const tkSec = tk ? `<section class="th-sec"><div class="th-h">${bigl ? 'Biglietto' : 'Biglietto dell\'evento <small>se lo vendete voi</small>'}</div><div class="th-g" style="--c:4">
+    const tkSec = tk && !bigl ? evTktSec(t) : tk ? `<section class="th-sec"><div class="th-h">${bigl ? 'Biglietto' : 'Biglietto dell\'evento <small>se lo vendete voi</small>'}</div><div class="th-g" style="--c:4">
         ${money('tkt1', 'Intero')}<label class="th-f"><span>${lab('tkt2L', 'ridotto', 'Nome del ridotto')}</span><span class="th-in eur"><input class="hc num" data-q="tkt2" inputmode="decimal" value="${Q.tkt2 != null ? esc(String(Q.tkt2).replace('.', ',')) : ''}" aria-label="Prezzo ridotto"><i>€</i></span></label>
         ${money('diritti', 'Diritti <small>a biglietto</small>')}<label class="th-f"><span>Circuito</span><span class="th-in"><select class="hc" data-qt="circuito"><option value="">—</option>${CIRCUITI.map(c => `<option${Q.circuito === c ? ' selected' : ''}>${c}</option>`).join('')}</select></span></label></div></section>` : '';
     const notes = notesOf(t);
@@ -1870,7 +1960,7 @@
         <div class="th-sep"></div>
         ${money('acconto', 'Acconto')}${money('saldo', 'Saldo')}${date('data-qt="saldoEntro"', Q.saldoEntro, 'Saldo entro il')}
       </div></section>
-      <section class="th-sec"><div class="th-h">Date e hotel</div><div class="th-g" style="--c:2">
+      <section class="th-sec${cat === 'evento' && !tour ? ' dt' : ''}"><div class="th-h">${cat === 'evento' && !tour ? 'Data' : 'Date e hotel'}</div><div class="th-g" style="--c:2">
         ${date('data-tf="data"', t.data, 'Partenza')}${date('data-tf="fine"', t.fine, 'Rientro')}
         ${tour ? `<label class="th-f wide"><span>Hotel</span><span class="th-in"><input class="hc" data-qt="hotel" value="${esc(Q.hotel || '')}" placeholder="nome hotel, città"></span></label>` : ''}
       </div></section>`}
@@ -1908,13 +1998,19 @@
     let seatTxt = '';
     if (seat) { const p = bk.persone.find(q => q.id === r.id); const bad = p && p.req && hasAny(p.req) && !reqOk(LMAP[seat.b.layout], seat.s, p.req); seatTxt = `<span class="pill ${bad ? 'warn' : 'ok'}" title="${bad ? 'Il posto non rispetta la richiesta' : ''}">${esc(seat.b.label.replace(/^Bus\s*/i, 'B'))} · ${seat.s}</span>`; }
     else if (x && r.bus) seatTxt = '<span class="pill tbd">da sistemare</span>';
+    // 2.1.8: negli eventi chi è oltre i posti dei bus non ha il posto (e non si può incassare)
+    if (ctx.OV && ctx.OV.ids.has(r.id)) seatTxt = `<span class="pill bad" title="Oltre i posti del bus: aggiungi un bus o metti in lista d'attesa">senza posto</span>`;
     // anteprima di quanto paga la persona di questa riga (quota + supplemento fila)
     const quotaTxt = (() => { if (!bk) return ''; const m = bk._m || bkMoney(t, bk); const k = bk.persone.findIndex(p => p.id === r.id); const pv = m.per[k]; if (!pv || pv.v == null) return '<span class="q-na" title="Mancano i prezzi in testa alla lista">—</span>'; const P = bk.persone[k]; const sup = supplOf(t, bk, P);
+      // eventi (2.1.8): il biglietto si somma solo a chi ha la fila scritta
+      if (ctx.ev && ctx.TK && ctx.TK.sett.length) { const x = personTkt(t, P, pv.tipo, ctx.TK);
+        return x ? `<span title="${esc(`${TIPI[pv.tipo] || ''} · bus ${fmtNum(pv.v - x.prezzo - x.dir)} € + biglietto ${x.nome}${x.rid ? ' ridotto' : ''} ${fmtNum(x.prezzo)} €${x.dir ? ` + diritti ${fmtNum(x.dir)} €` : ''}`)}">${esc(fmtNum(pv.v))} €</span>`
+          : `<span title="${esc(`${TIPI[pv.tipo] || ''} · solo bus: la fila è vuota, il biglietto non si somma`)}"><small class="sb">solo bus</small>${esc(fmtNum(pv.v))} €</span>`; }
       return `<span title="${esc(`${TIPI[pv.tipo] || ''}${sup ? ` · ${fmtNum(pv.v - sup)} € + fila ${fmtNum(sup)} €` : ''}`)}">${sup ? '<small>fila</small>' : ''}${esc(fmtNum(pv.v))} €</span>`; })();
     const tip = head && bk._m ? `Totale ${euro(bk._m.due)} · pagato ${euro(bk._m.paid)}${bk._m.rest ? ' · da pagare ' + euro(bk._m.rest) : ''}${bk.mancano ? ` · mancano ${bk.mancano} nomi` : ''}` : '';
     return `<tr class="${cls}" data-rowid="${r.id}"${fl ? ` title="Modificata adesso da ${esc(fl.by)}"` : xg ? ` title="${esc(xg.slice(3))}"` : ''}>
       <td class="wn">${drag}<button class="rn" data-act="rowmenu" data-id="${r.id}" aria-label="Riga ${i + 1}: azioni${xg ? esc(xg) : ''}">${i + 1}</button>${xg ? '<i class="xg" aria-hidden="true">↗</i>' : ''}${r.stacc ? `<i class="stc" title="Staccata da ${esc(r.stacc.da)} il ${esc(fmtDate(r.stacc.il.slice(0, 10)))}${r.stacc.chi ? ' da ' + esc(r.stacc.chi) : ''}">${ICON.unlink}</i>` : ''}</td>
-      ${cols.filter(([f]) => f !== 'pagato').concat(bigl ? [] : [['posto', 'posto']], [['quota', 'quota']], cols.filter(([f]) => f === 'pagato')).map(([f, l]) => f === 'posto' ? `<td class="wpos">${seatTxt}</td>` : f === 'quota' ? `<td class="c-quota">${quotaTxt}</td>` : f === 'hotel' ? `<td class="c-hotel">${roomSel(`data-r="${r.id}" data-f="hotel"`, r.hotel, 'Camera riga ' + (i + 1))}</td>` : f === 'fila' && ctx.FI ? `<td class="c-fila">${filaSel(r, ctx.FI, i)}</td>` : f === 'part' && ctx.parts.length ? `<td class="c-part"><select class="wc wsel" data-r="${r.id}" data-f="part" aria-label="Partenza riga ${i + 1}"><option value=""></option>${ctx.parts.map(o => `<option value="${esc(o.code)}"${String(r.part || '').toUpperCase() === o.code ? ' selected' : ''} title="${esc(o.label)}">${esc(o.code)}</option>`).join('')}${r.part && !ctx.parts.some(o => o.code === String(r.part).toUpperCase()) ? `<option value="${esc(r.part)}" selected>${esc(r.part)}</option>` : ''}</select></td>` : head && f === 'pagato' ? `<td class="c-pagato"><button class="eurobtn${ok ? ' ok' : bk._m && bk._m.paid ? ' part' : ''}${UI.pay && UI.pay.bkId === bk.id ? ' on' : ''}" data-act="paypanel" data-id="${bk.id}" title="Incasso e documento (scontrino o fattura)" aria-label="Incasso e documento di ${esc(bkName(bk))}">${bk._m && bk._m.paid ? esc(fmtNum(bk._m.paid)) : '€'}</button></td>` : pm && f === 'pagato' ? `<td class="c-pagato"><button class="eurobtn pers${pm.rest === 0 && pm.paid > 0 ? ' ok' : pm.paid ? ' part' : ''}${UI.pay && UI.pay.pid === r.id ? ' on' : ''}" data-act="paypanel" data-id="${bk.id}" data-pid="${r.id}" title="Paga solo ${esc(r.cognome)} ${esc(r.nome)} (la sua quota)" aria-label="Incasso solo di ${esc(r.cognome)} ${esc(r.nome)}">${pm.paid ? esc(fmtNum(pm.paid)) : '€'}</button></td>` : `<td class="c-${f}${head && f === 'cognome' && bk.mancano ? ' miss' : ''}"${head && f === 'cognome' && tip ? ` title="${esc(tip)}"` : ''}><input class="wc" data-r="${r.id}" data-f="${f}" value="${esc(r[f] || '')}" aria-label="${esc(l)} riga ${i + 1}" autocomplete="off"></td>`).join('')}
+      ${cols.filter(([f]) => f !== 'pagato').concat(bigl ? [] : [['posto', 'posto']], [['quota', 'quota']], cols.filter(([f]) => f === 'pagato')).map(([f, l]) => f === 'posto' ? `<td class="wpos">${seatTxt}</td>` : f === 'quota' ? `<td class="c-quota">${quotaTxt}</td>` : f === 'hotel' ? `<td class="c-hotel">${roomSel(`data-r="${r.id}" data-f="hotel"`, r.hotel, 'Camera riga ' + (i + 1))}</td>` : f === 'fila' && ctx.FI ? `<td class="c-fila">${filaSel(r, ctx.FI, i)}</td>` : f === 'part' && ctx.parts.length ? `<td class="c-part"><select class="wc wsel" data-r="${r.id}" data-f="part" aria-label="Partenza riga ${i + 1}"><option value=""></option>${ctx.parts.map(o => `<option value="${esc(o.code)}"${String(r.part || '').toUpperCase() === o.code ? ' selected' : ''} title="${esc(o.label)}">${esc(o.code)}</option>`).join('')}${r.part && !ctx.parts.some(o => o.code === String(r.part).toUpperCase()) ? `<option value="${esc(r.part)}" selected>${esc(r.part)}</option>` : ''}</select></td>` : head && f === 'pagato' ? `<td class="c-pagato"><button class="eurobtn${ok ? ' ok' : bk._m && bk._m.paid ? ' part' : ''}${UI.pay && UI.pay.bkId === bk.id ? ' on' : ''}" data-act="paypanel" data-id="${bk.id}" title="Incasso e documento (scontrino o fattura)" aria-label="Incasso e documento di ${esc(bkName(bk))}">${bk._m && bk._m.paid ? esc(fmtNum(bk._m.paid)) : '€'}</button></td>` : pm && f === 'pagato' ? `<td class="c-pagato"><button class="eurobtn pers${pm.rest === 0 && pm.paid > 0 ? ' ok' : pm.paid ? ' part' : ''}${UI.pay && UI.pay.pid === r.id ? ' on' : ''}" data-act="paypanel" data-id="${bk.id}" data-pid="${r.id}" title="Paga solo ${esc(r.cognome)} ${esc(r.nome)} (la sua quota)" aria-label="Incasso solo di ${esc(r.cognome)} ${esc(r.nome)}">${pm.paid ? esc(fmtNum(pm.paid)) : '€'}</button></td>` : `<td class="c-${f}${head && f === 'cognome' && bk.mancano ? ' miss' : ''}${f === 'emis' && r.emis && !emisISO(r.emis) ? ' bad' : ''}"${head && f === 'cognome' && tip ? ` title="${esc(tip)}"` : ''}><input class="wc" data-r="${r.id}" data-f="${f}" value="${esc(r[f] || '')}"${f === 'fila' && ctx.ev && ctx.TK && ctx.TK.sett.some(s => s.nome) ? ' list="tk-dl"' : ''}${f === 'emis' ? `${String(r.fila || '').trim() && !r.emis ? ' placeholder="gg/mm/aa"' : ''} inputmode="numeric"` : ''} aria-label="${esc(l)} riga ${i + 1}" autocomplete="off"></td>`).join('')}
 </tr>`;
   }
   // accompagnatore, autista e altro personale che dorme in hotel (vanno nella rooming list)
@@ -1944,13 +2040,13 @@
     const thead = `<thead><tr><th>N</th>${cols.filter(([f]) => f !== 'pagato').map(([f, l]) => `<th class="c-${f}">${esc(l)}</th>`).join('')}${bigl ? '' : '<th class="c-posto">posto</th>'}<th class="c-quota" title="Quanto paga la persona di questa riga">quota</th>${cols.filter(([f]) => f === 'pagato').map(([f, l]) => `<th class="c-${f}">${esc(l)}</th>`).join('')}</tr></thead>`;
     const Ls = tripLists(t).map(L => { const rows = listRows(t, L.id); const full = rows.filter(r => !isEmptyRow(r)); return Object.assign({}, L, { rows, full }); }).filter(L => !(multi && !L.id && !L.full.length));
     let view = multi ? (UI.lview || 'all') : 'all'; if (view !== 'all' && view !== 'side' && !t.buses.some(b => b.id === view)) view = UI.lview = 'all';
-    const head = L => { const seated = L.full.filter(r => SI[r.id]).length; const cap = L.b ? LMAP[L.b.layout].info.cap : 0;
+    const head = L => { const seated = L.full.filter(r => SI[r.id]).length; const cap = L.b ? busCap(L.b) : 0;
       return multi ? `<div class="lhead${L.id ? '' : ' nobus'}"><h3>${L.b ? ICON.bus : ICON.alert} ${esc(L.label)}</h3><span>${L.full.length} ${L.full.length === 1 ? 'persona' : 'persone'}${L.b ? ` · ${seated} con il posto · ${cap} posti${L.full.length > cap ? ` · <b class="neg">${L.full.length - cap} in più dei posti</b>` : ''}` : ' · da mettere su un bus'}</span></div>` : ''; };
     const tabs = multi ? `<div class="lviews" role="tablist" aria-label="Liste dei bus"><button role="tab" data-act="lview" data-v="all" aria-selected="${view === 'all'}">${ICON.list} Tutti i bus</button>${t.buses.map(b => `<button role="tab" data-act="lview" data-v="${b.id}" aria-selected="${view === b.id}" data-droplist="L:${esc(b.id)}">${ICON.bus} Lista ${esc(b.label)} <small>${listRows(t, b.id).filter(r => !isEmptyRow(r)).length}</small></button>`).join('')}<button role="tab" data-act="lview" data-v="side" aria-selected="${view === 'side'}">${ICON.dock} Affiancate</button></div>` : '';
     if (view === 'side') return tabs + `<div class="lside" style="--n:${Ls.length}">${Ls.map(L => `<section class="lsec lcol" data-list="${esc(L.id)}">${head(L)}<div class="wtw" data-droplist="L:${esc(L.id)}">${sideTable(t, L, ctx)}</div></section>`).join('')}</div>`;
     const show = view === 'all' ? Ls : Ls.filter(L => L.id === view);
     const nob = view !== 'all' && Ls.find(L => !L.id);
-    return tabs + show.map(L => `<section class="lsec" data-list="${esc(L.id)}">${head(L)}<div class="wtw" data-droplist="${multi ? 'L:' + esc(L.id) : '1'}"><table class="wl">${thead}
+    return tabs + show.map(L => `<section class="lsec" data-list="${esc(L.id)}">${head(L)}<div class="wtw" data-droplist="${multi ? 'L:' + esc(L.id) : '1'}"><table class="wl${ctx.ev ? ' wl-ev' : ''}">${thead}
         <tbody>${rowsShown(t, L.rows).map((r, i) => wRow(t, r, i, cols, ctx, bigl)).join('')}</tbody></table></div></section>`).join('')
       + (nob ? `<div class="lnobus small">${ICON.alert} ${nob.full.length} ${nob.full.length === 1 ? 'persona non è' : 'persone non sono'} su nessun bus: le vedi in «Tutti i bus».</div>` : '');
   }
@@ -1976,9 +2072,9 @@
       <button class="btn sm ghost" data-act="lselclear">${ICON.close} Deseleziona</button></div>`;
   }
   function listaView(t, D, SI, T) {
-    const bigl = tripCat(t) === 'biglietteria'; const tour = !bigl && isTourT(t); const cols = listCols(tour, bigl);
+    const bigl = tripCat(t) === 'biglietteria'; const tour = !bigl && isTourT(t); const ev = tripCat(t) === 'evento'; const cols = listCols(tour, bigl, ev);
     const byRow = {}; D.forEach((bk, gi) => bk.persone.forEach((p, k) => { byRow[p.id] = { bk, gi, k }; }));
-    const ctx = { byRow, SI, parts: partOpts(t), FI: supplPrices(t) ? filaInfo(t, D) : null };
+    const ctx = { byRow, SI, parts: partOpts(t), FI: supplPrices(t) ? filaInfo(t, D) : null, ev, OV: ev ? overCap(t, D) : null, TK: ev ? tripTkt(t) : null };
     const Q = t.quota;
     const sup = (k, l) => `<td><span class="sl">${l}</span><input class="hc num" data-qs="${k}" inputmode="decimal" value="${Q.suppl[k] != null ? esc(String(Q.suppl[k]).replace('.', ',')) : ''}" placeholder="€"></td>`;
     const annTable = (k, title, dl = 'data di annullo') => {
@@ -1996,6 +2092,7 @@
         ${tour ? `<button class="btn sm" data-act="rooming">${ICON.print} Rooming list</button>` : ''}
         ${bigl ? '' : `<button class="btn sm${UI.dock ? ' dark' : ' primary'}" data-act="dock" aria-pressed="${!!UI.dock}">${ICON.dock} ${UI.dock ? 'Nascondi piantina' : 'Piantina accanto'}</button>`}
       </div>
+      ${ctx.OV && (ctx.OV.n > ctx.OV.cap || ctx.OV.ids.size) ? `<div class="warnbox capw" role="alert">${ICON.alert}<span><b>Posti finiti: ${ctx.OV.n > ctx.OV.cap ? `${ctx.OV.n} persone per ${ctx.OV.cap} posti sul bus.` : 'un bus è pieno.'}</b> ${ctx.OV.ids.size ? `${ctx.OV.ids.size === 1 ? 'La persona segnata' : `Le ${ctx.OV.ids.size} persone segnate`} «senza posto» non ${ctx.OV.ids.size === 1 ? 'si può' : 'si possono'} incassare.` : 'Mancano posti per i nomi ancora da scrivere.'} Aggiungi un bus da «Posti sul bus» oppure sposta qualcuno in lista d'attesa.</span></div>` : ''}
       ${listTables(t, cols, ctx, bigl, SI)}
       <div class="whelp small">${bigl ? 'Una riga per cliente: «Rossi x 2» e i nomi sotto. Con il pulsante «€» si registra l\'incasso e si prepara lo scontrino.' : `Si scrive come in Word`}${bigl ? '' : `: «Rossi x 3» sulla prima riga e le altre persone sotto. Invio = riga sotto. Il numero a sinistra apre il menu della riga (anche con il tasto destro). ${gestHint()} Cognome <span class="pos">verde</span> = saldato. Per mettere i posti trascina ${ICON.grip} sulla piantina: dalla prima riga si sposta tutta la prenotazione, dalle altre la singola persona${multiBus(t) ? '; trascinando nell\'altra lista si cambia bus' : ''}. Il pulsante «€» della prima riga apre l'incasso di tutta la comitiva, quello delle altre righe l'incasso della singola persona.`}</div>
       ${selBar(t)}
@@ -2141,7 +2238,7 @@
     openModal(t ? 'Modifica gita' : 'Nuova gita', `<div class="tm">
       <div class="field"><label for="t-nome">Nome</label><input id="t-nome" class="tm-name" value="${esc(t ? t.nome : '')}" placeholder="es. Notre Dame de Paris - Messina"></div>
       <div class="tm-row">
-        <div class="field"><label for="t-cat">Tipo</label><select id="t-cat">${['gita', 'tour', 'evento', 'biglietteria'].map(c => `<option value="${c}"${cat === c ? ' selected' : ''}>${CAT_L[c]}</option>`).join('')}</select></div>
+        <div class="field"><label for="t-cat">Tipo</label><select id="t-cat">${['gita', 'tour', 'evento'].concat(cat === 'biglietteria' ? ['biglietteria'] : []).map(c => `<option value="${c}"${cat === c ? ' selected' : ''}>${CAT_L[c]}</option>`).join('')}</select></div>
         <div class="field"><label for="t-data">Partenza</label><input id="t-data" type="date" value="${esc(t ? t.data : todayISO())}"></div>
         <div class="field"><label for="t-fine">Rientro <small>se più giorni</small></label><input id="t-fine" type="date" value="${esc(t ? t.fine || '' : '')}"></div>
         <div class="field"><label for="t-code">Codice</label><input id="t-code" value="${esc(t ? t.code || '' : '')}" placeholder="G07, T08"></div>
@@ -3405,26 +3502,29 @@
   function payDraft(t, bk, pid) {
     const Q = t.quota || {}; const m = bkMoney(t, bk); const cat = tripCat(t); bk._m = m;
     const pm = payMoney(t, bk, pid); const who = pid ? bk.persone.filter(p => p.id === pid) : bk.persone.filter(p => pm.incl.includes(p.id));
-    const tkOn = Q.tkt1 != null || Q.tkt2 != null; const dir = tkOn ? (+Q.diritti || 0) : 0;
-    const groups = []; let suppl = 0; const supL = [];
+    const TK = tripTkt(t); const tkOn = TK.sett.length > 0; const dir = tkOn ? TK.dir : 0; const manyT = TK.sett.filter(x => x.nome).length > 1;
+    const groups = []; let suppl = 0; const supL = []; const emL = [];
     bk.persone.forEach((p, i) => { if (!who.includes(p)) return;
       const per = m.per[i] || {}; const tipo = per.tipo; const sup = supplOf(t, bk, p) || 0; suppl += sup; if (sup) supL.push(sup);
-      const tk = tkOn && tipo !== 'free' ? (+(tipo === 'bam' || tipo === 'inf' ? (Q.tkt2 ?? Q.tkt1) : Q.tkt1) || 0) : 0;
-      const bus = per.v != null ? r2(per.v - sup - (tk ? tk + dir : 0)) : 0;
-      const l = tipo === 'bam' || tipo === 'inf' ? 'Ridotto' : 'Intero';
-      const g = groups.find(x => x.bus === bus && x.tkt === tk && x.l === l); if (g) g.q++; else groups.push({ l, q: 1, bus, tkt: tk });
+      // 2.1.8: negli eventi il biglietto c'è solo per chi ha la fila scritta (gli altri pagano solo il bus)
+      const x = tkOn ? personTkt(t, p, tipo, TK) : null; const tk = x ? +x.prezzo || 0 : 0; if (x) { const em = emisISO(p.row && p.row.emis); if (em) emL.push(em); }
+      const bus = per.v != null ? r2(per.v - sup - (x ? tk + dir : 0)) : 0;
+      const l = (x || !tkOn ? (tipo === 'bam' || tipo === 'inf' ? 'Ridotto' : 'Intero') : 'Solo bus') + (x && manyT && x.s.nome ? ' ' + x.s.nome : '');
+      const g = groups.find(y => y.bus === bus && y.tkt === tk && y.l === l && !!y.hasT === !!x); if (g) g.q++; else groups.push({ l, q: 1, bus, tkt: tk, hasT: !!x });
     });
-    while (groups.length > 3) { const x = groups.pop(); groups[2].q += x.q; }
+    // le righe con prezzi diversi non si uniscono più (il totale resta giusto anche con tanti tipi di biglietto).
+    // tk1 = la riga ha il biglietto anche se costa 0 € (es. bambini gratis): i diritti si contano lo stesso
+    groups.forEach(g => { g.tk1 = !!g.hasT; delete g.hasT; });
     while (groups.length < 3) groups.push({ l: groups.length === 1 ? 'Ridotto' : 'Ridotto 3', q: 0, bus: 0, tkt: 0 });
-    const nT = groups.reduce((a, g) => a + (g.tkt ? g.q : 0), 0);
+    const nT = groups.reduce((a, g) => a + (g.tkt || g.tk1 ? g.q : 0), 0);
     const autoCat = cat === 'tour' ? 'Tour' : cat === 'gita' ? 'Gita' : cat === 'evento' ? (nT ? 'BusEdiritti' : 'SoloBus') : cat === 'biglietteria' ? (dir ? 'TicketEdiritti' : 'SoloTicket') : 'Gita';
     const P0 = pid ? who[0] : bk.persone[0]; const h = pid ? P0.row : bk.head; const cl = h.cid && S.clients.clienti[h.cid];
-    const circ = Q.circuito || (tkOn ? (ACC.sess.ag === 'md' ? 'T.OneMD' : 'T.OneRG') : '');
+    const circ = TK.circ || Q.circuito || (tkOn ? (ACC.sess.ag === 'md' ? 'T.OneMD' : 'T.OneRG') : '');
     return {
       bigl: cat === 'biglietteria', tour: cat === 'tour', gita: cat === 'gita',
       doc: cat === 'tour' ? 'fattura' : 'scontrino', cat: autoCat, cliente: (pid ? `${P0.cognome} ${P0.nome}` : `${bkName(bk)} ${bk.persone[0] ? bk.persone[0].nome : ''}`).trim().toUpperCase(),
       // gite: descrizione come sullo scontrino dell'agenzia, «gita randazzo e floresta 08/11/26»
-      desc: (cat === 'gita' ? `${/^\s*gita\b/i.test(t.nome || '') ? '' : 'gita '}${t.nome || ''} ${yy2(t.data)}` : `${yy2(t.data)} ${t.nome}`).replace(/\s+/g, ' ').trim().toLowerCase(), lines: groups, suppl: r2(suppl), supN: supL.length > 1 && supL.every(v => v === supL[0]) ? supL.length : 1, dir, circuito: circ, emis: todayISO(), ant: false,
+      desc: (cat === 'gita' ? `${/^\s*gita\b/i.test(t.nome || '') ? '' : 'gita '}${t.nome || ''} ${yy2(t.data)}` : `${yy2(t.data)} ${t.nome}`).replace(/\s+/g, ' ').trim().toLowerCase(), lines: groups, suppl: r2(suppl), supN: supL.length > 1 && supL.every(v => v === supL[0]) ? supL.length : 1, dir, circuito: circ, emis: emL.length ? emL.sort()[0] : todayISO(), ant: false,
       imp: pm.rest != null && pm.rest > 0 ? r2(pm.rest) : '', rest: pm.rest != null ? r2(pm.rest) : null, met: 'contanti', mix: {}, pratica: '', canale: 'In agenzia', dataPag: todayISO(), pagante: '', note: '',
       legacy: h.pagato || '',
       fatt: (() => { const p0 = P0 || {}; const nm = (cl && cl.nome) || p0.nome || ''; return {
@@ -3434,7 +3534,7 @@
     };
   }
   function payTotals(f) {
-    const nT = f.lines.reduce((a, l) => a + (+l.tkt ? +l.q || 0 : 0), 0);
+    const nT = f.lines.reduce((a, l) => a + (+l.tkt || l.tk1 ? +l.q || 0 : 0), 0);
     const bus = r2(f.lines.reduce((a, l) => a + (+l.q || 0) * (+l.bus || 0), 0));
     const tkt = r2(f.lines.reduce((a, l) => a + (+l.q || 0) * (+l.tkt || 0), 0));
     const dirT = r2(nT * (+f.dir || 0)); const sup = r2(+f.suppl || 0);
@@ -3467,7 +3567,7 @@
     const hist = allMovs().filter(x => x.tripId === t.id && resolveBk(x.tripId, x.bkId) === bk.id && (!pid || x.pid === pid)).sort((a, b) => a.at.localeCompare(b.at));
     const pName = id => { const p = bk.persone.find(q => q.id === id); return p ? `${p.cognome} ${p.nome}`.trim() : ''; };
     const storn = new Set(hist.filter(x => x.storno).map(x => x.storno));
-    const canPay = ACC.can('cassa') && ACC.sess.ag;
+    const canPay = ACC.can('cassa') && ACC.sess.ag; const blk = payBlock(t, bk, pid, f);
     const tkOn = f.lines.some(l => +l.tkt) || tripCat(t) === 'biglietteria' || tripCat(t) === 'evento';
     const mainBtn = f.doc === 'fattura' ? 'Fattura' : f.doc === 'scontrino' ? 'Scontrino' : f.doc === 'caparra' ? 'Registra la caparra' : 'Registra senza documento';
     const op = UI.pay.open = UI.pay.open || {}; const isOpen = (k, def) => (op[k] != null ? op[k] : def);
@@ -3477,6 +3577,7 @@
       <label class="pp-1">Note pratica<input data-pf="note" value="${esc(f.note)}"></label>
       ${P ? '' : `<label class="pp-1">Pagato prima, fuori dall'app (come nella lista Word)<input data-pf="legacy" class="num" inputmode="decimal" value="${esc(f.legacy)}" placeholder="0"></label>`}`;
     const colA = `
+      ${canPay && blk ? `<div class="warnbox pp-blk" role="alert">${ICON.alert}<span>${esc(blk)}</span></div>` : ''}
       ${comit ? `<div class="pp-sec"><span class="pp-l">Chi paga</span><div class="pp-who" role="radiogroup" aria-label="Chi paga">
         <button type="button" role="radio" data-act="paywho" data-id="${bk.id}" data-pid="" aria-checked="${!pid}">${ICON.users} Tutta la comitiva</button>
         ${bk.persone.map(p => { const pm = personMoney(t, bk, p.id); return `<button type="button" role="radio" data-act="paywho" data-id="${bk.id}" data-pid="${p.id}" aria-checked="${pid === p.id}">${esc(p.cognome)} ${esc(p.nome)}${pm.paid ? ` <small>${pm.rest === 0 ? '✓ ' : ''}${esc(fmtNum(pm.paid))}</small>` : ''}</button>`; }).join('')}</div></div>` : ''}
@@ -3491,13 +3592,13 @@
         <div id="pp-buono">${typeof buonoPayHTML === 'function' ? buonoPayHTML(f) : ''}</div></div>
       <details class="pp-det" data-pdet="altri"${isOpen('altri', !easy) ? ' open' : ''}><summary><span>Altri dati: pratica, canale, pagante, note</span>${(() => { const x = [f.pratica ? 'pratica ' + f.pratica : '', f.pagante ? 'pagante ' + f.pagante : '', f.note ? 'note' : '', !P && f.legacy ? 'pagato prima ' + f.legacy + ' €' : ''].filter(Boolean); return x.length ? `<small>${esc(x.join(' · '))}</small>` : ''; })()}</summary><div class="pp-detb">${altri}</div></details>
       <div class="pp-foot"><div class="small">${canPay ? `Registrato da <b>${esc(ACC.me().name)}</b> · <b>${esc(agName(ACC.sess.ag))}</b> · ${esc(cassaName(ACC.sess.ag))}` : 'Per incassare scegli l\'agenzia in cui lavori (in alto).'}</div>
-        ${canPay ? `<div class="pp-act"><button class="btn primary big" data-act="pfsave">${f.doc === 'scontrino' ? ICON.print + ' ' : ''}${mainBtn}${+f.imp ? ' · ' + money(+f.imp) : ''}</button></div>` : ''}</div>`;
+        ${canPay ? `<div class="pp-act"><button class="btn primary big" data-act="pfsave"${blk ? ' disabled' : ''}>${f.doc === 'scontrino' ? ICON.print + ' ' : ''}${mainBtn}${+f.imp ? ' · ' + money(+f.imp) : ''}</button></div>` : ''}</div>`;
     const colB = `
       ${f.doc === 'fattura' ? fattHTML(f.fatt) : ''}
       <details class="pp-det" data-pdet="righe"${isOpen('righe', m.due == null) ? ' open' : ''}><summary><span>Righe del documento</span><small id="pp-lsum">${esc(linesSummary(f, T))}</small></summary><div class="pp-detb">
         <label class="pp-1">Descrizione<input data-pf="desc" value="${esc(f.desc)}" autocomplete="off"></label>
         <table class="pp-lines"><thead><tr><th></th><th>Q</th>${f.bigl ? '' : '<th>€ bus</th>'}${tkOn ? '<th>€ biglietto</th>' : ''}<th class="r">Totale</th></tr></thead><tbody>
-          ${f.lines.map((l, i) => `<tr><td><input class="pf-in lab" data-pl="${i}" data-k="l" value="${esc(l.l)}" aria-label="Riga ${i + 1}"></td><td><input class="pf-in num q" data-pl="${i}" data-k="q" inputmode="numeric" value="${l.q ? esc(String(l.q)) : ''}" aria-label="Quantità riga ${i + 1}"></td>${f.bigl ? '' : `<td><input class="pf-in num" data-pl="${i}" data-k="bus" inputmode="decimal" value="${+l.bus ? esc(fmtNum(+l.bus)) : ''}" aria-label="Euro bus riga ${i + 1}"></td>`}${tkOn ? `<td><input class="pf-in num" data-pl="${i}" data-k="tkt" inputmode="decimal" value="${+l.tkt ? esc(fmtNum(+l.tkt)) : ''}" aria-label="Euro biglietto riga ${i + 1}"></td>` : ''}<td class="r" id="pl-t${i}">${l.q ? money((+l.q) * ((+l.bus || 0) + (+l.tkt || 0))) : ''}</td></tr>`).join('')}
+          ${f.lines.map((l, i) => `<tr><td><input class="pf-in lab" data-pl="${i}" data-k="l" value="${esc(l.l)}" title="${esc(l.l)}" aria-label="Riga ${i + 1}: ${esc(l.l)}"></td><td><input class="pf-in num q" data-pl="${i}" data-k="q" inputmode="numeric" value="${l.q ? esc(String(l.q)) : ''}" aria-label="Quantità riga ${i + 1}"></td>${f.bigl ? '' : `<td><input class="pf-in num" data-pl="${i}" data-k="bus" inputmode="decimal" value="${+l.bus ? esc(fmtNum(+l.bus)) : ''}" aria-label="Euro bus riga ${i + 1}"></td>`}${tkOn ? `<td><input class="pf-in num" data-pl="${i}" data-k="tkt" inputmode="decimal" value="${+l.tkt ? esc(fmtNum(+l.tkt)) : ''}" aria-label="Euro biglietto riga ${i + 1}"></td>` : ''}<td class="r" id="pl-t${i}">${l.q ? money((+l.q) * ((+l.bus || 0) + (+l.tkt || 0))) : ''}</td></tr>`).join('')}
         </tbody></table>
         <div class="pp-g3">${f.bigl ? '' : `<label>Suppl. fila €${nIn('suppl', f.suppl)}</label>`}${tkOn ? `<label>Diritti € (per biglietto)${nIn('dir', f.dir)}</label><label>Circuito<select data-pf="circuito"><option value="">—</option>${CIRCUITI.map(c => `<option${c === f.circuito ? ' selected' : ''}>${c}</option>`).join('')}</select></label>` : ''}</div>
         ${tkOn ? `<div class="pp-g2"><label>Emissione biglietti<input type="date" data-pf="emis" value="${esc(f.emis)}"></label><label class="chk pp-chk"><input type="checkbox" data-pfc="ant"${f.ant ? ' checked' : ''}> Emissione anticipata</label></div>` : ''}
@@ -3584,17 +3685,29 @@
   function payInput(el) {
     const f = UI.pay && UI.pay.f; if (!f) return false; const d = el.dataset;
     if (d.pf === 'imp') f.impFromMix = false;
-    if (d.pf) { const k = d.pf; f[k] = ['imp', 'suppl', 'dir'].includes(k) ? (parseEuro(el.value) ?? (el.value.trim() ? f[k] : '')) : el.value; if (k === 'legacy') { const t = trip(); const h = t && rowById(t, UI.pay.bkId); if (h) { h.pagato = el.value.trim(); save(); } } payRecalc(); return true; }
+    if (d.pf) { const k = d.pf; f[k] = ['imp', 'suppl', 'dir'].includes(k) ? (parseEuro(el.value) ?? (el.value.trim() ? f[k] : '')) : el.value; if (k === 'legacy') { const t = trip(); const h = t && rowById(t, UI.pay.bkId); if (h) { h.pagato = el.value.trim(); save(); } } payRecalc(); if (k === 'stock') render(); return true; }
     if (d.pl !== undefined) { const l = f.lines[+d.pl]; l[d.k] = d.k === 'l' ? el.value : d.k === 'q' ? (parseInt(el.value, 10) || 0) : (parseEuro(el.value) || 0); payRecalc(); return true; }
     if (d.pff) { f.fatt[d.pff] = d.pff === 'cf' ? el.value.toUpperCase().replace(/\s/g, '') : el.value; if (d.pff === 'cf') f.fatt.cfAuto = !el.value.trim(); if (['cognome', 'nome', 'sesso', 'nascita', 'natoA', 'cf'].includes(d.pff)) cfRecalc(); return true; }
     if (d.pfm) { mixInput(d.pfm, parseEuro(el.value) || 0); return true; }
     if (d.pfc) { f[d.pfc] = el.checked; return true; }
     return false;
   }
+  // 2.1.8: niente doppie vendite. Negli eventi non si incassa chi è oltre i posti dei bus;
+  // i biglietti dell'agenzia non si usano oltre quelli rimasti liberi.
+  function payBlock(t, bk, pid, f) {
+    if (tripCat(t) === 'evento') { const OV = overCap(t); const over = bk.persone.filter(p => (!pid || p.id === pid) && OV.ids.has(p.id));
+      if (over.length) return `${over.length === 1 ? `${over[0].cognome} ${over[0].nome} è` : `${over.length} persone di questa prenotazione sono`} oltre i posti del bus: il bus è pieno. Aggiungi un bus da «Posti sul bus» oppure sposta in lista d'attesa, poi incassa.`; }
+    if (f.stock && typeof bgStockAvail === 'function') { const sk = bgStock().find(x => x.id === f.stock); const need = bgPayTypes(t);
+      if (need.size > 1) return `In questo incasso ci sono biglietti di tipi diversi: con i biglietti dell'agenzia incassa una persona alla volta (in «Chi paga»), oppure scegli «nessuno».`;
+      if (sk && need.size && !need.has(tkNorm(sk.sett))) return `I biglietti dell'agenzia scelti sono di «${sk.sett}»: le persone di questo incasso hanno un altro biglietto. Scegli «nessuno» oppure i biglietti giusti.`; }
+    if (f.stock && typeof bgStockAvail === 'function') { const n = payTotals(f).nT; const av = bgStockAvail(f.stock, t.id, bk.id, pid); if (n > av) return `Dei biglietti dell'agenzia scelti ne ${av === 1 ? 'resta 1 libero' : `restano ${av} liberi`}, qui ne servono ${n}: scegli «nessuno» ed emetti i biglietti, oppure aggiungi altri biglietti comprati in Biglietteria.`; }
+    return '';
+  }
   function paySave() {
     const t = trip(); const D = deriveBookings(t); const bk = D.find(x => x.id === UI.pay.bkId); if (!bk) return payClose();
     if (!ACC.sess.ag) return toast('Scegli prima l\'agenzia in cui lavori (in alto)');
     const f = UI.pay.f; const imp = r2(+f.imp);
+    { const blk = payBlock(t, bk, UI.pay.pid || '', f); if (blk) { DIAG.ev('avviso', 'Incasso bloccato: ' + (blk.includes('oltre i posti') ? 'oltre i posti del bus' : 'biglietti dell\'agenzia finiti')); return toast(blk); } }
     if (!imp || imp <= 0) return toast('Scrivi l\'importo incassato adesso');
     let parts;
     if (f.met === 'misto') {
@@ -3656,14 +3769,15 @@
   const contaTabs = () => `<div class="ctabs seg" role="tablist" aria-label="Contabilità"><button role="tab" data-act="ctab" data-v="giorno" aria-pressed="${UI.ctab !== 'mese'}">Resoconto giornaliero</button><button role="tab" data-act="ctab" data-v="mese" aria-pressed="${UI.ctab === 'mese'}">Mese</button></div>`;
   const XL_H = ['Data', 'Op.', 'Doc.', 'V.Banco', 'Fattura', 'Categoria', 'Cognome e Nome', 'Descrizione', 'Circuito', 'Emis. Cont.', 'Emis. Antic.', 'Note prat.', 'Q1', '€ 1 Bus', 'Tkt intero', 'Q2', '€ 2 Bus', 'Tkt ridotto2', 'Q3', '€ 3 Bus', 'Tkt ridotto3', 'Suppl. Fila', 'Diritti', 'Totale', 'CHECK', 'Cash', 'Pos', '€ altro', 'Modalità', 'Pratica', 'Data.Pag.', 'Pagante', 'Saldo', 'Danea', 'Check D.', '€ Tot.Tkt', 'N.Tot. Tkt', 'Check Tkt', 'Tot.Diritti', 'Tot. Bus', 'Note', 'Tkt+Diritti', 'Agenzia'];
   function xlRow(m, saldo) {
-    const L = m.lines || []; const ln = i => L[i] || {}; const sumP = f => r2((m.parts || []).filter(f).reduce((a, p) => a + p.a, 0));
+    // con più di 3 righe (es. più tipi di biglietto) dalla terza in poi si uniscono in Q3 = 1 con i totali: le somme restano giuste
+    const L0 = m.lines || []; const L = L0.length > 3 ? L0.slice(0, 2).concat([{ l: L0.slice(2).map(l => `${l.q} × ${l.l}`).join(' + '), q: 1, bus: r2(L0.slice(2).reduce((a, l) => a + l.q * l.bus, 0)), tkt: r2(L0.slice(2).reduce((a, l) => a + l.q * l.tkt, 0)) }]) : L0; const ln = i => L[i] || {}; const sumP = f => r2((m.parts || []).filter(f).reduce((a, p) => a + p.a, 0));
     const cash = sumP(p => p.m === 'contanti'), pos = sumP(p => p.m === 'pos'), alt = sumP(p => p.m !== 'contanti' && p.m !== 'pos');
     const altM = (m.parts || []).filter(p => p.m !== 'contanti' && p.m !== 'pos').map(p => MET_L[p.m] || p.m).join('+');
     const totBus = r2(L.reduce((a, l) => a + l.q * l.bus, 0)), totTkt = r2(L.reduce((a, l) => a + l.q * l.tkt, 0)), nT = m.nT || L.reduce((a, l) => a + (l.tkt ? l.q : 0), 0), dirT = r2((m.dir || 0) * nT);
     const tot = isInc(m) ? (m.docTot != null ? m.docTot : m.tot) : 0;
     return [fmtDate(m.day), m.sigla || sigla(m.uid, m.who), DOC_X[m.doc] || (m.tipo === 'storno' ? 'NC V.Banco' : ''), '', '', m.cat || '', m.cliente || '', m.desc || m.tripN || '', m.circuito || 'NO', m.emis && !m.ant ? fmtDate(m.emis) : 'NO', m.emis && m.ant ? fmtDate(m.emis) : 'NO', m.note || '',
       ln(0).q || 0, ln(0).bus || 0, ln(0).tkt || 0, ln(1).q || 0, ln(1).bus || 0, ln(1).tkt || 0, ln(2).q || 0, ln(2).bus || 0, ln(2).tkt || 0, m.suppl || 0, m.dir || 0, tot,
-      !isInc(m) ? 'CONTROLLA' : Math.abs(r2(cash + pos + alt) - tot) < 0.01 ? 'ok' : 'acconto', cash, pos, alt, altM, m.pratica || '', m.dataPag ? fmtDate(m.dataPag) : '', m.pagante || '', saldo, isInc(m) ? (m.agenzia != null ? m.agenzia : m.tot) : 0, '', totTkt, nT, '', dirT, totBus, m.tipo === 'acconto' ? 'acconto' : '', r2(totTkt + dirT), AGC[m.ag] || m.ag || ''];
+      !isInc(m) ? 'CONTROLLA' : Math.abs(r2(cash + pos + alt) - tot) < 0.01 ? 'ok' : 'acconto', cash, pos, alt, altM, m.pratica || '', m.dataPag ? fmtDate(m.dataPag) : '', m.pagante || '', saldo, isInc(m) ? (m.agenzia != null ? m.agenzia : m.tot) : 0, '', totTkt, nT, '', dirT, totBus, [m.tipo === 'acconto' ? 'acconto' : '', L0.length > 3 ? 'Q3 = ' + L[2].l : ''].filter(Boolean).join(' · '), r2(totTkt + dirT), AGC[m.ag] || m.ag || ''];
   }
   function exportCassa(movs, name) {
     movs = movs.slice().sort((a, b) => a.at.localeCompare(b.at));
@@ -3869,13 +3983,110 @@
     const used = new Map();
     bgVend().forEach(x => { if (x.stock && x.tipo !== 'rimborso') used.set(x.stock, (used.get(x.stock) || 0) + (+x.nT || 0) - (+x.rimb || 0)); });
     trSt.forEach((n, k) => { const s = k.split('|')[0]; used.set(s, (used.get(s) || 0) + n); });
-    bgIdx.v = v; bgIdx.c = { paid, used, movs }; return bgIdx.c;
+    bgIdx.v = v; bgIdx.c = { paid, used, movs, trSt }; return bgIdx.c;
   }
   const venPaid = x => bgIdx().paid.get(x.id) || 0;
   const venQ = x => (+x.nT || 0) - (+x.rimb || 0);
   const venDue = x => (venQ(x) > 0 ? r2(x.tot - venPaid(x)) : 0);
   const venSosp = x => x.tipo !== 'rimborso' && venDue(x) > 0.009;
   const stLiberi = s => Math.max(0, (+s.q || 0) - (bgIdx().used.get(s.id) || 0));
+  // biglietti dell'agenzia che una prenotazione del viaggio può ancora usare (quelli liberi + quelli che ha già)
+  function bgStockAvail(sid, tripId, bkId, pid) { const s = bgStock().find(x => x.id === sid); if (!s) return 0; return stLiberi(s) + (bgIdx().trSt.get(sid + '|' + tripId + '|' + bkId + '|' + (pid || '')) || 0); }
+  // ---- viaggi con il bus collegati a un evento (2.1.8) ----
+  function bgTripEv(t) { return t ? bgEvents().filter(e => e.tripId === t.id).sort((a, b) => String(a.data).localeCompare(String(b.data)))[0] || null : null; }
+  function bgTripOf(e) { return e && e.tripId ? S.trips.find(x => x.id === e.tripId) || null : null; }
+  // biglietti nella lista del viaggio: quante persone hanno il biglietto, quante sono in prenotazioni non ancora saldate
+  function bgTripTk(t) {
+    const o = { n: 0, nS: 0, rest: 0, bks: [] }; if (!t) return o; const TK = tripTkt(t); if (!TK.sett.length) return o;
+    deriveBookings(t).forEach(bk => { const m = bkMoney(t, bk); bk._m = m; const n = bk.persone.filter(p => personTkt(t, p, (m.per[bk.persone.indexOf(p)] || {}).tipo || 'ad', TK)).length; if (!n) return;
+      o.n += n; if (!saldato(bk) && (m.rest == null || m.rest > 0.009)) { o.nS += n; o.rest = r2(o.rest + (m.rest || 0)); o.bks.push({ bk, n, rest: m.rest }); } });
+    return o;
+  }
+  // riepilogo sotto i tipi di biglietto del viaggio collegato
+  function bgTripInfo(t, e) {
+    const S1 = bgStock().filter(s => s.evId === e.id); const q = S1.reduce((a, s) => a + (+s.q || 0), 0), lib = S1.reduce((a, s) => a + stLiberi(s), 0); const k = bgTripTk(t);
+    return `<div class="tk-info"><span>Biglietti dell'agenzia: ${q ? `<b>${q}</b> comprati · <b>${lib}</b> liberi` : 'nessuno'}</span><span>Nella lista: <b>${k.n}</b> ${k.n === 1 ? 'biglietto' : 'biglietti'}${k.nS ? ` · <b class="neg">${k.nS}</b> non ancora saldati` : ''}</span>${bgCan() ? `<button class="btn sm ghost" data-act="tkunlink" title="Il viaggio non è più collegato all'evento: i prezzi restano scritti qui">${ICON.unlink || ''} Scollega</button>` : ''}</div>`;
+  }
+  // collegare un viaggio a un evento della Biglietteria (o crearne uno con i dati del viaggio)
+  function bgLinkModal(t, keep) {
+    if (!bgCan()) return toast('Il tuo account non può modificare la Biglietteria');
+    const near = e => Math.abs(parseD(e.data) - parseD(t.data));
+    const evs = bgEvents().filter(e => !bgTripOf(e) && (e.data >= todayISO() || e.data === t.data)).sort((a, b) => near(a) - near(b) || a.data.localeCompare(b.data));
+    if (!keep) UI.modal = { kind: 'bglink', tripId: t.id, sel: (evs.find(e => e.data === t.data) || {}).id || 'new' };
+    const M = UI.modal; const TK = tripTkt(t);
+    const opt = (id, html) => `<button type="button" role="radio" class="bl-o" data-act="bglksel" data-id="${esc(id)}" aria-checked="${M.sel === id}">${html}</button>`;
+    openModal('Collega alla Biglietteria', `<div class="bl">
+      <p class="small">Il viaggio <b>${esc(t.nome)}</b> (${esc(fmtDate(t.data))}) diventa l'evento con il bus in Biglietteria: i tipi di biglietto, i diritti e il circuito saranno quelli dell'evento, e in Biglietteria vedrai anche i biglietti venduti con il bus e quelli non ancora pagati.</p>
+      <div class="bl-l" role="radiogroup" aria-label="Evento">
+        ${opt('new', `<b>${ICON.plus} Crea un nuovo evento con i dati di questo viaggio</b><small>${TK.sett.length ? esc(TK.sett.map(x => `${x.nome || 'Biglietto'} ${fmt2(+x.intero || 0)} €`).join(' · ')) : 'scrivi prima almeno un tipo di biglietto con il prezzo'}</small>`)}
+        ${evs.map(e => opt(e.id, `<b>${esc(fmtDate(e.data))} · ${esc(e.nome)}</b><small>${esc(circL(e.circ))} · ${esc((e.settori || []).map(x => `${x.nome} ${fmt2(+x.intero || 0)} €`).join(' · '))}</small>`)).join('')}
+      </div>
+      ${evs.length ? '' : '<div class="small">In Biglietteria non ci sono altri eventi liberi da collegare.</div>'}
+      <div class="small bl-n">Nella colonna «fila» della lista scrivi il nome del settore (es. «Parterre»): così ognuno paga il biglietto giusto.${t.tkFila ? '' : ' <b>Collegando, il biglietto si somma solo a chi ha la fila scritta</b> (regola della 2.1.8).'}</div></div>`,
+      `<button class="btn" data-act="close">Annulla</button><button class="btn primary" data-act="bglksave">Collega</button>`);
+  }
+  function bgLinkSave() {
+    const M = UI.modal; const t = S.trips.find(x => x.id === M.tripId); if (!t) return closeModal();
+    if (bgTripEv(t)) { closeModal(); return toast('Il viaggio è già collegato a un evento'); }
+    let E;
+    if (M.sel === 'new') {
+      const TK = tripTkt(t); const sett = TK.sett.filter(x => (+x.intero || 0) > 0 || (+x.ridotto || 0) > 0);
+      if (!sett.length) return toast('Scrivi prima almeno un tipo di biglietto con il prezzo, in alto nella lista');
+      const circ = TK.circ || 'T.OneRG';
+      E = { id: 'e' + uid(), nome: t.nome, luogo: '', data: t.data, ora: '', circ, dir: t.quota.diritti != null && t.quota.diritti !== '' ? +t.quota.diritti || 0 : bgDirDef(circ), settori: sett.map(x => ({ id: 's' + uid(), nome: x.nome || 'Biglietto', intero: r2(+x.intero || 0), ridotto: r2(+x.ridotto || 0) })), tripId: t.id, note: '' };
+    } else { const e = bgEv(M.sel); if (!e || bgTripOf(e)) return toast('Scegli l\'evento'); E = Object.assign(JSON.parse(JSON.stringify(e)), { tripId: t.id }); }
+    if (!t.tkFila) t.tkFila = true; save();
+    bgPutMap(BGP.ev, 'eventi', E); ACC.tlog('info', `Biglietteria · viaggio «${t.nome}» collegato all'evento ${E.nome} (${E.data})`);
+    closeModal(); render(); toast(`Collegato a «${E.nome}»: i prezzi del biglietto ora sono quelli della Biglietteria`);
+  }
+  // scollegare: l'evento resta in Biglietteria, i prezzi si copiano nel viaggio
+  function bgUnlink(t) {
+    const e = bgTripEv(t); if (!e || !bgCan()) return;
+    confirmBox('Scollega dalla Biglietteria', `Il viaggio <b>${esc(t.nome)}</b> non sarà più collegato all'evento <b>${esc(e.nome)}</b>. I tipi di biglietto restano scritti nella lista.`, 'Scollega', () => {
+      bgCopyPrices(e, t);
+      bgPutMap(BGP.ev, 'eventi', Object.assign({}, e, { tripId: '' })); ACC.tlog('avviso', `Biglietteria · viaggio «${t.nome}» scollegato dall'evento ${e.nome}`); commit(); toast('Scollegato'); });
+  }
+  // i prezzi dell'evento si copiano nel viaggio quando si scollega (così le quote non cambiano)
+  function bgCopyPrices(e, t) { tripInit(t); t.quota.tsett = (e.settori || []).map(x => ({ id: uid(), nome: x.nome, intero: +x.intero || null, ridotto: +x.ridotto || null })); t.quota.diritti = +e.dir || 0; t.quota.circuito = e.circ || ''; }
+  // ---- vendere biglietto + bus dalla Biglietteria: il cliente entra nella lista del viaggio (2.1.8) ----
+  function bgBusModal(evId, keep) {
+    const e = bgEv(evId); const t = bgTripOf(e); if (!e || !t) return;
+    if (tripCat(t) !== 'evento') return toast(`«${t.nome}» non è un evento: apri il viaggio e cambia il tipo in «Evento» (Modifica gita)`);
+    if (!keep) UI.modal = { kind: 'bgbus', evId, n: 1, pp: [{ cognome: '', nome: '' }], tel: '', sett: ((e.settori || [])[0] || {}).nome || '', emis: todayISO() };
+    const M = UI.modal; const OV = overCap(t); const free = OV.free;
+    while (M.pp.length < M.n) M.pp.push({ cognome: '', nome: '' }); M.pp.length = M.n;
+    openModal('Vendi biglietto + bus', `<div class="bge bgb">
+      <div class="bg-busi">${ICON.bus}<span><b>${esc(t.nome)}</b> · ${esc(fmtDate(t.data))}<br><small>${t.buses.length ? `${OV.cap} posti sul bus · <b>${free}</b> ${free === 1 ? 'libero' : 'liberi'}` : 'il viaggio non ha ancora un bus'}</small></span></div>
+      ${t.chiusa ? `<div class="warnbox small">${esc(closedMsg(t))}: non si possono aggiungere prenotazioni.</div>` : !t.buses.length || free <= 0 ? `<div class="warnbox small">${ICON.alert} Posti finiti: aggiungi un bus al viaggio prima di vendere altri pacchetti biglietto + bus.</div>` : `
+      <div class="grid2"><div class="field"><label for="bgb-n">Quante persone</label><input id="bgb-n" data-bgb="n" class="pay-imp" inputmode="numeric" value="${M.n}" style="max-width:120px"></div><div class="field"><label for="bgb-t">Telefono</label><input id="bgb-t" data-bgb="tel" inputmode="tel" value="${esc(M.tel)}" autocomplete="off" placeholder="facoltativo"></div></div>
+      <div class="field"><label>Nomi</label><div class="bgb-pp">${M.pp.map((p, i) => `<div class="bgb-p"><span>${i + 1}</span><input data-bgbp="${i}" data-k="cognome" value="${esc(p.cognome)}" placeholder="${i ? 'Cognome (se diverso)' : 'Cognome'}" aria-label="Cognome ${i + 1}" autocomplete="off"><input data-bgbp="${i}" data-k="nome" value="${esc(p.nome)}" placeholder="Nome" aria-label="Nome ${i + 1}" autocomplete="off"></div>`).join('')}</div></div>
+      <div class="field"><label>Biglietto</label><div class="bg-chips">${(e.settori || []).map(x => `<button type="button" data-act="bgbset" data-v="${esc(x.nome)}" aria-pressed="${M.sett === x.nome}">${esc(x.nome)} <small>${esc(fmt2(+x.intero || 0))} €${x.ridotto ? ' · rid. ' + esc(fmt2(+x.ridotto)) + ' €' : ''}</small></button>`).join('')}</div></div>
+      <div class="grid2"><div class="field"><label for="bgb-d">Biglietti emessi il</label><input id="bgb-d" type="date" data-bgb="emis" value="${esc(M.emis)}"></div><div></div></div>
+      <div class="small">Le persone entrano nella lista del viaggio con la fila «${esc(M.sett)}» e la data di emissione; poi si apre l'incasso con bus + biglietto. ${M.n > free ? `<b class="neg">Restano solo ${free} posti.</b>` : ''}</div>`}</div>`,
+      `<button class="btn" data-act="close">Annulla</button>${!t.chiusa && t.buses.length && free > 0 ? `<button class="btn primary" data-act="bgbsave">Metti in lista e incassa</button>` : `<button class="btn" data-act="bgbusopen" data-id="${esc(t.id)}">Apri il viaggio</button>`}`);
+  }
+  function bgBusSave() {
+    const M = UI.modal; const e = bgEv(M.evId); const t = bgTripOf(e); if (!e || !t || tripCat(t) !== 'evento') return closeModal();
+    if (t.chiusa) return toast(closedMsg(t)); const n = M.n;
+    // chi non ha il cognome prende quello della prima persona (famiglie)
+    const c0 = String((M.pp[0] || {}).cognome || '').trim(); if (!c0) return toast('Scrivi il cognome della prima persona');
+    const pp = M.pp.map(p => ({ cognome: String(p.cognome || '').trim() || c0, nome: String(p.nome || '').trim() }));
+    const OV = overCap(t); if (n > OV.free) return toast(OV.free ? `Sul bus restano solo ${OV.free} posti` : 'Posti finiti: aggiungi un bus al viaggio');
+    const iso = M.emis || todayISO(); const em = `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(2, 4)}`;
+    // in quale lista: con più bus quella che ha abbastanza posti liberi, altrimenti «Senza bus»
+    let lk = ''; if (multiBus(t)) { const b = t.buses.find(b => busCap(b) - listLoad(t, b.id) >= n); lk = b ? b.id : ''; }
+    // il capogruppo ha sempre «x N» (anche «x 1»): così non entra mai in una comitiva sopra che aspetta ancora dei nomi
+    const rows = pp.map((p, i) => Object.assign(blankRow(), { cognome: i === 0 ? `${p.cognome} x ${n}` : p.cognome, nome: p.nome, tel: i === 0 ? String(M.tel || '').trim() : '', fila: M.sett, emis: em }, lk ? { bus: lk } : {}));
+    // dopo l'ultima riga scritta e dopo le righe riservate ai nomi che mancano delle comitive di quella lista
+    const ix = new Map(t.rows.map((r, i) => [r.id, i])); let at = -1; t.rows.forEach((r, i) => { if (!isEmptyRow(r) && (!multiBus(t) || listKey(t, r) === lk)) at = i; });
+    deriveBookings(t).forEach(bk => { if (multiBus(t) && listKey(t, bk.head) !== lk) return; const j = ix.get(bk.last); if (j != null && j > at) at = j; });
+    if (at < 0 && lk) { at = t.rows.findIndex(r => listKey(t, r) === lk) - 1; if (at < -1) at = t.rows.length - 1; }
+    t.rows.splice(at + 1, 0, ...rows); ensureBlank(t);
+    ACC.tlog('info', `Biglietteria · biglietto + bus: ${rows[0].cognome} ${pp[0].nome} (${n} ${n === 1 ? 'persona' : 'persone'}, ${M.sett}) nella lista di «${t.nome}»`);
+    closeModal(); UI.view = 'trip'; UI.tripId = t.id; UI.sec = 'lista'; UI.lsel = []; UI.lview = 'all'; UI.sel = UI.selP = null; UI.busId = t.buses[0] ? t.buses[0].id : null;
+    (UI.flash = UI.flash || {}); rows.forEach(r => { UI.flash[r.id] = { at: Date.now(), by: 'Biglietteria' }; });
+    commit(); window.scrollTo(0, 0); payOpen(rows[0].id);
+  }
   // ---- controllo per circuito: emesso, incassato per agenzia (per giorno di emissione), sospesi ----
   function bgCtl(circ) {
     const E = {}, add = (d, k, a, n, ag) => { const o = E[d] = E[d] || { em: 0, emN: 0, inc: {}, incN: {} }; if (k === 'em') { o.em = r2(o.em + a); o.emN += n; } else { o.inc[ag] = r2((o.inc[ag] || 0) + a); o.incN[ag] = (o.incN[ag] || 0) + n; } };
@@ -3915,7 +4126,9 @@
     const inc = r2(em.reduce((a, x) => a + venPaid(x), 0)); const sos = r2(em.reduce((a, x) => a + venDue(x), 0)); const dir = r2(em.reduce((a, x) => a + (+x.totDir || 0), 0));
     const evs = bgEvents().filter(e => e.data >= today).sort((a, b) => a.data.localeCompare(b.data));
     const e = st.evId && bgEv(st.evId); const sett = e && (e.settori || []).find(s => s.id === st.sett);
-    const stk = e && sett ? bgStock().filter(s => s.evId === e.id && s.sett === sett.nome && stLiberi(s) > 0) : [];
+    // i biglietti dell'agenzia comprati per un viaggio con il bus restano per il bus (si danno dalla lista del viaggio)
+    const stk = e && sett ? bgStock().filter(s => s.evId === e.id && s.sett === sett.nome && stLiberi(s) > 0 && !(s.tripId && S.trips.some(x => x.id === s.tripId))) : [];
+    const eT0 = e && bgTripOf(e); const eT = eT0 && tripCat(eT0) === 'evento' ? eT0 : null; const eOV = eT ? overCap(eT) : null;
     if (st.src === 'stock' && !stk.length) st.src = 'new';
     const SK = st.src === 'stock' ? stk.find(s => s.id === st.stockId) || stk[0] : null; if (SK) st.stockId = SK.id;
     const tar = sett ? [['Intero', sett.intero], ...(sett.ridotto ? [[sett.ridottoL || 'Ridotto', sett.ridotto]] : [])] : [];
@@ -3926,9 +4139,10 @@
     const evList = !e ? evs.filter(x => !q || [x.nome, x.luogo, circL(x.circ)].some(v => String(v || '').toLowerCase().includes(q))).slice(0, 8) : [];
     const canSell = bgCan() && ag;
     const form = `<section class="box bg-new" aria-label="Nuova vendita"><h2>Nuova vendita</h2>
-      ${e ? `<div class="bg-f"><span class="bg-l">Evento</span><div class="bg-sel on"><span><b>${esc(e.nome)}</b> · ${esc(e.luogo || '')} · ${esc(fmtDate(e.data, true))}${e.ora ? ' ore ' + esc(e.ora) : ''}</span>${circB(e.circ)}<button class="btn sm ghost" data-act="bgevclr">Cambia</button></div></div>`
+      ${e ? `<div class="bg-f"><span class="bg-l">Evento</span><div class="bg-sel on"><span><b>${esc(e.nome)}</b>${e.luogo ? ' · ' + esc(e.luogo) : ''} · ${esc(fmtDate(e.data, true))}${e.ora ? ' ore ' + esc(e.ora) : ''}</span>${circB(e.circ)}<button class="btn sm ghost" data-act="bgevclr">Cambia</button></div></div>`
         : `<label class="bg-f">Evento<div class="bg-sel">${ICON.search}<input data-bgq="1" value="${esc(st.evq || '')}" placeholder="scrivi il nome dell'evento o il luogo" autocomplete="off"></div></label>
         <div class="bu-list">${evList.map(x => `<button type="button" data-act="bgevpick" data-id="${esc(x.id)}"><b>${esc(dd2(x.data))}</b><span>${esc(x.nome)}${x.luogo ? ' · ' + esc(x.luogo) : ''}</span>${circB(x.circ)}</button>`).join('') || `<div class="small">${evs.length ? 'Nessun evento trovato.' : 'Nessun evento in vendita.'} Crealo nella scheda «Eventi».</div>`}</div>`}
+      ${eT ? `<div class="bg-bus">${ICON.bus}<span>Con il bus: <b>${esc(eT.nome)}</b><br><small>${eT.buses.length ? (eOV.free > 0 ? `<b>${eOV.free}</b> ${eOV.free === 1 ? 'posto libero' : 'posti liberi'} sul bus` : '<b class="neg">posti finiti</b>') : 'il viaggio non ha ancora un bus'}${eT.chiusa ? ' · lista chiusa' : ''}</small></span><button type="button" class="btn sm primary" data-act="bgbus" data-id="${esc(e.id)}"${canSell && !eT.chiusa && eT.buses.length && eOV.free > 0 ? '' : ' disabled'}>${ICON.plus} Vendi biglietto + bus</button></div><div class="small">Qui sotto: solo il biglietto, senza il bus.</div>` : ''}
       ${e ? `<div class="bg-f"><span class="bg-l">Settore</span><div class="bg-chips">${(e.settori || []).map(s => `<button type="button" data-act="bgsett" data-id="${esc(s.id)}" aria-pressed="${st.sett === s.id}">${esc(s.nome)} <small>${esc(fmt2(+s.intero || 0))} €${s.ridotto ? ' · rid. ' + esc(fmt2(+s.ridotto)) + ' €' : ''}</small></button>`).join('') || '<span class="small">L\'evento non ha settori: aggiungili in «Eventi».</span>'}</div></div>` : ''}
       ${sett && stk.length ? `<div class="bg-f"><span class="bg-l">Da dove viene il biglietto</span><div class="seg bg-src"><button type="button" data-act="bgsrc" data-v="new" aria-pressed="${st.src !== 'stock'}">Emetti un biglietto nuovo</button>${stk.map(s => `<button type="button" data-act="bgsrc" data-v="stock" data-id="${esc(s.id)}" aria-pressed="${!!SK && SK.id === s.id}">Biglietto dell'agenzia <small>${stLiberi(s)} liberi · emessi il ${esc(dd2(s.emis))}</small></button>`).join('')}</div></div>` : ''}
       ${sett ? `<table class="bg-tar"><thead><tr><th>Tariffa</th><th>Quantità</th><th class="r">Prezzo</th><th class="r">Diritti</th><th class="r">Totale</th></tr></thead><tbody>
@@ -4055,30 +4269,35 @@
     const tot = r2(L.reduce((a, x) => a + venDue(x), 0)), n = L.reduce((a, x) => a + venQ(x), 0);
     const circs = [...new Set([...bgVend().filter(venSosp).map(x => x.circ), ...bgStock().filter(s => stLiberi(s) > 0).map(s => s.circ)])];
     const groups = [...G.entries()].map(([evId, xs]) => ({ e: bgEv(evId), xs: xs.sort((a, b) => a.emis.localeCompare(b.emis)) })).sort((a, b) => String(a.e ? a.e.data : '').localeCompare(String(b.e ? b.e.data : '')));
+    // 2.1.8: pacchetti biglietto + bus dei viaggi collegati, non ancora saldati (si incassano dalla lista del viaggio)
+    const TS = bgEvents().map(e => ({ e, t: bgTripOf(e) })).filter(x => x.t && (f === 'tutti' || x.e.circ === f)).map(x => Object.assign(x, { k: bgTripTk(x.t) })).filter(x => x.k.bks.length).sort((a, b) => String(a.e.data).localeCompare(String(b.e.data)));
     return `${bgHead(`${n} ${n === 1 ? 'biglietto emesso' : 'biglietti emessi'} e non ancora pagati · <b>${money(tot)}</b> da incassare`)}${tabs}
       <div class="bg-filt"><span class="bg-l">Circuito</span><div class="seg"><button data-act="bgscirc" data-v="tutti" aria-pressed="${f === 'tutti'}">Tutti</button>${circs.map(c => `<button data-act="bgscirc" data-v="${esc(c)}" aria-pressed="${f === c}">${esc(circL(c))}</button>`).join('')}</div></div>
       ${groups.map(g => { const s = r2(g.xs.reduce((a, x) => a + venDue(x), 0)), q = g.xs.reduce((a, x) => a + venQ(x), 0); return `<section class="box tablecard bg-ev"><div class="bg-evh"><h2>${esc(g.e ? evLbl(g.e) : g.xs[0].evN)}</h2>${circB(g.xs[0].circ)}<span class="bg-evs">${q} ${q === 1 ? 'biglietto' : 'biglietti'} · <b>${money(s)}</b></span></div><div class="tscroll"><table class="rt"><thead><tr><th>Emesso il</th><th>Acquirente</th><th>Settore e tariffa</th><th class="r">N.</th><th class="r">€ a biglietto</th><th class="r">Da incassare</th><th>Agenzia</th><th></th></tr></thead><tbody>
         ${g.xs.map(x => `<tr><td>${esc(dd2(x.emis))}</td><td><b>${esc(x.cliente)}</b>${x.tel ? `<br><small>${esc(x.tel)}</small>` : ''}</td><td>${esc(x.sett)} · ${esc((x.righe || []).map(r => r.tar.toLowerCase()).join(' + '))}</td><td class="r">${venQ(x)}</td><td class="r">${esc((x.righe || []).map(r => fmt2(r.prezzo)).join(' / '))} €</td><td class="r"><b>${money(venDue(x))}</b></td><td>${esc(agName(x.ag))}</td><td class="r">${bgCan() ? `<button class="btn sm primary" data-act="bgvpay" data-id="${esc(x.id)}">${ICON.euro} Incassa</button>` : ''}</td></tr>`).join('')}</tbody></table></div></section>`; }).join('')}
       ${SL.length ? `<section class="box tablecard bg-ev"><div class="bg-evh"><h2>Biglietti dell'agenzia ancora liberi</h2><span class="bg-evs">${SL.reduce((a, s) => a + stLiberi(s), 0)} biglietti · <b>${money(r2(SL.reduce((a, s) => a + stLiberi(s) * s.prezzo, 0)))}</b></span></div><div class="tscroll"><table class="rt"><thead><tr><th>Emessi il</th><th>Evento</th><th>Settore</th><th>Circuito</th><th class="r">Liberi</th><th class="r">€ a biglietto</th></tr></thead><tbody>${SL.map(s => `<tr><td>${esc(dd2(s.emis))}</td><td><b>${esc(evLbl(bgEv(s.evId)))}</b></td><td>${esc(s.sett)}</td><td>${circB(s.circ)}</td><td class="r">${stLiberi(s)}</td><td class="r">${money(s.prezzo)}</td></tr>`).join('')}</tbody></table></div></section>` : ''}
-      ${!groups.length && !SL.length ? '<div class="infobox">Nessun biglietto sospeso.</div>' : ''}`;
+      ${TS.map(x => `<section class="box tablecard bg-ev"><div class="bg-evh"><h2>${esc(evLbl(x.e))} <small>· biglietto + bus</small></h2>${circB(x.e.circ)}<span class="bg-evs">${x.k.nS} ${x.k.nS === 1 ? 'biglietto' : 'biglietti'} · <b>${money(x.k.rest)}</b> da incassare (bus e biglietto)</span></div><div class="tscroll"><table class="rt"><thead><tr><th>Prenotazione</th><th>Emesso il</th><th class="r">Biglietti</th><th class="r">Da incassare</th><th></th></tr></thead><tbody>
+        ${x.k.bks.map(o => { const ems = [...new Set(o.bk.persone.map(p => emisISO(p.row && p.row.emis)).filter(Boolean))].sort(); return `<tr><td><b>${esc(bkName(o.bk))}</b>${o.bk.persone.length > 1 ? ` x ${o.bk.persone.length}` : ''}${o.bk.head.tel ? `<br><small>${esc(o.bk.head.tel)}</small>` : ''}</td><td>${ems.length ? esc(ems.map(dd2).join(', ')) : '<small>non scritta</small>'}</td><td class="r">${o.n}</td><td class="r"><b>${o.rest != null ? money(o.rest) : '—'}</b></td><td class="r"><button class="btn sm" data-act="opentrip" data-id="${esc(x.t.id)}">${ICON.list} Apri la lista</button></td></tr>`; }).join('')}</tbody></table></div></section>`).join('')}
+      ${!groups.length && !SL.length && !TS.length ? '<div class="infobox">Nessun biglietto sospeso.</div>' : ''}`;
   }
   // ---- Eventi ----
   function bgEventi(tabs) {
     const st = bgS(); const today = todayISO(); const all = !!st.evAll;
     const E = bgEvents().filter(e => all || e.data >= today).sort((a, b) => a.data.localeCompare(b.data));
-    const V = bgVend(); const cnt = id => { const xs = V.filter(x => x.evId === id && x.tipo !== 'rimborso' && x.tipo !== 'cambio'); return { v: xs.reduce((a, x) => a + venQ(x), 0), s: xs.filter(venSosp).reduce((a, x) => a + venQ(x), 0) }; };
+    const V = bgVend(); const cnt = id => { const xs = V.filter(x => x.evId === id && x.tipo !== 'rimborso' && x.tipo !== 'cambio'); const e = bgEv(id); const k = bgTripTk(bgTripOf(e)); return { v: xs.reduce((a, x) => a + venQ(x), 0), s: xs.filter(venSosp).reduce((a, x) => a + venQ(x), 0), bv: k.n, bs: k.nS }; };
     return `${bgHead('Eventi in vendita, con settori, tariffe e diritti per circuito', bgCan() ? `<button class="btn primary" data-act="bgevnew">${ICON.plus} Nuovo evento</button>` : '')}${tabs}
       <label class="chk small"><input type="checkbox" data-act="bgevall"${all ? ' checked' : ''}> Mostra anche gli eventi passati</label>
       <section class="box tablecard"><div class="tscroll"><table class="rt bg-evt"><thead><tr><th>Data</th><th>Evento</th><th>Circuito</th><th>Settori e prezzi (€)</th><th class="r">Diritti</th><th class="r">Venduti</th><th class="r">Sospesi</th><th>Viaggio con il bus</th><th></th></tr></thead><tbody>
-        ${E.map(e => { const c = cnt(e.id); const t = e.tripId && S.trips.find(x => x.id === e.tripId); return `<tr><td class="nowrap">${esc(fmtDate(e.data))}${e.ora ? `<br><small>ore ${esc(e.ora)}</small>` : ''}</td><td><b>${esc(e.nome)}</b>${e.luogo ? `<br><small>${esc(e.luogo)}</small>` : ''}</td><td>${circB(e.circ)}</td><td><small>${(e.settori || []).map(s => `${esc(s.nome)} ${esc(fmt2(+s.intero || 0))}${s.ridotto ? ' (rid. ' + esc(fmt2(+s.ridotto)) + ')' : ''}`).join(' · ') || '—'}</small></td><td class="r">${esc(fmt2(+e.dir || 0))}</td><td class="r"><b>${c.v}</b></td><td class="r">${c.s ? `<span class="pill tbd">${c.s}</span>` : '—'}</td><td>${t ? `<button class="bg-link" data-act="opentrip" data-id="${esc(t.id)}">${ICON.bus} ${esc(t.nome)}</button>` : '<small>solo biglietto</small>'}</td><td class="r">${bgCan() ? `<button class="btn sm" data-act="bgevedit" data-id="${esc(e.id)}">${ICON.edit} Modifica</button>` : ''}</td></tr>`; }).join('') || `<tr><td colspan="9" class="emptyrow">${all ? 'Nessun evento' : 'Nessun evento in programma: premi «Nuovo evento»'}</td></tr>`}
+        ${E.map(e => { const c = cnt(e.id); const t = e.tripId && S.trips.find(x => x.id === e.tripId); return `<tr><td class="nowrap">${esc(fmtDate(e.data))}${e.ora ? `<br><small>ore ${esc(e.ora)}</small>` : ''}</td><td><b>${esc(e.nome)}</b>${e.luogo ? `<br><small>${esc(e.luogo)}</small>` : ''}</td><td>${circB(e.circ)}</td><td><small>${(e.settori || []).map(s => `${esc(s.nome)} ${esc(fmt2(+s.intero || 0))}${s.ridotto ? ' (rid. ' + esc(fmt2(+s.ridotto)) + ')' : ''}`).join(' · ') || '—'}</small></td><td class="r">${esc(fmt2(+e.dir || 0))}</td><td class="r"><b>${c.v}</b>${c.bv ? `<br><small class="bg-cb">+ ${c.bv} con il bus</small>` : ''}</td><td class="r">${c.s ? `<span class="pill tbd">${c.s}</span>` : c.bs ? '' : '—'}${c.bs ? `${c.s ? '<br>' : ''}<small class="bg-cb">${c.bs} con il bus</small>` : ''}</td><td>${t ? `<button class="bg-link" data-act="opentrip" data-id="${esc(t.id)}">${ICON.bus} ${esc(t.nome)}</button>` : '<small>solo biglietto</small>'}</td><td class="r">${bgCan() ? `<button class="btn sm" data-act="bgevedit" data-id="${esc(e.id)}" title="Modifica l'evento" aria-label="Modifica l'evento ${esc(e.nome)}">${ICON.edit}<span>Modifica</span></button>` : ''}</td></tr>`; }).join('') || `<tr><td colspan="9" class="emptyrow">${all ? 'Nessun evento' : 'Nessun evento in programma: premi «Nuovo evento»'}</td></tr>`}
       </tbody></table></div></section>
-      <div class="small bg-note">Per i concerti con il bus il viaggio resta in «Viaggi» (lista, piantina, cartelli): qui lo colleghi all'evento, così i biglietti dell'agenzia si possono dare alle persone del viaggio.</div>`;
+      <div class="small bg-note">Per i concerti con il bus il viaggio resta in «Viaggi» (lista, piantina, cartelli). Lo colleghi all'evento da qui («Modifica» › «Viaggio con il bus») oppure dalla lista del viaggio con «Collega alla Biglietteria»: i prezzi del biglietto diventano quelli dell'evento e qui vedi anche i biglietti venduti con il bus.</div>`;
   }
   function bgEvModal(id, keep) {
     const e0 = id && bgEv(id);
     if (!keep) UI.modal = { kind: 'bgev', ev: JSON.parse(JSON.stringify(e0 || { id: 'e' + uid(), nome: '', luogo: '', data: '', ora: '', circ: 'T.OneRG', dir: 2, settori: [{ id: 's' + uid(), nome: '', intero: '', ridotto: '' }], tripId: '', note: '' })), isNew: !e0 };
     const E = UI.modal.ev; const today = todayISO();
-    const trips = S.trips.filter(t => (t.fine || t.data) >= today || t.id === E.tripId).sort((a, b) => a.data.localeCompare(b.data));
+    // si collegano solo i viaggi di tipo «Evento» (2.1.8), liberi o già collegati a questo evento
+    const trips = S.trips.filter(t => t.id === E.tripId || ((t.fine || t.data) >= today && tripCat(t) === 'evento' && !bgEvents().some(x => x.id !== E.id && x.tripId === t.id))).sort((a, b) => a.data.localeCompare(b.data));
     openModal(UI.modal.isNew ? 'Nuovo evento' : 'Modifica evento', `<div class="bge">
       <div class="field"><label for="bge-n">Evento</label><input id="bge-n" data-bge="nome" value="${esc(E.nome)}" placeholder="es. Laura Pausini"></div>
       <div class="field"><label for="bge-l">Luogo</label><input id="bge-l" data-bge="luogo" value="${esc(E.luogo)}" placeholder="es. Messina · Stadio San Filippo"></div>
@@ -4094,6 +4313,9 @@
     const E = UI.modal.ev; E.nome = String(E.nome || '').trim(); if (!E.nome) return toast('Scrivi il nome dell\'evento'); if (!E.data) return toast('Scegli la data dell\'evento');
     E.settori = (E.settori || []).map(s => ({ id: s.id || 's' + uid(), nome: String(s.nome || '').trim(), intero: parseEuro(String(s.intero)) || 0, ridotto: parseEuro(String(s.ridotto)) || 0 })).filter(s => s.nome);
     if (!E.settori.length) return toast('Scrivi almeno un settore con il prezzo'); E.dir = parseEuro(String(E.dir)) || 0;
+    if (E.tripId) { const o = bgEvents().find(x => x.id !== E.id && x.tripId === E.tripId); if (o) return toast(`Quel viaggio è già collegato all'evento «${o.nome}»`); }
+    { const e0 = bgEv(E.id); const t0 = e0 && e0.tripId !== E.tripId && bgTripOf(e0); if (t0) { bgCopyPrices(e0, t0); save(); } }
+    { const t1 = E.tripId && S.trips.find(x => x.id === E.tripId); if (t1 && tripCat(t1) === 'evento' && !t1.tkFila) { t1.tkFila = true; save(); } }
     bgPutMap(BGP.ev, 'eventi', E); ACC.tlog('info', `Biglietteria · evento ${UI.modal.isNew ? 'creato' : 'modificato'}: ${E.nome} (${E.data})`); closeModal(); render(); toast(`Evento «${E.nome}» salvato`);
   }
   // ---- Biglietti dell'agenzia ----
@@ -4154,8 +4376,16 @@
   // ---- nell'incasso di un viaggio con il bus collegato a un evento: biglietto dell'agenzia ----
   function bgTripStockHTML(t, f) {
     const evs = bgEvents().filter(e => e.tripId === t.id).map(e => e.id); if (!evs.length) return '';
-    const L = bgStock().filter(s => evs.includes(s.evId) && (stLiberi(s) > 0 || s.id === f.stock)); if (!L.length) return '';
+    // 2.1.8: solo i biglietti dell'agenzia del settore che hanno le persone di questo incasso (es. Tribuna)
+    const need = bgPayTypes(t); const L = bgStock().filter(s => evs.includes(s.evId) && (stLiberi(s) > 0 || s.id === f.stock) && (!need.size || need.has(tkNorm(s.sett)) || s.id === f.stock)); if (!L.length) return '';
     return `<label class="pp-1">Biglietti dell'agenzia<select data-pf="stock"><option value="">— nessuno (biglietto emesso adesso) —</option>${L.map(s => `<option value="${esc(s.id)}"${f.stock === s.id ? ' selected' : ''}>${esc(s.sett)} · ${esc(circL(s.circ))} · ${stLiberi(s)} liberi · emessi il ${esc(dd2(s.emis))}</option>`).join('')}</select></label>`;
+  }
+  // tipi di biglietto delle persone dell'incasso aperto (nomi normalizzati)
+  function bgPayTypes(t) {
+    const o = new Set(); const P = UI.pay; if (!t || !P) return o; const bk = deriveBookings(t).find(x => x.id === P.bkId); if (!bk) return o;
+    const TK = tripTkt(t); const m = bk._m || bkMoney(t, bk);
+    bk.persone.forEach((p, i) => { if (P.pid && p.id !== P.pid) return; const x = personTkt(t, p, (m.per[i] || {}).tipo || 'ad', TK); if (x) o.add(tkNorm(x.s.nome)); });
+    return o;
   }
   // ---- eventi ----
   document.addEventListener('click', e => {
@@ -4184,10 +4414,16 @@
       case 'bgesadd': if (UI.modal && UI.modal.kind === 'bgev') { UI.modal.ev.settori.push({ id: 's' + uid(), nome: '', intero: '', ridotto: '' }); bgEvModal(null, true); const ins = $$('[data-bges][data-k="nome"]'); if (ins.length) ins[ins.length - 1].focus(); } break;
       case 'bgesdel': if (UI.modal && UI.modal.kind === 'bgev') { UI.modal.ev.settori.splice(+el.dataset.i, 1); bgEvModal(null, true); } break;
       case 'bgevsave': if (UI.modal && UI.modal.kind === 'bgev') bgEvSave(); break;
-      case 'bgevdel': if (UI.modal && UI.modal.kind === 'bgev') { const E = UI.modal.ev; if (bgVend().some(x => x.evId === E.id) || bgStock().some(s => s.evId === E.id)) { toast('L\'evento ha già vendite o biglietti dell\'agenzia: non si può togliere'); break; } bgPutMap(BGP.ev, 'eventi', Object.assign({}, E, { del: true })); closeModal(); render(); toast('Evento tolto'); } break;
+      case 'bgevdel': if (UI.modal && UI.modal.kind === 'bgev') { const E = UI.modal.ev; if (bgVend().some(x => x.evId === E.id) || bgStock().some(s => s.evId === E.id)) { toast('L\'evento ha già vendite o biglietti dell\'agenzia: non si può togliere'); break; } { const e0 = bgEv(E.id); const t0 = e0 && bgTripOf(e0); if (t0) { toast(`L'evento è collegato a «${t0.nome}»: prima scollegalo dalla lista del viaggio`); break; } } bgPutMap(BGP.ev, 'eventi', Object.assign({}, E, { del: true })); closeModal(); render(); toast('Evento tolto'); } break;
       case 'bgstnew': if (bgCan()) bgStModal(false); break;
       case 'bgsset': if (UI.modal && UI.modal.kind === 'bgst') { UI.modal.sett = el.dataset.v; const ev = bgEv(UI.modal.evId); const s = ev && ev.settori.find(x => x.nome === el.dataset.v); if (s) UI.modal.prezzo = s.intero; bgStModal(true); } break;
       case 'bgstsave': if (UI.modal && UI.modal.kind === 'bgst') bgStSave(); break;
+      case 'bglksel': if (UI.modal && UI.modal.kind === 'bglink') { UI.modal.sel = el.dataset.id; $$('[data-act="bglksel"]').forEach(x => x.setAttribute('aria-checked', String(x === el))); } break;
+      case 'bglksave': if (UI.modal && UI.modal.kind === 'bglink') bgLinkSave(); break;
+      case 'bgbus': if (bgCan() && ACC.sess.ag) bgBusModal(el.dataset.id); else toast(ACC.sess.ag ? 'Il tuo account può solo consultare' : 'Scegli prima l\'agenzia in cui lavori (in alto)'); break;
+      case 'bgbset': if (UI.modal && UI.modal.kind === 'bgbus') { UI.modal.sett = el.dataset.v; bgBusModal(UI.modal.evId, true); } break;
+      case 'bgbsave': if (UI.modal && UI.modal.kind === 'bgbus') bgBusSave(); break;
+      case 'bgbusopen': { closeModal(); UI.pay = null; UI.view = 'trip'; UI.tripId = el.dataset.id; UI.sec = 'posti'; UI.lsel = []; UI.lview = 'all'; const tt = trip(); UI.busId = tt && tt.buses[0] ? tt.buses[0].id : null; render(); window.scrollTo(0, 0); break; }
       case 'bgccirc': st.ccirc = el.dataset.v; render(); break;
       case 'bgweek': st.week = addDays(st.week || monday(todayISO()), +el.dataset.v); render(); break;
     }
@@ -4202,6 +4438,8 @@
     else if (d.bgpm && UI.modal && UI.modal.kind === 'bgpay') { UI.modal.mix[d.bgpm] = parseEuro(el.value) || 0; if (d.bgpm === 'buono' && !$('[data-bgp="buono"]')) bgPayModal(UI.modal.id, true); }
     else if (d.bge && UI.modal && UI.modal.kind === 'bgev') { UI.modal.ev[d.bge] = el.value; if (d.bge === 'circ') { UI.modal.ev.dir = bgDirDef(el.value); const r = $('#bge-r'); if (r) r.value = fmt2(UI.modal.ev.dir); } }
     else if (d.bges !== undefined && UI.modal && UI.modal.kind === 'bgev') { UI.modal.ev.settori[+d.bges][d.k] = el.value; }
+    else if (d.bgb && UI.modal && UI.modal.kind === 'bgbus') { if (d.bgb === 'n') { const n = Math.max(1, Math.min(20, parseInt(el.value, 10) || 1)); if (el.value.trim() && n !== UI.modal.n) { UI.modal.n = n; bgBusModal(UI.modal.evId, true); const i = $('#bgb-n'); if (i) { i.focus(); i.select(); } } } else UI.modal[d.bgb] = el.value; }
+    else if (d.bgbp !== undefined && UI.modal && UI.modal.kind === 'bgbus') { const p = UI.modal.pp[+d.bgbp]; if (p) p[d.k] = el.value; }
     else if (d.bgs && UI.modal && UI.modal.kind === 'bgst') { UI.modal[d.bgs] = el.value; if (d.bgs === 'evId') { UI.modal.sett = ''; UI.modal.prezzo = ''; UI.modal.tripId = ''; bgStModal(true); } else { const sm = $('#bgs-sum'); if (sm) sm.innerHTML = bgStSum(UI.modal, bgEv(UI.modal.evId)); } }
   });
   document.addEventListener('change', e => {
@@ -4722,7 +4960,7 @@
       }
       case 'pay': if (!bk) return toast('Riga vuota: niente da incassare'); return payOpen(bk.id, bk.id === id ? '' : id);
       case 'detach': return doDetach(t, (UI.lsel || []).includes(id) && UI.lsel.length > 1 ? UI.lsel.slice() : [id]);
-      case 'map': if (!bk) return; UI.dock = true; UI.pay = null; UI.sel = bk.id; UI.selP = null; { const SI = seatIndex(t); const on = bk.persone.map(p => SI[p.id]).find(Boolean); if (on) UI.busId = on.b.id; else if (multiBus(t) && bk.head.bus) UI.busId = bk.head.bus; } return render();
+      case 'map': if (!bk) return; UI.dock = true; (UI.dockMap = UI.dockMap || {})[t.id] = true; UI.pay = null; UI.sel = bk.id; UI.selP = null; { const SI = seatIndex(t); const on = bk.persone.map(p => SI[p.id]).find(Boolean); if (on) UI.busId = on.b.id; else if (multiBus(t) && bk.head.bus) UI.busId = bk.head.bus; } return render();
     }
   }
   // clic sul numero della riga: con il doppio clic configurato, il clic semplice aspetta un attimo per capire se arriva il secondo
@@ -5323,7 +5561,7 @@
   // ---------- MANUALE D'ISTRUZIONI e ricerca «Aiuto» (2.1.7) ----------
   // Il manuale va aggiornato a ogni versione: mk.py si ferma se HELP_VER non è uguale alla versione dell'app.
   // Le «Novità» si prendono da sole da CHANGES.txt (le ultime 3 versioni): mk.py le scrive qui sotto, in HELP_NEWS.
-  const HELP_VER = '2.1.7';
+  const HELP_VER = '2.1.9';
   const HELP_CAT = [['primi', 'Primi passi'], ['viaggi', 'Viaggi e liste'], ['posti', 'Posti sul bus'], ['stampe', 'Stampe e messaggi'], ['cassa', 'Incassi e cassa'], ['bigl', 'Biglietteria'], ['buoni', 'Buoni regalo'], ['rete', 'Internet e computer'], ['imp', 'Account e impostazioni']];
   const HELP = [
     // ---- primi passi ----
@@ -5337,7 +5575,7 @@
       n: 'Sugli schermi più piccoli le voci mostrano solo l\'icona: passa sopra con il mouse per leggere il nome.' },
     // ---- viaggi e liste ----
     { id: 'nuovoviaggio', c: 'viaggi', t: 'Creare un nuovo viaggio (gita, tour, evento)', k: 'nuovo viaggio gita tour evento creare aggiungere data partenza rientro codice',
-      s: ['In alto clicca «Viaggi».', 'Clicca «Nuovo viaggio».', 'Scrivi il nome, scegli il tipo (Gita, Tour, Evento…) e la data di partenza; per i viaggi di più giorni anche il rientro.', 'Se vuoi, scrivi il codice (es. G07, T08) e accendi i servizi compresi.', 'Clicca «Crea»: il viaggio si apre con un bus da 52 posti, che puoi cambiare.'] },
+      s: ['In alto clicca «Viaggi».', 'Clicca «Nuovo viaggio».', 'Scrivi il nome, scegli il tipo (Gita, Tour o Evento) e la data di partenza; per i viaggi di più giorni anche il rientro. I biglietti da soli (senza bus) si vendono in «Biglietteria».', 'Se vuoi, scrivi il codice (es. G07, T08) e accendi i servizi compresi.', 'Clicca «Crea»: il viaggio si apre con un bus da 52 posti, che puoi cambiare.'] },
     { id: 'importword', c: 'viaggi', t: 'Importare la lista dal file Word', k: 'word docx importare lista file trascinare elenco',
       s: ['Per un viaggio nuovo: in «Viaggi» clicca «Nuovo viaggio da lista Word».', 'Per un viaggio che c\'è già: apri il viaggio, «Lista prenotazioni», poi «Importa da Word».', 'Trascina il file Word nel riquadro (oppure cliccalo per sceglierlo).', 'Controlla l\'anteprima: persone, lista d\'attesa, annullati, quote e partenze.', 'Clicca il pulsante per importare.'],
       n: 'Puoi anche trascinare il file Word direttamente sulla pagina del viaggio.' },
@@ -5396,6 +5634,24 @@
     { id: 'contabilita', c: 'cassa', t: 'Contabilità, Excel e Danea', k: 'contabilita resoconto mensile excel scaricare danea fatture csv',
       s: ['In alto clicca «Contabilità» (solo Master e contabilità).', '«Resoconto giornaliero»: come il foglio CASSA, con «Scarica per Excel».', '«Mese»: i totali del mese, le chiusure e i viaggi.', 'Per le fatture usa «Apri in Danea» nell\'incasso o «Fatture del giorno per Danea».'] },
     // ---- biglietteria ----
+    { id: 'evbiglietto', c: 'viaggi', t: 'Eventi: tipi di biglietto e chi paga solo il bus', k: 'evento concerto biglietto tipi di biglietto parterre tribuna settore intero ridotto diritti solo bus fila somma quota prezzo biglietto compreso',
+      s: ['Apri la lista dell\'evento: in alto, nel riquadro «Biglietto dell\'evento», scrivi il tipo (es. Parterre) con il prezzo intero e, se c\'è, ridotto.', 'Per altri tipi clicca «Aggiungi tipo di biglietto» (es. Tribuna); la «×» toglie un tipo.', 'Scrivi i diritti a biglietto e scegli il circuito.', 'Nella lista, colonna «fila»: scrivi il tipo o la fila del biglietto (es. «Parterre» o «Tribuna 12»). Il biglietto si somma solo a chi ha la fila scritta.', 'Se la fila è vuota la persona paga solo il bus: nella colonna «quota» c\'è scritto «solo bus».'],
+      n: 'Se nella fila c\'è il nome di un tipo si usa il suo prezzo, altrimenti quello del primo tipo. Ai bambini si applica il prezzo ridotto, se c\'è. Negli eventi la fila è quella del biglietto: non dà indicazioni sul posto del bus (quelle si scrivono nelle note). Gli eventi creati prima della versione 2.1.8 restano con la regola di prima (biglietto a tutti) finché non clicchi «Usa la regola nuova» nel riquadro del biglietto.' },
+    { id: 'evemissione', c: 'viaggi', t: 'Eventi: data di emissione dei biglietti', k: 'emissione data emissione biglietti emesso il quando emesso colonna emissione circuito',
+      s: ['Nella lista dell\'evento c\'è la colonna «emissione», subito dopo «fila».', 'Scrivi il giorno in cui avete emesso il biglietto sul circuito, es. 05/11/26 (va bene anche 5/11).', 'Quando incassi, l\'app usa questa data come «Emissione biglietti» al posto della data di oggi.'],
+      n: 'Se la data non si capisce la cella si sottolinea in rosso.' },
+    { id: 'evcollega', c: 'bigl', t: 'Collegare un evento con il bus alla Biglietteria', k: 'collegare collega biglietteria evento bus viaggio importare legare sospesi venduti scollega pacchetto biglietto bus',
+      s: ['Apri la lista dell\'evento con il bus.', 'Nel riquadro «Biglietto dell\'evento» clicca «Collega alla Biglietteria».', 'Scegli l\'evento già creato in Biglietteria, oppure «Crea un nuovo evento con i dati di questo viaggio».', 'Clicca «Collega»: tipi di biglietto, diritti e circuito diventano quelli dell\'evento in Biglietteria (si cambiano da lì, con «Apri in Biglietteria»).', 'In Biglietteria › Eventi vedi anche i biglietti venduti con il bus; in › Sospesi i pacchetti biglietto + bus non ancora saldati.'],
+      n: 'Per togliere il collegamento clicca «Scollega»: l\'evento resta in Biglietteria e i prezzi restano scritti nella lista. Un viaggio si collega a un solo evento, e si collegano solo i viaggi di tipo «Evento». Un evento collegato non si può togliere dalla Biglietteria: prima scollegalo.' },
+    { id: 'bgbus', c: 'bigl', t: 'Biglietteria: vendere biglietto + bus', k: 'vendere biglietto bus pacchetto biglietto piu bus concerto con il bus mettere in lista posti liberi',
+      s: ['In «Biglietteria», scheda «Vendita», scegli l\'evento collegato al viaggio con il bus.', 'Nel riquadro azzurro vedi i posti liberi sul bus: clicca «Vendi biglietto + bus».', 'Scrivi quante persone, i nomi (il cognome si ripete da solo se è lo stesso), il telefono, il tipo di biglietto e il giorno di emissione.', 'Clicca «Metti in lista e incassa»: le persone entrano nella lista del viaggio e si apre l\'incasso con bus + biglietto.'],
+      n: 'Se sul bus non ci sono abbastanza posti la vendita è bloccata. La parte sotto il riquadro azzurro vende solo il biglietto, senza il bus.' },
+    { id: 'piantinaaccanto', c: 'posti', t: 'Vedere la piantina accanto alla lista', k: 'piantina accanto lista vicino affiancata nascondere mostrare piantina nascosta dock',
+      s: ['Apri la lista prenotazioni del viaggio.', 'Clicca «Piantina accanto» (sopra la lista, a destra): la piantina compare a fianco e puoi trascinare le persone sui posti.', 'Per toglierla clicca «Nascondi piantina».'],
+      n: 'Negli eventi la piantina parte nascosta. L\'app ricorda la scelta per ogni viaggio.' },
+    { id: 'postifiniti', c: 'posti', t: 'Posti finiti: persone «senza posto» e incasso bloccato', k: 'posti finiti pieno bus pieno senza posto oltre i posti doppia vendita bloccato non posso incassare capienza troppe persone',
+      s: ['Negli eventi, se nella lista ci sono più persone dei posti del bus, sopra la lista compare l\'avviso rosso «Posti finiti».', 'Le ultime persone della lista sono segnate «senza posto» nella colonna «posto»: non si possono incassare.', 'Per sistemare: aggiungi un bus da «Posti sul bus» (pulsante «+»), oppure sposta qualcuno in lista d\'attesa.', 'Appena ci sono abbastanza posti l\'avviso sparisce e l\'incasso torna possibile.'],
+      n: 'Serve a non vendere mai lo stesso posto due volte: anche «Vendi biglietto + bus» in Biglietteria controlla i posti liberi.' },
     { id: 'bgevento', c: 'bigl', t: 'Biglietteria: creare un evento con settori e prezzi', k: 'biglietteria evento concerto nuovo evento settori prezzi tariffe intero ridotto diritti circuito ticketone boxol vivaticket',
       s: ['In alto clicca «Biglietteria», poi la scheda «Eventi».', 'Clicca «Nuovo evento».', 'Scrivi nome, luogo, data e scegli il circuito (i diritti di prevendita si propongono da soli: 2 € TicketOne, 3 € gli altri).', 'In «Settori e prezzi» scrivi ogni settore con il prezzo intero e, se c\'è, ridotto; «Aggiungi settore» per gli altri.', 'Se c\'è il bus, in «Viaggio con il bus» scegli il viaggio.', 'Clicca «Crea l\'evento».'] },
     { id: 'bgvendita', c: 'bigl', t: 'Biglietteria: vendere biglietti', k: 'vendere biglietti vendita biglietto concerto cliente incassare emissione',
@@ -5404,7 +5660,8 @@
     { id: 'bgsospesi', c: 'bigl', t: 'Biglietteria: biglietti sospesi (emessi e non pagati)', k: 'sospesi biglietti non pagati da incassare emessi pagare dopo',
       s: ['In «Biglietteria» clicca la scheda «Sospesi».', 'Vedi i biglietti per evento: data di emissione, acquirente, settore, prezzo, da incassare, agenzia.', 'Usa i pulsanti in alto per vedere un solo circuito.', 'Quando il cliente paga clicca «Incassa» sulla sua riga.'] },
     { id: 'bgagenzia', c: 'bigl', t: 'Biglietteria: biglietti comprati dall\'agenzia (pacchetti bus + biglietto)', k: 'biglietti agenzia comprati pre acquistati preacquistati blocco stock pacchetto liberi',
-      s: ['In «Biglietteria» clicca la scheda «Biglietti dell\'agenzia».', 'Clicca «Biglietti comprati».', 'Scegli evento e settore, scrivi quanti biglietti, il prezzo e il giorno in cui li avete emessi; se servono per un viaggio con il bus, sceglilo.', 'Clicca «Aggiungi i biglietti».', 'Per darli ai clienti: in «Vendita» scegli «Biglietto dell\'agenzia», oppure nell\'incasso del viaggio collegato apri «Righe del documento» e scegli «Biglietti dell\'agenzia».'] },
+      s: ['In «Biglietteria» clicca la scheda «Biglietti dell\'agenzia».', 'Clicca «Biglietti comprati».', 'Scegli evento e settore, scrivi quanti biglietti, il prezzo e il giorno in cui li avete emessi; se servono per un viaggio con il bus, sceglilo.', 'Clicca «Aggiungi i biglietti».', 'Per darli ai clienti: in «Vendita» scegli «Biglietto dell\'agenzia», oppure nell\'incasso del viaggio collegato apri «Righe del documento» e scegli «Biglietti dell\'agenzia».'],
+      n: 'I biglietti comprati per un viaggio con il bus restano per il bus: non si vendono da soli in «Vendita». Nell\'incasso del viaggio si vedono solo quelli del settore giusto e non si possono usare più biglietti di quelli rimasti liberi.' },
     { id: 'bgcontrollo', c: 'bigl', t: 'Biglietteria: controllo dei circuiti e portafoglio TicketOne', k: 'controllo circuiti emesso incassato sospesi portafoglio addebito ticketone b-fast settimana differenza',
       s: ['In «Biglietteria» clicca la scheda «Controllo circuiti».', 'Scegli il circuito e la settimana con ‹ e ›.', 'Per ogni giorno vedi l\'emesso, l\'incassato a Ragusa, Modica e Marina e i sospesi.', 'Per TicketOne e B-Fast, sotto, scrivi l\'addebito della settimana quando arriva: l\'app lo confronta con le vostre emissioni e mostra la differenza.'],
       n: 'Gli incassi contano nel giorno in cui il biglietto è stato emesso, in qualsiasi agenzia vengano fatti.' },
@@ -5454,7 +5711,7 @@
       .filter(r => r.hit && r.sc >= 2).sort((a, b) => b.sc - a.sc);
     return R.length ? R.filter(r => r.sc >= R[0].sc * 0.4).slice(0, 8) : [];
   }
-  const HELP_NEWS = "VERSIONE 2.1.7 · 04/11/2026\nAIUTO: IL MANUALE D'ISTRUZIONI DENTRO L'APP\n\n1. Nuovo pulsante «Aiuto» (la lente) nel menu in alto, accanto a Impostazioni; si apre anche con\n   il tasto F1. Scrivi la domanda con parole tue (es. «come incasso un biglietto sospeso?»,\n   «ho sbagliato, come torno indietro?»): l'app trova le istruzioni giuste, passo passo.\n   Senza scrivere nulla si vede l'indice per argomento: primi passi, viaggi e liste, posti sul bus,\n   stampe e messaggi, incassi e cassa, biglietteria, buoni regalo, internet, impostazioni.\n2. Se la ricerca non trova niente, o premi «Non trovo la soluzione» / «Non ho risolto», compare\n   il messaggio: «SE PROPRIO NON STAI TROVANDO SOLUZIONE AL PROBLEMA ALLORA È GIUNTA L'ORA DI\n   CHIAMARE GIOVANNI».\n3. Il manuale segue l'app: in cima c'è «Novità delle ultime versioni», presa da sola da queste\n   note, e ogni nuova versione dell'app si crea solo dopo aver aggiornato anche il manuale.\n4. Contiene anche tutte le novità della 2.1.6 (Biglietteria), se non l'avevi ancora caricata.\n\n\nVERSIONE 2.1.6 · 04/11/2026\nBIGLIETTERIA IN UNA SEZIONE A PARTE\n\nNuova voce «Biglietteria» nel menu in alto (per chi può usare la cassa). Funziona come il foglio\nCASSA e i fogli SOSPESI: ogni biglietto ricorda il giorno in cui è stato emesso sul circuito e ogni\nincasso conta per quel giorno, in qualsiasi agenzia venga fatto.\n1. Vendita: scegli l'evento, il settore, quanti biglietti interi e ridotti, il cliente e il giorno\n   dell'emissione. Il totale separa biglietti e diritti di prevendita (nello scontrino vanno solo i\n   diritti, la parte dell'agenzia). «Incassa» apre l'incasso (contanti, POS, misto, buono regalo…);\n   «Emesso, non pagato» la mette tra i sospesi. Se ci sono biglietti dell'agenzia liberi per quel\n   settore, si può scegliere «Biglietto dell'agenzia». Accanto: le vendite di oggi; dal menu «⋯» di\n   ogni vendita: incassa, cambio nome (5 € + 5 € di diritti), rimborso, annulla (solo senza incassi).\n2. Sospesi: i biglietti emessi e non ancora pagati, divisi per evento, con data di emissione,\n   acquirente, settore e tariffa, prezzo, da incassare e agenzia; filtro per circuito; «Incassa».\n   In fondo i biglietti dell'agenzia ancora liberi.\n3. Eventi: data, luogo, circuito, settori con prezzo intero e ridotto, diritti, venduti e sospesi.\n   Si può collegare il viaggio con il bus (che resta in «Viaggi» con lista, piantina e cartelli).\n4. Biglietti dell'agenzia: i biglietti comprati per i pacchetti bus + biglietto. Entrano tra le\n   emissioni del circuito nel giorno in cui li avete emessi e restano sospesi finché non li date ai\n   clienti (in Vendita, oppure nell'incasso del viaggio collegato: «Biglietti dell'agenzia» nelle\n   righe del documento).\n5. Controllo circuiti: per ogni circuito e settimana, giorno per giorno, emesso, incassato a Ragusa,\n   Modica e Marina, sospesi. Per TicketOne e B-Fast anche le settimane contabili del portafoglio:\n   si scrive l'addebito quando arriva e l'app lo confronta con le emissioni (differenza).\nGli incassi della biglietteria vanno nel resoconto di cassa come sempre (TicketEdiritti o SoloTicket,\ncon circuito, emissione, biglietti e diritti). I vecchi viaggi di tipo «Biglietteria» restano dove sono.\n6. Correzioni grafiche: la barra in alto con la voce nuova resta su una riga anche sugli schermi\n   medi (tra 1100 e 1330 pixel solo le icone); sul telefono l'elenco dei viaggi non fa più scorrere\n   la pagina di lato.\n\n\nVERSIONE 2.1.5 · 04/11/2026\nINCASSO AL CENTRO, INDIETRO E CRONOLOGIA, LISTA CHIUSA, BUONI REGALO\n\n1. Incasso in una finestra al centro dello schermo, con la «x» in alto a destra per chiuderla\n   (anche il tasto Esc). Si apre sia dalla lista sia dal menu di un posto della piantina.\n   Più ordinata: a sinistra chi paga, quanto resta, il documento, quanto e come paga, il pulsante;\n   a destra il dettaglio del documento (righe, totale, anteprima dello scontrino) e gli incassi\n   già registrati. Le righe del documento e gli «Altri dati» (pratica, canale, pagante, note,\n   pagato prima) sono chiusi in una riga con il riassunto: si aprono con un clic.\n   Sul telefono la finestra occupa tutto lo schermo.\n2. Tasto «Indietro» e «Cronologia», sia nella lista sia nella piantina (in alto, accanto alle schede):\n   · Indietro annulla l'ultima modifica fatta da questo computer, toccando solo le righe o i posti\n     di quella modifica (non cancella quello che hanno fatto gli altri). Anche Ctrl+Z / ⌘+Z.\n   · Cronologia: tutte le versioni salvate dai computer, divise per giorno, con ora, chi le ha\n     fatte, da quale agenzia e cosa è cambiato. «Ripristina» riporta tutta la lista (o la piantina)\n     a quella versione, dopo aver mostrato cosa cambia; anche il ripristino si annulla con Indietro.\n   · Lucchetto accanto a Cronologia (solo il Master): chiuso, Indietro e Ripristina li usa solo il Master.\n   · Ogni computer tiene le ultime 150 versioni di ogni viaggio. Il contenuto delle versioni si\n     scarica solo quando si ripristina.\n3. Lucchetto «Chiudi la lista» in testa al viaggio (solo il Master): con la lista chiusa non si\n   prendono nuove prenotazioni (niente righe nuove, niente «x N» che cresce, niente conferme dalla\n   lista d'attesa, niente import da Word). Si possono ancora correggere i dati, completare i nomi\n   delle comitive, sistemare i posti, incassare e scrivere nella lista d'attesa. Gli operatori\n   vedono «Lista chiusa»; tutto va nel registro.\n4. Piantina › Lista della gita più ordinata: nome, partenze e posti sulla stessa riga, richieste\n   in un riquadro sotto, persone in etichette brevi (Cognome N. e numero del posto). Niente esce\n   più dai bordi.\n5. Menu del posto nella piantina con lo stesso stile del menu della riga: sezioni Posto\n   (sposta o scambia, nota sul posto), Prenotazione (seleziona tutta, incasso) e Togli.\n6. Buoni regalo: Cassa › «Buoni regalo».\n   · Tabella con N° pratica (si assegna da solo, es. RAG-26-001), data, chi riceve il buono,\n     importo ancora da spendere, chi fa il buono. Ricerca per numero o nome.\n   · «Nuovo buono»: chi riceve, chi fa il buono, importo, come paga. L'importo si incassa nella\n     cassa dell'agenzia (categoria BuonoRegalo del resoconto).\n   · Nell'incasso di un viaggio: metodo «Buono regalo» (anche dentro «Misto»), si sceglie il buono\n     e l'importo si scala da solo. Si può usare in più volte finché arriva a zero; se non basta,\n     l'app lo dice. Uno storno restituisce l'importo al buono.\n   · «Archivio buoni»: i buoni spesi o annullati, con dove sono stati usati («Dettagli»).\n7. Correzioni grafiche trovate durante le prove: nel tema scuro il pulsante scelto in «Chi paga»\n   aveva il testo bianco su bianco; i pulsanti del documento non si tagliano più sul telefono.\n";
+  const HELP_NEWS = "VERSIONE 2.1.9 · 05/11/2026\nCORREZIONI DOPO UN SECONDO CONTROLLO DELLA 2.1.8 (da caricare al posto della 2.1.8)\n\n1. Eventi creati prima della 2.1.8: restano come erano (biglietto a tutti, la fila resta una richiesta di posto sul bus). Nel riquadro del biglietto c'è l'avviso «Regola di prima» con il pulsante «Usa la regola nuova». Gli eventi nuovi e quelli collegati alla Biglietteria usano la regola nuova.\n2. «Vendi biglietto + bus»: il cliente entra sempre come prenotazione a sé («Cognome x N»), dopo le righe riservate alle comitive, mai dentro una comitiva sopra che aspetta ancora dei nomi; si vende solo per i viaggi di tipo «Evento».\n3. Posti finiti: si contano riga per riga nella lista di ogni bus, così chi viene spostato da solo in un bus pieno è lui a risultare «senza posto». L'avviso rosso compare anche quando è pieno un solo bus.\n4. Biglietti dell'agenzia: con persone che hanno biglietti di tipi diversi si incassa una persona alla volta.\n5. Diritti contati anche per i biglietti a 0 € (es. bambini gratis).\n6. Un tipo di biglietto senza prezzo non prende più il prezzo del primo tipo: la quota resta «—» finché non scrivi il prezzo.\n7. Biglietteria: si collegano solo i viaggi di tipo «Evento»; se scolleghi un viaggio da «Modifica evento» i prezzi restano scritti nella lista; un evento collegato non si può togliere (prima va scollegato).\n8. Excel della cassa: con più di 3 righe, dalla terza in poi si uniscono in Q3 con i totali giusti (scritto nelle note).\n9. Piccole cose: «Apri il viaggio» chiude la finestra; la data di emissione senza anno nel futuro (es. 28/12 scritta a gennaio) è dell'anno scorso; nell'incasso il nome lungo della riga si legge passando sopra con il mouse.\n\n\nVERSIONE 2.1.8 · 05/11/2026\nEVENTI CON IL BUS E BIGLIETTERIA INSIEME, SENZA DOPPIE VENDITE\n\n1. Tolto il tipo «Biglietteria» dai viaggi (filtro in «Viaggi» e scelta del tipo): i biglietti si vendono nella sezione Biglietteria. I vecchi viaggi di quel tipo restano visibili in «Tutte».\n2. Eventi, riquadro in alto: «Date e hotel» si chiama «Data». In «Biglietto dell'evento» si possono aggiungere più tipi di biglietto (es. Parterre, Tribuna), ognuno con prezzo intero e ridotto.\n3. Il biglietto si somma solo a chi ha la colonna «fila» scritta: se la fila è vuota la persona paga solo il bus (nella colonna «quota» c'è scritto «solo bus»). Se nella fila c'è il nome di un tipo (es. «Tribuna 12») si usa il prezzo di quel tipo; ridotto per i bambini. Negli eventi la «fila» è quella del biglietto e non dà più indicazioni sul posto del bus. Gli eventi creati prima di questa versione restano come erano (biglietto a tutti): nel riquadro del biglietto c'è il pulsante «Usa la regola nuova» per passarli alla regola nuova quando la fila è scritta per tutti.\n4. Lista degli eventi: nuova colonna «emissione» con la data di emissione del biglietto (l'incasso la usa al posto della data di oggi). Colonne più compatte solo in questa tabella.\n5. «Collega alla Biglietteria» nella lista dell'evento: scegli o crei l'evento in Biglietteria. I tipi di biglietto, i diritti e il circuito diventano quelli dell'evento; in Biglietteria › Eventi e › Sospesi si vedono anche i biglietti venduti con il bus e quelli non ancora saldati. «Scollega» lo toglie e lascia i prezzi scritti nella lista. Si collegano solo i viaggi di tipo «Evento».\n6. Niente doppie vendite: in Biglietteria › Vendita, per un evento con il bus, «Vendi biglietto + bus» mette il cliente nella lista del viaggio e apre l'incasso; se i posti sono finiti la vendita è bloccata. Nella lista dell'evento chi è oltre i posti del bus è segnato «senza posto» e non si può incassare. I biglietti dell'agenzia non si possono usare oltre quelli liberi né per un settore diverso; quelli comprati per il bus non si vendono da soli. Chi compra biglietto + bus entra sempre come prenotazione a sé («Cognome x N»), mai dentro una comitiva sopra che aspetta ancora dei nomi.\n7. Eventi: la piantina accanto alla lista parte nascosta (si apre con «Piantina accanto»; l'app ricorda la scelta per ogni viaggio).\n8. Incasso: i diritti si contano anche per i biglietti a 0 € (es. bambini gratis). Nel file Excel della cassa, se ci sono più di 3 righe, dalla terza in poi si uniscono nella colonna Q3 con i totali giusti (scritto nelle note).\n9. Manuale «Aiuto» aggiornato.\n\n\nVERSIONE 2.1.7 · 04/11/2026\nAIUTO: IL MANUALE D'ISTRUZIONI DENTRO L'APP\n\n1. Nuovo pulsante «Aiuto» (la lente) nel menu in alto, accanto a Impostazioni; si apre anche con\n   il tasto F1. Scrivi la domanda con parole tue (es. «come incasso un biglietto sospeso?»,\n   «ho sbagliato, come torno indietro?»): l'app trova le istruzioni giuste, passo passo.\n   Senza scrivere nulla si vede l'indice per argomento: primi passi, viaggi e liste, posti sul bus,\n   stampe e messaggi, incassi e cassa, biglietteria, buoni regalo, internet, impostazioni.\n2. Se la ricerca non trova niente, o premi «Non trovo la soluzione» / «Non ho risolto», compare\n   il messaggio: «SE PROPRIO NON STAI TROVANDO SOLUZIONE AL PROBLEMA ALLORA È GIUNTA L'ORA DI\n   CHIAMARE GIOVANNI».\n3. Il manuale segue l'app: in cima c'è «Novità delle ultime versioni», presa da sola da queste\n   note, e ogni nuova versione dell'app si crea solo dopo aver aggiornato anche il manuale.\n4. Contiene anche tutte le novità della 2.1.6 (Biglietteria), se non l'avevi ancora caricata.\n";
   const GIOVANNI = 'SE PROPRIO NON STAI TROVANDO SOLUZIONE AL PROBLEMA ALLORA È GIUNTA L\'ORA DI CHIAMARE GIOVANNI';
   const HUI = { q: '', open: '', giov: false };
   function helpArt(a) {
@@ -5491,8 +5748,8 @@
   document.addEventListener('keydown', e => { if (e.key === 'F1' && ACC.me()) { e.preventDefault(); closePop(); helpOpen(); } });
 
   // ---------- render ----------
-  const FOCUS_KEYS = ['note', 'st', 'depsel', 'hq', 'aq', 'r', 'ar', 'nr', 'f', 'q', 'qs', 'qt', 'tf', 'dep2', 'dep', 'k', 'bind', 'cl', 'cfgag', 'cfgl', 'pf', 'pl', 'pff', 'pfm', 'usig'];
-  const ACT_PERM = { unew: 'users', unewm: 'tech', ureset: 'users', usave: 'users', resetall: 'tech', doresetall: 'tech', savekeys: 'tech', wipelocal: 'tech', lgf: 'tech', lexport: 'tech', diagexport: 'tech', lnew: 'settings', ldel: 'settings', savewa: 'settings', savetel: 'settings', savedanea: 'settings', savert: 'settings', savesuppl: 'settings', filaset: 'viaggi', export: 'settings', pay: 'cassa', paypanel: 'viaggi', paywho: 'viaggi', lmove: 'viaggi', lmove1: 'viaggi', detach: 'viaggi', reattach: 'viaggi', noteadd: 'viaggi', notedel: 'viaggi', suppadd: 'viaggi', suppdel: 'viaggi', pfsave: 'cassa', cashmov: 'cassa', cashsave: 'cassa', storno: 'cassa', cclose: 'cassa', ccsave: 'cassa', clnew: 'anag', cldel: 'anag', impgo: 'anag', newtrip: 'viaggi', deltrip: 'viaggi' };
+  const FOCUS_KEYS = ['note', 'st', 'depsel', 'hq', 'aq', 'r', 'ar', 'nr', 'f', 'q', 'qs', 'qt', 'tf', 'dep2', 'dep', 'k', 'bind', 'cl', 'cfgag', 'cfgl', 'pf', 'pl', 'pff', 'pfm', 'usig', 'tks'];
+  const ACT_PERM = { unew: 'users', unewm: 'tech', ureset: 'users', usave: 'users', resetall: 'tech', doresetall: 'tech', savekeys: 'tech', wipelocal: 'tech', lgf: 'tech', lexport: 'tech', diagexport: 'tech', lnew: 'settings', ldel: 'settings', savewa: 'settings', savetel: 'settings', savedanea: 'settings', savert: 'settings', savesuppl: 'settings', filaset: 'viaggi', export: 'settings', pay: 'cassa', paypanel: 'viaggi', paywho: 'viaggi', lmove: 'viaggi', lmove1: 'viaggi', detach: 'viaggi', reattach: 'viaggi', noteadd: 'viaggi', notedel: 'viaggi', tksadd: 'viaggi', tksdel: 'viaggi', tkfila: 'viaggi', tklink: 'cassa', tkunlink: 'cassa', suppadd: 'viaggi', suppdel: 'viaggi', pfsave: 'cassa', cashmov: 'cassa', cashsave: 'cassa', storno: 'cassa', cclose: 'cassa', ccsave: 'cassa', clnew: 'anag', cldel: 'anag', impgo: 'anag', newtrip: 'viaggi', deltrip: 'viaggi' };
   const VIEW_PERM = { home: 'viaggi', models: 'viaggi', trip: 'viaggi', anag: 'anag', conta: 'conta', super: 'tech' };
   let lastNav = '', lastSess = '', lastGateHTML = '';
   function render() {
@@ -5658,6 +5915,8 @@
   const OLDC = {};
   document.addEventListener('focusin', e => { const el = e.target; if (el && el.dataset && el.dataset.r && el.dataset.f === 'cognome' && !(el.dataset.r in OLDC)) OLDC[el.dataset.r] = el.value; });
   // avviso quando una lista supera i posti del bus
+  // tipi di biglietto del viaggio: dalla prima modifica si salvano in quota.tsett (prima c'erano solo tkt1 e tkt2)
+  function tksArr(t) { const Q = t.quota; if (Array.isArray(Q.tsett)) return Q.tsett; const L = tripTkt(t).sett; Q.tsett = L.length ? L.map(x => ({ id: uid(), nome: x.nome, intero: x.intero, ridotto: x.ridotto })) : [{ id: uid(), nome: '', intero: null, ridotto: null }]; return Q.tsett; }
   function capCheck(t, lk, why) {
     if (!t || tripCat(t) === 'biglietteria' || !t.buses.length) return;
     const B = multiBus(t) ? t.buses.filter(b => b.id === lk) : t.buses; if (!B.length) return;
@@ -5866,7 +6125,7 @@
       case 'openbus': UI.view = 'trip'; UI.tripId = el.dataset.trip; UI.busId = el.dataset.bus; UI.sel = UI.selP = null; UI.sec = 'posti'; render(); window.scrollTo(0, 0); break;
       case 'sec': UI.sec = el.dataset.v; UI.sel = UI.selP = null; UI.move = null; render(); window.scrollTo(0, 0); break;
       case 'tab': UI.busId = el.dataset.id; UI.move = null; render(); break;
-      case 'dock': UI.dock = !UI.dock; render(); break;
+      case 'dock': UI.dock = !UI.dock; (UI.dockMap = UI.dockMap || {})[UI.tripId] = UI.dock; render(); break;
       case 'onlyfree': UI.onlyFree = el.checked; render(); break;
       case 'newtrip': tripModal(null); break;
       case 'svtoggle': { const k = el.dataset.k; const L = UI.modal && UI.modal.serv; if (!L) break; const i = L.indexOf(k); if (i >= 0) L.splice(i, 1); else L.push(k); el.classList.toggle('on', i < 0); el.setAttribute('aria-pressed', String(i < 0)); break; }
@@ -5875,8 +6134,8 @@
         const v = { nome: $('#t-nome').value.trim(), data: $('#t-data').value, fine: $('#t-fine').value, programma: $('#t-prog').value.trim(), cat: $('#t-cat').value, codDanea: ($('#t-danea') ? $('#t-danea').value.trim() : ''), code: $('#t-code').value.trim(), extra: $('#t-extra').checked, serv: SERV.map(x => x[0]).filter(k => (UI.modal.serv || []).includes(k)) };
         if (!v.nome) { toast('Scrivi il nome della gita'); $('#t-nome').focus(); break; }
         if (!v.data) { toast('Scegli la data di partenza'); break; }
-        if (UI.modal.id) { Object.assign(S.trips.find(x => x.id === UI.modal.id), v); closeModal(); commit(); }
-        else { const nt = tripInit({ id: uid(), ...v, buses: [] });
+        if (UI.modal.id) { const tr0 = S.trips.find(x => x.id === UI.modal.id); if (v.cat === 'evento' && tripCat(tr0) !== 'evento') v.tkFila = true; Object.assign(tr0, v); closeModal(); commit(); }
+        else { const nt = tripInit({ id: uid(), ...v, buses: [] }); if (v.cat === 'evento') nt.tkFila = true;   // 2.1.8: biglietto solo a chi ha la fila
           // ogni gita, tour o evento nuovo parte con un bus da 52 posti (si cambia da «Posti sul bus»)
           if (v.cat !== 'biglietteria') nt.buses.push({ id: uid(), label: 'Bus 1', layout: '52', mezzo: '', autista: '', accompagnatore: '', telAcc: '', note: '', partenze: [], seats: {}, guida: false });
           S.trips.push(nt); UI.tripId = nt.id; UI.view = 'trip'; UI.sec = 'lista'; UI.busId = nt.buses[0] ? nt.buses[0].id : null; closeModal(); commit(); toast(v.cat === 'biglietteria' ? 'Creata: scrivi i prezzi del biglietto e i clienti; il pulsante «€» registra l\'incasso' : 'Creato con un bus da 52 posti: scrivi la lista o importa il file Word'); }
@@ -5935,6 +6194,12 @@
       case 'anndel': t.annullati = t.annullati.filter(x => x.id !== el.dataset.id); closePop(); commit(); break;
       case 'suppadd': { t.quota.supplN = supplN(t) + 1; commit(); const i = $(`[data-qs="${t.quota.supplN}"]`); if (i) i.focus(); break; }
       case 'suppdel': { const N = supplN(t); delete t.quota.suppl[N]; t.quota.supplN = Math.max(1, N - 1); commit(); break; }
+      case 'tkfila': confirmBox('Usa la regola nuova', `Da adesso, in <b>${esc(t.nome)}</b>, il biglietto si somma solo a chi ha la colonna «fila» scritta: chi ha la fila vuota paga solo il bus. Prima controlla che chi ha il biglietto abbia la fila scritta.`, 'Usa la regola nuova', () => { t.tkFila = true; ACC.tlog('avviso', `«${t.nome}»: biglietto solo a chi ha la fila (regola 2.1.8)`); commit(); toast('Regola nuova attiva'); }); break;
+      case 'tksadd': { tksArr(t); t.quota.tsett.push({ id: uid(), nome: '', intero: null, ridotto: null }); commit(); const ins = $$('[data-tks][data-k="nome"]'); if (ins.length) ins[ins.length - 1].focus(); break; }
+      case 'tksdel': { tksArr(t); t.quota.tsett.splice(+el.dataset.i, 1); commit(); break; }
+      case 'tklink': if (typeof bgLinkModal === 'function') bgLinkModal(t); break;
+      case 'tkunlink': if (typeof bgUnlink === 'function') bgUnlink(t); break;
+      case 'tkbgopen': { const e2 = typeof bgTripEv === 'function' && bgTripEv(t); UI.view = 'bigl'; const st = bgS(); st.tab = 'eventi'; st.evAll = e2 && e2.data < todayISO() ? true : st.evAll; UI.pay = null; render(); window.scrollTo(0, 0); break; }
       case 'noteadd': { t.notes = notesOf(t).slice(); t.notes.push(''); delete t.note1; delete t.note2; commit(); const ins = $$('[data-note]'); if (ins.length) ins[ins.length - 1].focus(); break; }
       case 'notedel': { t.notes = notesOf(t).slice(); t.notes.splice(+el.dataset.i, 1); delete t.note1; delete t.note2; commit(); break; }
       case 'staffadd': { t.staff = (t.staff && t.staff.length ? t.staff : [{ ruolo: 'Accompagnatore' }, { ruolo: 'Autista' }]); t.staff.push({ ruolo: '' }); commit(); break; }
@@ -5989,6 +6254,7 @@
     if (d.r && t) { const r = rowById(t, d.r); if (r) { r[d.f] = el.value; if (d.f === 'cognome' || d.f === 'nome') { if (r.cid && S.clients.clienti[r.cid]) { const x = S.clients.clienti[r.cid]; if (nk(baseCognome(r.cognome)) !== nk(x.cognome) || nk(r.nome) !== nk(x.nome)) delete r.cid; } acOpen(el); } save(); } return; }
     if (d.ar && t) { const r = t.attesa.find(x => x.id === d.ar); if (r) { r[d.f] = el.value; save(); } return; }
     if (d.nr && t) { const r = t.annullati.find(x => x.id === d.nr); if (r) { r[d.f] = el.value; save(); } return; }
+    if (d.tks !== undefined && t) { tksArr(t); const x = t.quota.tsett[+d.tks]; if (x) { x[d.k] = d.k === 'nome' ? el.value : parseEuro(el.value); save(); } return; }
     if (d.q && t) { t.quota[d.q] = parseEuro(el.value); save(); return; }
     if (d.qs && t) { t.quota.suppl[d.qs] = parseEuro(el.value); save(); return; }
     if (d.qt && t) { t.quota[d.qt] = el.value.trim(); save(); return; }
@@ -6005,6 +6271,7 @@
     const el = e.target; const t = trip(); const b = bus(); const d = el.dataset;
     if (d.impfile) { if (!ACC.can('anag') || ACC.can('readonly')) return; const f = el.files && el.files[0]; el.value = ''; if (f) impOpenFile(f); return; }
     if ((d.impc !== undefined || d.imph || d.impt) && UI.imp) { impInput(el); return; }
+    if (d.r && t && d.f === 'emis') { const r = rowById(t, d.r); if (r) { const iso = emisISO(r.emis); if (iso) r.emis = `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(2, 4)}`; else if (String(r.emis || '').trim()) toast('Data di emissione non valida: scrivila come 05/11/26'); save(); later(); } return; }
     if (d.r && t) { const r = rowById(t, d.r); if (r && !AC.el) upsertFromRow(r);
       if (r && d.f === 'cognome' && (d.r in OLDC)) { const oldV = OLDC[d.r]; delete OLDC[d.r]; const mo = RX.exec(String(oldV || '').trim()), mn = RX.exec(String(r.cognome || '').trim());
         const nOld = mo ? +mo[2] : (String(oldV || '').trim() ? 1 : 0), nNew = mn ? +mn[2] : 0;
@@ -6012,7 +6279,7 @@
         if (nNew > 1 && nNew > nOld) { const added = growGroup(t, r, oldV, nNew); if (added) toast(`${mn[1].trim()} x ${nNew}: ${added === 1 ? 'aggiunta 1 riga vuota' : `aggiunte ${added} righe vuote`} sotto la comitiva`); setTimeout(() => capCheck(t, listKey(t, r), `${mn[1].trim()} x ${nNew}`), 60); }
       }
       save(); later(); return; }
-    if ((d.ar || d.nr || d.q || d.qs || d.qt || d.tf) && t) { later(); return; }
+    if ((d.ar || d.nr || d.q || d.qs || d.qt || d.tf || d.tks !== undefined) && t) { later(); return; }
     if (d.cl) { later(); return; }
     if (d.clchk && UI.cl) { S.clients.clienti[UI.cl][d.clchk] = el.checked; save(); render(); return; }
     if ((d.urole || d.uag || d.uact) && !ACC.can('users')) { render(); return; }
@@ -6195,7 +6462,7 @@
   }
 
   // test interni (usati solo in fase di verifica)
-  window.__posti = { get S() { return S; }, UI, render, deriveBookings, tripLists, listRows, listKey, multiBus, moveRowsToList, personMoney, groupMoney, pidPaid, gest, presenceCheck, syncAll, seatIndex, officeLabels, parseTripDocx, autoAssign, prefStatus, bkMoney, summaryOf, LMAP, dropFamily, dropPerson, STORE, ACC, flush, allMovs, payTotals, cashSaldo, giornoData, bkMoney, off: { get OFFS() { return OFFS; }, cxAlert, offAlert, casiAll, offStatus }, xlRow, DIAG,
+  window.__posti = { get S() { return S; }, UI, render, deriveBookings, ensureBlank, blankRow, isEmptyRow, overCap, tripTkt, personTkt, bgEvents, emisISO, moveRowsToList, tripLists, listRows, listKey, multiBus, moveRowsToList, personMoney, groupMoney, pidPaid, gest, presenceCheck, syncAll, seatIndex, officeLabels, parseTripDocx, autoAssign, prefStatus, bkMoney, summaryOf, LMAP, dropFamily, dropPerson, STORE, ACC, flush, allMovs, payTotals, cashSaldo, giornoData, bkMoney, off: { get OFFS() { return OFFS; }, cxAlert, offAlert, casiAll, offStatus }, xlRow, DIAG,
     demo() { const d = demoState(); d.trips.forEach(t => { delete t.demo; S.trips.push(t); t.rows.forEach(r => upsertFromRow(r)); }); flush(); render(); return d.trips.map(t => t.id); } };
 
   // ---------- avvio ----------
