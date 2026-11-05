@@ -1899,3 +1899,9 @@ input.bg-inp.r{text-align:right;max-width:120px}
 .tk-old span{flex:1 1 200px;min-width:0}
 @media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .tk-old{background:#2E2410;color:#F2CE7A}}
 :root[data-theme="dark"] .tk-old{background:#2E2410;color:#F2CE7A}
+/* 2.1.10 lista eventi: le note non si prendono più tutto lo spazio. Larghezza fissa per le colonne strette;
+   lo spazio che resta si divide in parti uguali tra cognome, nome, contatto, fila e note. Sotto i 1180 px la lista scorre di lato. */
+.wl.wl-ev{min-width:1140px}
+.wl.wl-ev th.c-cognome,.wl.wl-ev th.c-nome,.wl.wl-ev th.c-tel,.wl.wl-ev th.c-fila,.wl.wl-ev th.c-note{width:auto;min-width:0}
+.wl.wl-ev th.c-nascita{width:74px}.wl.wl-ev th.c-part{width:50px}.wl.wl-ev th.c-emis{width:84px}
+.wl.wl-ev th.c-posto{width:96px}.wl.wl-ev th.c-quota{width:118px}.wl.wl-ev th.c-pagato{width:66px}

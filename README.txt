@@ -1,7 +1,7 @@
 VIAGGI IN PULLMAN · LA TERRA
 ============================
 
-Versione: 2.1.9
+Versione: 2.1.11
 Pacchetto creato il: 05/11/2026
 
 Come installarla o aggiornarla: vedi LEGGIMI.txt.
@@ -9,6 +9,17 @@ Aggiornamento: carica su GitHub TUTTI i file, config.js compreso (contiene già 
 
 MODIFICHE
 ---------
+
+VERSIONE 2.1.11 · 05/11/2026
+CARTELLI SENZA I NUMERI DEI POSTI
+
+1. Nei cartelli da stampare, sul bordo resta solo la scritta «LATO AUTISTA» o «LATO HOSTESS»: niente più numeri dei posti.
+
+VERSIONE 2.1.10 · 05/11/2026
+LISTA DEGLI EVENTI: COLONNE PIÙ EQUILIBRATE (da caricare al posto della 2.1.8 e della 2.1.9)
+
+1. Nella lista degli eventi la colonna «note / mail» non si prende più tutto lo spazio libero: le colonne strette (data, part, emissione, posto, quota, €) hanno la loro misura e lo spazio che resta si divide in parti uguali tra cognome, nome, contatto, fila e note. Sugli schermi stretti la lista scorre di lato come prima.
+2. Una nota lunga si legge tutta passando sopra con il mouse.
 
 VERSIONE 2.1.9 · 05/11/2026
 CORREZIONI DOPO UN SECONDO CONTROLLO DELLA 2.1.8 (da caricare al posto della 2.1.8)
