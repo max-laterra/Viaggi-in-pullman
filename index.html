@@ -3,6 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<!-- Protezione CSP: la pagina può usare solo i propri file e parlare solo con Dropbox, Meta (WhatsApp) e Google Fonts.
+     Se un giorno si aggiunge un servizio esterno, va aggiunto qui; ciò che viene bloccato finisce nella diagnostica. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob:; media-src 'self' data: blob:; connect-src 'self' https://api.dropboxapi.com https://content.dropboxapi.com https://notify.dropboxapi.com https://graph.facebook.com; worker-src 'self' blob:; frame-src 'none'; object-src 'none'; base-uri 'self'; form-action 'self'">
 <title>Viaggi in Pullman · La Terra</title>
 <meta name="description" content="Prenotazioni, posti sul bus, cassa e messaggi ai clienti di La Terra viaggi in pullman.">
 <meta name="theme-color" content="#F5F5F7">
@@ -12,21 +15,20 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Barlow:wght@400;500;600;700;800&family=Barlow+Condensed:wght@500;600;700;800&display=swap">
-<link rel="stylesheet" href="app.css?v=2.1.11">
+<link rel="stylesheet" href="app.css?v=2.1.14">
 </head>
 <body>
 <div id="app"><div style="min-height:100vh;display:grid;place-items:center;font:600 17px -apple-system,system-ui,sans-serif;color:#6E6E73">Viaggi in Pullman…</div></div>
 <div id="modal-root"></div>
 <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 <div id="print-root" hidden></div>
-<script>window.__earlyErr=[];window.addEventListener("error",function(e){if(!window.__diagOn)window.__earlyErr.push({m:e.message||"risorsa non caricata",file:e.filename||(e.target&&(e.target.src||e.target.href))||"",riga:e.lineno||0})},true);</script>
-<script src="config.js?v=2.1.11"></script>
+<script src="avvio.js?v=2.1.14"></script>
+<script src="config.js?v=2.1.14"></script>
 <script src="vendor/jszip.min.js"></script>
-<script src="layouts.js?v=2.1.11"></script>
-<script src="dropbox.js?v=2.1.11"></script>
-<script src="archivio.js?v=2.1.11"></script>
-<script src="registratore.js?v=2.1.11"></script>
-<script src="app.js?v=2.1.11"></script>
-<script>if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(function () {});</script>
+<script src="layouts.js?v=2.1.14"></script>
+<script src="dropbox.js?v=2.1.14"></script>
+<script src="archivio.js?v=2.1.14"></script>
+<script src="registratore.js?v=2.1.14"></script>
+<script src="app.js?v=2.1.14"></script>
 </body>
 </html>

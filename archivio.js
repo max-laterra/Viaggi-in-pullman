@@ -363,8 +363,14 @@
     function status() { return Object.assign({ linked: linked(), pending: dirty.size + blobQ.size, hasKey: !!(DBX() && DBX().hasKey()), offline: !st.online || netFail >= 2 }, st); }
 
     // ---- file non di testo (programmi) ----
-    async function putBlob(path, blob) { await tx('blobs', 'readwrite', (s) => s.put(blob, path)).catch(() => {}); blobQ.add(path); lsSet(QK + '-b', [...blobQ]); kick(); }
+    // Sicurezza: i file non di testo stanno solo in /programmi/<gita>/<nome> e /cronologia/<gita>/<versione>.ver.
+    // Un percorso diverso (per esempio arrivato da una copia di sicurezza falsificata) non si legge, non si scrive
+    // e soprattutto non si cancella: altrimenti si potrebbero cancellare cartelle intere su Dropbox.
+    const blobOk = (p) => typeof p === 'string' && (/^\/programmi\/[a-z0-9_-]{1,64}\/[^/]{1,120}$/.test(p) || /^\/cronologia\/[A-Za-z0-9_-]{1,64}\/[A-Za-z0-9_-]{1,64}\.ver$/.test(p)) && !/\/\.{1,2}$/.test(p);
+    function blobNo(path, what) { DIAG.ev('sync-errore', `Percorso non valido per ${what}: rifiutato`, { file: String(path).slice(0, 120) }); }
+    async function putBlob(path, blob) { if (!blobOk(path)) { blobNo(path, 'salvare un file'); throw new Error('percorso non valido'); } await tx('blobs', 'readwrite', (s) => s.put(blob, path)).catch(() => {}); blobQ.add(path); lsSet(QK + '-b', [...blobQ]); kick(); }
     async function getBlob(path) {
+      if (!blobOk(path)) { if (path) blobNo(path, 'leggere un file'); return null; }
       const b = await tx('blobs', 'readonly', (s) => s.get(path)).catch(() => null); if (b) return b;
       if (!linked()) return null;
       const r = await DBX().download(path); if (!r) return null;
@@ -372,7 +378,7 @@
       await tx('blobs', 'readwrite', (s) => s.put(bl, path)).catch(() => {});
       return bl;
     }
-    async function delBlob(path) { await tx('blobs', 'readwrite', (s) => s.delete(path)).catch(() => {}); blobQ.delete(path); lsSet(QK + '-b', [...blobQ]); if (linked()) DBX().remove(path).catch(() => {}); }
+    async function delBlob(path) { if (!blobOk(path)) { blobNo(path, 'cancellare un file'); return; } await tx('blobs', 'readwrite', (s) => s.delete(path)).catch(() => {}); blobQ.delete(path); lsSet(QK + '-b', [...blobQ]); if (linked()) DBX().remove(path).catch(() => {}); }
 
     return {
       pendingList: () => [...dirty, ...blobQ],

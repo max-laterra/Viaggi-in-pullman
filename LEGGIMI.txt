@@ -100,6 +100,8 @@ PASSO 7 – Recupera le liste della versione di prova (se le hai)
 3. Nella nuova app: Impostazioni → "Copia di sicurezza" → "Recupera da una copia" → scegli il file.
    Le liste entrano nei viaggi dell'elenco 2027 ancora vuoti; i viaggi in più si aggiungono.
    Le gite «(esempio)» non vengono copiate.
+   Per sicurezza recupera solo copie scaricate da te dall'app: mai file ricevuti per email o da altri.
+   Le gite con dati non validi vengono scartate e l'avviso dice quante sono.
 
 
 PASSO 8 – Luoghi di partenza con Google Maps

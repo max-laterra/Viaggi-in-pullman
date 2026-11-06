@@ -1,11 +1,17 @@
 (function () {
   'use strict';
-  const VERSION = '2.1.11';
+  const VERSION = '2.1.14';
   const LOGO = './logo.jpg';
   const KEY = 'laterra.prenotazioniPosti.v1';
   const $ = (s, r = document) => r.querySelector(s);
   const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  // indirizzo internet sicuro per un link: solo http:// o https:// (un «www.sito.it» senza https:// si completa da solo);
+  // tutto il resto (javascript:, data:, file:…) diventa vuoto, così un link non può far partire comandi
+  const safeUrl = u => { let s = String(u ?? '').trim(); if (!s) return ''; if (!/^[a-z][a-z0-9+.-]*:/i.test(s) && /^[\w-]+(\.[\w-]+)+([/?#]|$)/.test(s)) s = 'https://' + s; try { return /^https?:$/.test(new URL(s).protocol) ? s : ''; } catch (e) { return ''; } };
+  // testo per i file CSV: un valore che comincia con = + - @ (non un numero) Excel lo prenderebbe per una formula
+  // e potrebbe eseguirla; con un apostrofo davanti resta un semplice testo
+  const csvSafe = v => { const s = String(v == null ? '' : v); return /^[=+\-@\t\r]/.test(s) && !/^[+-]?\d[\d.,]*$/.test(s.trim()) ? "'" + s : s; };
   const uid = () => Math.random().toString(36).slice(2, 9) + Date.now().toString(36).slice(-3);
   const COLORS = ['#FFD3DC', '#CFE6FF', '#D8F1C2', '#FFE7AE', '#E6D6FA', '#C8EFE7', '#FFD9BF', '#F1EDA9', '#D7DCE8', '#F7CDEB', '#C6E6D1', '#FADDCB'];
   const MESI = ['gen', 'feb', 'mar', 'apr', 'mag', 'giu', 'lug', 'ago', 'set', 'ott', 'nov', 'dic'];
@@ -211,6 +217,8 @@
     // ---- errori del programma, avvisi in console, rallentamenti, rete, finestra ----
     function hookErrors() {
       window.__diagOn = true;
+      // la protezione CSP (index.html) ha bloccato qualcosa: si annota, così se una funzione smette di andare si capisce subito perché
+      document.addEventListener('securitypolicyviolation', e => ev('errore', `Bloccato dalla protezione CSP: ${e.effectiveDirective || e.violatedDirective} · ${cut(e.blockedURI || 'codice nella pagina', 160)}`, { file: e.sourceFile, riga: e.lineNumber }));
       (window.__earlyErr || []).forEach(e => ev('errore', 'Prima dell\'avvio: ' + e.m + (e.file ? ' · ' + e.file : ''), e)); window.__earlyErr = [];
       window.addEventListener('error', e => { if (e.target && e.target !== window && (e.target.src || e.target.href)) { ev('errore', 'Risorsa non caricata: ' + cut(e.target.src || e.target.href, 200)); return; } ev('errore', e.message || 'Errore', { file: e.filename, riga: e.lineno, col: e.colno, stack: e.error && e.error.stack ? cut(e.error.stack, 1500) : '' }); }, true);
       window.addEventListener('unhandledrejection', e => { const r = e.reason || {}; ev('errore', 'Operazione non riuscita: ' + cut(r.message || r.code || r.summary || String(r), 300), { code: r.code, status: r.status, summary: r.summary ? cut(r.summary, 400) : undefined, stack: r.stack ? cut(r.stack, 1500) : undefined }); });
@@ -1338,19 +1346,25 @@
   }
   async function parseTripDocx(file) { const res = parseTripTables(await docxTables(file)); if (!res.part) throw new Error('Nel file non ho trovato la tabella dei partecipanti (quella con le colonne «data» e «contatto»).'); return res; }
   // ---------- disegno della piantina ----------
-  // Piantina scritta come in ufficio: nel primo posto della coppia i cognomi (con l'iniziale del nome),
-  // nel secondo «x 2», «x 5»…; chi è da solo ha cognome, nome e «x 1» nel suo posto;
+  // Piantina scritta come in ufficio: nel primo posto della coppia i cognomi (con il nome o la sua iniziale),
+  // nel secondo «X 2», «X 5»…; chi è da solo ha cognome, nome e «X 1» nel suo posto;
   // il posto vuoto accanto all'ultimo di un gruppo è barrato.
+  // 2.1.14: in ogni fila del gruppo i nomi di chi siede proprio lì (con 3 posti vicini il terzo va sotto il secondo),
+  // nome intero se ci sta; nel riquadro «X N», in alto a destra, la fila pagata con il supplemento.
   function officeLabels(b) {
     const I = LMAP[b.layout].info; const out = {};
-    const nm = p => `${String(p.cognome || '').toUpperCase()}${p.nome && !/^\(/.test(p.nome) ? ' ' + p.nome.trim()[0].toUpperCase() + '.' : ''}`;
+    const t = ((S && S.trips) || []).find(x => (x.buses || []).includes(b));
+    const nm = p => { const c = String(p.cognome || '').toUpperCase().trim(), n = String(p.nome || '').trim(); if (!n || /^\(/.test(n)) return c; const full = `${c} ${n.toUpperCase()}`; return full.length <= 16 ? full : `${c} ${n[0].toUpperCase()}.`; };
+    const paidFila = x => x && ((x.fila >= 1 && x.fila <= 4) || (x.zone || []).includes('porta2'));
+    const filaLbl = (bk, ps) => { if (!t) return ''; const B = bk.full || bk; const L = []; ps.forEach(p => { if (!(supplOf(t, B, p) > 0)) return; const r = paidFila(p.req) ? p.req : B.pref; if (!paidFila(r)) return; const s = r.fila >= 1 && r.fila <= 4 ? `${r.fila}ª fila` : '2ª porta'; if (!L.includes(s)) L.push(s); }); return L.join(' · '); };
     b.bookings.forEach(bk => {
       const cls = seatClusters(b, bk); const total = bk.full ? bk.full.persone.length : bk.persone.length;
       cls.forEach(cl => {
         const ps = bk.persone.filter(p => cl.some(s => b.seats[s] && b.seats[s].pid === p.id));
         if (!ps.length) return;
         const n = cls.length > 1 || bk.persone.length < total ? ps.length : total;
-        const lines = n === 1 ? [String(ps[0].cognome || '').toUpperCase(), String(ps[0].nome || '').toUpperCase()].filter(Boolean) : ps.slice(0, 2).map(nm);
+        const single = n === 1 ? [String(ps[0].cognome || '').toUpperCase(), String(ps[0].nome || '').toUpperCase()].filter(Boolean) : null;
+        const who = s => { const a = b.seats[s]; return a ? ps.find(p => p.id === a.pid) : null; };
         const byRow = {}; cl.forEach(s => { const g = I.geo[s]; const k = g.floor * 1000 + g.row; (byRow[k] = byRow[k] || []).push(s); });
         Object.values(byRow).forEach(seats => {
           seats.sort((x, y) => I.geo[x].col - I.geo[y].col);
@@ -1358,9 +1372,10 @@
           seats.forEach(s => { if (cur.length && I.geo[s].col !== I.geo[cur[cur.length - 1]].col + 1) { runs.push(cur); cur = []; } cur.push(s); });
           if (cur.length) runs.push(cur);
           runs.forEach(r => {
-            if (r.length === 1) { out[r[0]] = { t: 'both', lines, x: n }; return; }
+            const occ = r.map(who).filter(Boolean); const lines = single || occ.map(nm); const fila = filaLbl(bk, occ);
+            if (r.length === 1) { out[r[0]] = { t: 'both', lines, x: n, fila }; return; }
             const m = Math.floor((r.length - 1) / 2);
-            r.forEach(s => { out[s] = { t: 'occ' }; }); out[r[m]] = { t: 'names', lines }; out[r[m + 1]] = { t: 'x', x: n };
+            r.forEach(s => { out[s] = { t: 'occ' }; }); out[r[m]] = { t: 'names', lines }; out[r[m + 1]] = { t: 'x', x: n, fila };
           });
         });
       });
@@ -1375,10 +1390,10 @@
     const a = b && b.seats[s]; const lab = o.lab && o.lab[s];
     let cls = 'c seat', style = `grid-column:span ${span}`, inner = `<span class="sn">${s}</span>`, title = '';
     if (host) cls += ' host';
-    const attrs = drag => o.interactive ? ` data-seat="${s}" tabindex="0" draggable="${drag}"` : '';
+    const attrs = drag => o.interactive ? ` data-seat="${esc(s)}" tabindex="0" draggable="${esc(drag)}"` : '';
     if (a && a.res) {
       cls += ' res cross'; inner += `<span class="ores">${esc(/guida/i.test(a.res) ? 'GUIDA o 2° AUTISTA' : a.res)}</span>`;
-      return `<div class="${cls}" style="${style}"${attrs(false)}>${inner}</div>`;
+      return `<div class="${esc(cls)}" style="${esc(style)}"${attrs(false)}>${inner}</div>`;
     }
     let filled = false;
     if (a) {
@@ -1387,9 +1402,10 @@
         filled = true; cls += ' occ';
         if (!o.print) style += `;background:${COLORS[(bk.c || 0) % COLORS.length]}`;
         title = `Posto ${s}: ${p.cognome} ${p.nome} — ${bkName(bk)} x ${bk.full ? bk.full.persone.length : bk.persone.length}${p.part ? ' · ' + p.part : ''}${p.np ? ' · ' + p.np : ''}`;
-        if (lab && (lab.t === 'names' || lab.t === 'both')) inner += `<span class="ol">${lab.lines.map(esc).join('<br>')}</span>`;
+        if (lab && (lab.t === 'names' || lab.t === 'both')) inner += `<span class="ol${lab.lines.length > 2 ? ' l3' : ''}">${lab.lines.map(esc).join('<br>')}</span>`;
         if (lab && lab.t === 'both') cls += ' both';
-        if (lab && (lab.t === 'x' || lab.t === 'both')) inner += `<span class="ox${lab.t === 'both' ? ' in' : ''}">x${lab.x}</span>`;
+        if (lab && (lab.t === 'x' || lab.t === 'both')) inner += `<span class="ox${esc(lab.t === 'both' ? ' in' : '')}">X ${esc(lab.x)}</span>`;
+        if (lab && lab.fila && (lab.t === 'x' || lab.t === 'both')) inner += `<span class="ofila">${esc(lab.fila)}</span>`;
         if (lab && lab.t === 'occ' && !o.print) inner += `<span class="ofaint">${esc(String(p.cognome || '').toUpperCase())}</span>`;
         if (p.np) inner += `<span class="onp">${esc(p.np)}</span>`;
         if (o.interactive) { const on = UI.sel === bk.id || UI.selP === p.id; if (on) cls += ' hl'; else if (UI.sel || UI.selP) cls += ' dim'; if (UI.move === s) cls += ' moving'; }
@@ -1400,22 +1416,22 @@
       if (host) inner += `<span class="tagh">${b && b.accompagnatore ? esc(b.accompagnatore) : 'hostess'}</span>`;
       if (o.want && o.want.has(s)) cls += ' want';
     }
-    return `<div class="${cls}" style="${style}"${title ? ` title="${esc(title)}"` : ''}${attrs(filled)}>${inner}</div>`;
+    return `<div class="${esc(cls)}" style="${esc(style)}"${title ? ` title="${esc(title)}"` : ''}${attrs(filled)}>${inner}</div>`;
   }
   function rowHTML(row, b, o) {
     let hasSeat = false; let h = '';
     row.forEach(c => {
       const ci = cellInfo(c); const sp = `grid-column:span ${ci.c}`;
-      if (ci.t === 'seat') { hasSeat = true; h += o.mini ? `<div class="c seat${ci.h ? ' host' : ''}" style="${sp}"><span class="sn">${ci.s}</span></div>` : seatCell(b, ci.s, ci.h, ci.c, o); }
-      else if (ci.t === 'aisle') h += `<div class="c aisle" style="${sp}"></div>`;
-      else if (ci.t === 'void') h += `<div class="c void" style="${sp}"></div>`;
-      else if (ci.t === 'logo') h += `<div class="c logo" style="${sp};background-image:url(${LOGO})"></div>`;
+      if (ci.t === 'seat') { hasSeat = true; h += o.mini ? `<div class="c seat${esc(ci.h ? ' host' : '')}" style="${esc(sp)}"><span class="sn">${ci.s}</span></div>` : seatCell(b, ci.s, ci.h, ci.c, o); }
+      else if (ci.t === 'aisle') h += `<div class="c aisle" style="${esc(sp)}"></div>`;
+      else if (ci.t === 'void') h += `<div class="c void" style="${esc(sp)}"></div>`;
+      else if (ci.t === 'logo') h += `<div class="c logo" style="${esc(sp)};background-image:url(${LOGO})"></div>`;
       else {
         const label = ci.f === 'autista' && b && b.autista && !o.mini ? `autista<small>${esc(b.autista)}</small>` : esc(ci.f);
-        h += `<div class="c feat feat-${ci.f}" style="${sp}">${label}</div>`;
+        h += `<div class="c feat feat-${esc(ci.f)}" style="${esc(sp)}">${label}</div>`;
       }
     });
-    return `<div class="${o.print ? 'prow' : 'row'}${hasSeat ? '' : ' thin'}">${h}</div>`;
+    return `<div class="${esc(o.print ? 'prow' : 'row')}${hasSeat ? '' : ' thin'}">${h}</div>`;
   }
   function deckHTML(b, L, fi, o) {
     const fl = L.floors[fi]; if (b && !o.lab) o.lab = officeLabels(b);
@@ -1425,8 +1441,8 @@
   // ---------- la lista della gita (come il file Word) ----------
   // t.rows = righe della tabella partecipanti, scritte come in Word: «Rossi x 3» sulla prima riga e poi le altre persone.
   // Le prenotazioni si ricavano dalle righe; ogni riga sa su quale bus è (row.bus) e i bus sanno quale posto ha ogni persona.
-  const ROWF = ['cognome', 'nome', 'nascita', 'tel', 'natoA', 'part', 'hotel', 'cam', 'fila', 'emis', 'note', 'pagato'];
-  const blankRow = () => ({ id: uid(), cognome: '', nome: '', nascita: '', tel: '', natoA: '', part: '', hotel: '', cam: '', fila: '', emis: '', note: '', pagato: '' });
+  const ROWF = ['cognome', 'nome', 'nascita', 'tel', 'natoA', 'part', 'hotel', 'cam', 'fila', 'emis', 'note', 'nota2', 'pagato'];
+  const blankRow = () => ({ id: uid(), cognome: '', nome: '', nascita: '', tel: '', natoA: '', part: '', hotel: '', cam: '', fila: '', emis: '', note: '', nota2: '', pagato: '' });
   const blankAtt = () => ({ id: uid(), cognome: '', nome: '', nascita: '', tel: '', part: '', note: '', richiesta: '', avviso: '', risposta: '' });
   const isEmptyRow = r => !ROWF.some(f => String(r[f] || '').trim()) && !['richiesta', 'avviso', 'risposta', 'dataAnn'].some(f => String(r[f] || '').trim());
   function tripInit(t) {
@@ -1542,12 +1558,14 @@
   // sposta delle righe in un'altra lista (bus): perdono il posto sul vecchio bus e vanno in fondo alla nuova lista
   function moveRowsToList(t, ids, busId) {
     const set = new Set(ids); const rows = t.rows.filter(r => set.has(r.id) && !isEmptyRow(r)); if (!rows.length) return 0;
+    const before = groupMap(t); headsStay(t, rows.map(r => r.id));
     pinGroup(t, rows.map(r => r.id));
     rows.forEach(r => setRowBus(t, r, busId));
     // in fondo alla lista di destinazione, prima delle sue righe vuote
     t.rows = t.rows.filter(r => !set.has(r.id));
     const tgt = t.rows.filter(r => listKey(t, r) === (busId || '')); let k = tgt.length; while (k > 0 && isEmptyRow(tgt[k - 1])) k--;
     const at = k < tgt.length ? t.rows.indexOf(tgt[k]) : k > 0 ? t.rows.indexOf(tgt[k - 1]) + 1 : t.rows.length; t.rows.splice(at, 0, ...rows);
+    keepGroups(t, before);
     return rows.length;
   }
   // prenotazioni (o parti di prenotazione) che stanno su un bus, nel formato che usa il motore dei posti
@@ -1559,6 +1577,8 @@
       return { id: bk.id, c: bk.head.c != null ? bk.head.c : (bk.ord % COLORS.length), persone: ps, pref: bk.pref, abituale: bk.abituale, ord: bk.ord, full: bk };
     }).filter(Boolean);
     for (const s in b.seats) { const a = b.seats[s]; if (a.res) continue; const x = pmap[a.pid]; if (!x || x.p.row.bus !== b.id) { delete b.seats[s]; continue; } a.b = x.bk.id; }
+    // posti in sospeso (2.1.14): restano solo le persone ancora su questo bus e ancora senza posto
+    if (Array.isArray(b.sosp) && b.sosp.length) { const on = new Set(); (t.buses || []).forEach(x => { for (const s in x.seats) if (x.seats[s].pid) on.add(x.seats[s].pid); }); const keep = b.sosp.filter((pid, i, arr) => typeof pid === 'string' && arr.indexOf(pid) === i && pmap[pid] && pmap[pid].p.row.bus === b.id && !on.has(pid)); if (keep.length !== b.sosp.length) b.sosp = keep; }
     return b.bookings;
   }
   function syncAll(t) { const D = deriveBookings(t); t.buses.forEach(b => syncBus(t, b, D)); return D; }
@@ -1676,8 +1696,10 @@
       r.stacc = { da: from, hid: bk.id, il: at, chi: who || '' };
       return { from, bk };
     }
-    // capogruppo: il secondo prende il suo posto
-    const nh = bk.persone[1].row; const base = String(nh.cognome || '').replace(RX, '$1').trim() || bk.persone[1].cognome;
+    // capogruppo: prende il suo posto chi viene subito dopo di lui nella stessa lista (2.1.14: prima era il secondo
+    // della comitiva anche se stava in un'altra lista, e chi era sotto restava senza «x N»)
+    const nhP = nextInList(t, bk, h, [id]) || bk.persone[1];
+    const nh = nhP.row; const base = String(nh.cognome || '').replace(RX, '$1').trim() || nhP.cognome;
     nh.cognome = `${base} x ${N - 1}`; delete nh.g; delete nh.go;
     ['abituale', 'saldato', 'c', 'waOk', 'waSent'].forEach(k => { if (h[k] != null && nh[k] == null) nh[k] = h[k]; });
     t.rows.forEach(x => { if (x.g === bk.id && x !== nh) x.g = nh.id; });
@@ -1685,9 +1707,55 @@
     h.cognome = m ? m[1].trim() : h.cognome; h.solo = true; delete h.g; delete h.go; delete h.saldato; delete h.abituale;
     h.stacc = { da: from, hid: nh.id, il: at, chi: who || '', capo: true };
     // la riga del nuovo capogruppo va dove era quella del vecchio (la comitiva non cambia posto nella lista)
-    const i0 = t.rows.indexOf(h), i1 = t.rows.indexOf(nh); if (i0 >= 0 && i1 > i0) { t.rows.splice(i1, 1); t.rows.splice(i0, 0, nh); }
+    const i0 = t.rows.indexOf(h), i1 = t.rows.indexOf(nh); if (i0 >= 0 && i1 > i0 && listKey(t, nh) === listKey(t, h)) { t.rows.splice(i1, 1); t.rows.splice(i0, 0, nh); }
     if (typeof pmReset === 'function') pmReset();
     return { from, bk, capo: true, nuovo: base };
+  }
+  // ---- 2.1.14: spostamenti nella lista senza sorprese ----
+  // la prima persona della comitiva (esclusi gli ids) che sta nella stessa lista della riga «ref», nell'ordine della lista
+  function nextInList(t, bk, ref, skip) {
+    const no = new Set(skip || []); const lk = listKey(t, ref); const ix = new Map(t.rows.map((r, i) => [r.id, i]));
+    const rest = bk.persone.filter(p => p.id !== bk.id && !no.has(p.id));
+    const same = rest.filter(p => listKey(t, p.row) === lk).sort((a, b) => ix.get(a.id) - ix.get(b.id));
+    return same[0] || rest[0] || null;
+  }
+  // il capogruppo viene spostato da solo: «Cognome x N» passa a chi resta (la comitiva non resta senza numero)
+  // e lui resta nella comitiva come gli altri. Incassi, colore, abituale e saldato passano al nuovo capogruppo.
+  function passHead(t, bk, nhP) {
+    const h = bk.head; const m = RX.exec(String(h.cognome || '').trim()); if (!m || !nhP || nhP.row === h) return false;
+    const nh = nhP.row; const N = Math.max(bk.n, bk.persone.length);
+    const base = String(nh.cognome || '').replace(RX, '$1').trim() || nhP.cognome;
+    nh.cognome = `${base} x ${N}`; delete nh.g; delete nh.go; delete nh.solo;
+    ['abituale', 'saldato', 'c', 'waOk', 'waSent'].forEach(k => { if (h[k] != null) { if (nh[k] == null) nh[k] = h[k]; delete h[k]; } });
+    h.cognome = m[1].trim(); h.g = nh.id; h.go = 0;
+    t.rows.forEach(x => { if (x.g === bk.id && x !== nh) x.g = nh.id; });
+    t.bkMap = t.bkMap || {}; t.bkMap[bk.id] = nh.id; Object.keys(t.bkMap).forEach(k => { if (t.bkMap[k] === bk.id) t.bkMap[k] = nh.id; });
+    if (typeof pmReset === 'function') pmReset();
+    return true;
+  }
+  // prima di spostare delle righe: se un capogruppo si sposta senza la sua comitiva, il numero passa a chi resta
+  function headsStay(t, ids) {
+    const set = new Set(ids); let n = 0;
+    deriveBookings(t).forEach(bk => { if (bk.persone.length < 2 || !set.has(bk.id)) return; const nhP = nextInList(t, bk, bk.head, ids); if (nhP && passHead(t, bk, nhP)) n++; });
+    return n;
+  }
+  const normBk = (t, id) => { let x = id, k = 0; while (t.bkMap && t.bkMap[x] && k++ < 10) x = t.bkMap[x]; return x; };
+  function groupMap(t) { const m = new Map(); deriveBookings(t).forEach(bk => bk.persone.forEach(p => m.set(p.id, { bk: bk.id, n: bk.persone.length }))); return m; }
+  // dopo uno spostamento (o una riga tolta) nessuno deve entrare per sbaglio in un'altra comitiva: una comitiva
+  // «x N» a cui mancano dei nomi prendeva chi le finiva sotto. Al suo posto si lasciano righe vuote (i nomi che mancano).
+  function keepGroups(t, before) {
+    for (let k = 0; k < 60; k++) {
+      let fixed = false;
+      for (const bk of deriveBookings(t)) {
+        const own = normBk(t, bk.id);
+        const intr = bk.persone.filter(p => p.id !== bk.id && !p.row.g && before.has(p.id) && before.get(p.id).n === 1 && normBk(t, before.get(p.id).bk) !== own);
+        if (!intr.length) continue;
+        const first = intr.map(p => p.row).sort((a, b) => t.rows.indexOf(a) - t.rows.indexOf(b))[0];
+        t.rows.splice(t.rows.indexOf(first), 0, Object.assign(blankRow(), multiBus(t) && first.bus ? { bus: first.bus } : {}));
+        fixed = true; break;
+      }
+      if (!fixed) return;
+    }
   }
   // la prenotazione a cui appartengono gli incassi (se il capogruppo è stato staccato, passa al nuovo capogruppo)
   function resolveBk(tripId, bkId) { const t = S.trips.find(x => x.id === tripId); let id = bkId, n = 0; while (t && t.bkMap && t.bkMap[id] && n++ < 10) id = t.bkMap[id]; return id; }
@@ -1696,6 +1764,7 @@
   function moveRowsTo(t, ids, targetId, after) {
     const set = new Set(ids); const rows = t.rows.filter(r => set.has(r.id) && !isEmptyRow(r)); if (!rows.length || set.has(targetId)) return 0;
     const tgt = rowById(t, targetId); if (!tgt) return 0; const lk = listKey(t, tgt);
+    const before = groupMap(t); headsStay(t, rows.map(r => r.id));
     pinGroup(t, rows.map(r => r.id));
     if (multiBus(t)) rows.forEach(r => setRowBus(t, r, lk));
     // non si entra in mezzo a un'altra comitiva: si va prima del suo capogruppo o dopo la sua ultima riga
@@ -1704,6 +1773,7 @@
     if (tb) { const own = tb.persone.filter(p => listKey(t, p.row) === lk).map(p => p.row); anchor = after ? own.reduce((a, x) => (t.rows.indexOf(x) > t.rows.indexOf(a) ? x : a), own[0]) : tb.head; if (tb.last && after) { const lr = rowById(t, tb.last); if (lr && t.rows.indexOf(lr) > t.rows.indexOf(anchor)) anchor = lr; } }
     t.rows = t.rows.filter(r => !set.has(r.id));
     const at = t.rows.indexOf(anchor) + (after ? 1 : 0); t.rows.splice(at, 0, ...rows);
+    keepGroups(t, before);
     return rows.length;
   }
   // rimetterla nella comitiva da cui era stata staccata
@@ -1736,21 +1806,21 @@
   function servIcons(t) {
     if (tripCat(t) === 'biglietteria') return '';
     const on = new Set(tripServ(t));
-    return SERV.map(([k, l, svg]) => `<span class="svi${on.has(k) ? ' on' : ''}" data-tip="${esc(l)}${on.has(k) ? '' : ' · non compreso'}" aria-label="${esc(l)}${on.has(k) ? ' compreso' : ' non compreso'}">${svg}</span>`).join('');
+    return SERV.map(([k, l, svg]) => `<span class="svi${esc(on.has(k) ? ' on' : '')}" data-tip="${esc(l)}${on.has(k) ? '' : ' · non compreso'}" aria-label="${esc(l)}${on.has(k) ? ' compreso' : ' non compreso'}">${svg}</span>`).join('');
   }
   // caselle da accendere/spegnere nella finestra «Modifica gita»
   function servPicker(t) {
     const on = new Set(t ? tripServ(t) : ['bus']);
-    return `<div class="svpick" role="group" aria-label="Servizi compresi">${SERV.map(([k, l, svg]) => `<button type="button" class="svp${on.has(k) ? ' on' : ''}" data-act="svtoggle" data-k="${k}" aria-pressed="${on.has(k)}">${svg}<span>${esc(l)}</span><i aria-hidden="true">${ICON.check}</i></button>`).join('')}</div>`;
+    return `<div class="svpick" role="group" aria-label="Servizi compresi">${SERV.map(([k, l, svg]) => `<button type="button" class="svp${esc(on.has(k) ? ' on' : '')}" data-act="svtoggle" data-k="${esc(k)}" aria-pressed="${esc(on.has(k))}">${svg}<span>${esc(l)}</span><i aria-hidden="true">${ICON.check}</i></button>`).join('')}</div>`;
   }
 
   // ---------- viste ----------
   // ev (2.1.8): negli eventi c'è anche la colonna «emissione» (data di emissione del biglietto) dopo «fila»
   const listCols = (tour, bigl, ev) => { const c = bigl
-    ? [['cognome', 'cognome'], ['nome', 'nome'], ['tel', 'contatto'], ['note', 'note / mail'], ['pagato', '€']]
+    ? [['cognome', 'cognome'], ['nome', 'nome'], ['tel', 'contatto'], ['note', 'note'], ['pagato', '€']]
     : tour
-    ? [['cognome', 'cognome'], ['nome', 'nome'], ['nascita', 'data'], ['tel', 'contatto'], ['natoA', 'nato/a a'], ['part', 'P'], ['hotel', 'hotel'], ['cam', 'C'], ['fila', 'fila'], ['note', 'note / mail'], ['pagato', '€']]
-    : [['cognome', 'cognome'], ['nome', 'nome'], ['nascita', 'data'], ['tel', 'contatto'], ['part', 'part'], ['fila', 'fila'], ['note', 'note / mail'], ['pagato', '€']];
+    ? [['cognome', 'cognome'], ['nome', 'nome'], ['nascita', 'data'], ['tel', 'contatto'], ['natoA', 'nato/a a'], ['part', 'P'], ['hotel', 'hotel'], ['cam', 'C'], ['fila', 'fila'], ['note', 'note'], ['pagato', '€']]
+    : [['cognome', 'cognome'], ['nome', 'nome'], ['nascita', 'data'], ['tel', 'contatto'], ['part', 'part'], ['fila', 'fila'], ['note', 'note'], ['pagato', '€']];
     if (ev && !bigl) c.splice(c.findIndex(([f]) => f === 'fila') + 1, 0, ['emis', 'emissione']);
     return c; };
   const ATTC = [['cognome', 'Cognome'], ['nome', 'Nome'], ['nascita', 'data di nascita'], ['tel', 'contatto'], ['part', 'part'], ['note', 'note'], ['richiesta', 'data di richiesta'], ['avviso', 'data di avviso'], ['risposta', 'risposta del cliente']];
@@ -1764,12 +1834,12 @@
   }
   function topbar() {
     const me = ACC.me(); const ag = ACC.agency(); const [sk, sl, st] = syncInfo();
-    const v = UI.view; const nb = (view, label, ico, perm) => !perm || ACC.can(perm) ? `<button class="tlink" data-act="nav" data-v="${view}" aria-current="${v === view ? 'page' : 'false'}">${ico}<span>${label}</span></button>` : '';
+    const v = UI.view; const nb = (view, label, ico, perm) => !perm || ACC.can(perm) ? `<button class="tlink" data-act="nav" data-v="${esc(view)}" aria-current="${esc(v === view ? 'page' : 'false')}">${ico}<span>${label}</span></button>` : '';
     return `<header class="topbar"><div class="in">
-      <button class="brand" data-act="nav" data-v="${ACC.can('viaggi') ? 'home' : 'conta'}" aria-label="Viaggi in Pullman, pagina iniziale"><img class="logo" src="${LOGO}" alt="La Terra"><span class="appname">Viaggi <span>in Pullman</span></span></button>
-      ${ACC.can('viaggi') ? `<nav class="nav" aria-label="Sezioni"><button data-act="nav" data-v="home" aria-pressed="${v === 'home' || v === 'trip'}">Viaggi</button><button data-act="nav" data-v="models" aria-pressed="${v === 'models'}">Piantine</button></nav>` : ''}
+      <button class="brand" data-act="nav" data-v="${esc(ACC.can('viaggi') ? 'home' : 'conta')}" aria-label="Viaggi in Pullman, pagina iniziale"><img class="logo" src="${LOGO}" alt="La Terra"><span class="appname">Viaggi <span>in Pullman</span></span></button>
+      ${ACC.can('viaggi') ? `<nav class="nav" aria-label="Sezioni"><button data-act="nav" data-v="home" aria-pressed="${esc(v === 'home' || v === 'trip')}">Viaggi</button><button data-act="nav" data-v="models" aria-pressed="${esc(v === 'models')}">Piantine</button></nav>` : ''}
       <span class="spacer"></span>
-      <span id="syncpill" class="sync ${sk}" title="${esc(st)}" role="status"><i></i>${esc(sl)}</span>
+      <span id="syncpill" class="sync ${esc(sk)}" title="${esc(st)}" role="status"><i></i>${esc(sl)}</span>
       ${ag ? `<button class="agchip" data-act="changeag" title="Cambia agenzia">${ICON.pin}${esc(ag.nome)}<span class="agc"> · ${esc(ag.cassa || ag.nome)}</span></button>` : ''}
       ${nb('bigl', 'Biglietteria', ICON.tkt, ACC.can('cassa') || ACC.can('cassaAll') ? null : 'x')}${nb('cassa', 'Cassa', ICON.cash, ACC.can('cassa') || ACC.can('cassaAll') ? null : 'x')}${nb('conta', 'Contabilità', ICON.chart, 'conta')}${nb('anag', 'Anagrafica', ICON.users, 'anag')}${nb('settings', 'Impostazioni', ICON.gear)}<button class="tlink hlbtn" data-act="help" title="Aiuto: cerca nel manuale d'istruzioni (F1)" aria-label="Aiuto: cerca nel manuale d'istruzioni">${ICON.search}<span>Aiuto</span></button>${nb('super', 'Super Master', ICON.tool, 'tech')}
       ${me ? `<button class="me" data-act="memenu" aria-label="${esc(me.name)}: account"><span class="av">${esc((me.name || '?')[0].toUpperCase())}</span><span class="mt"><b>${esc(me.name)}</b><small>${esc(ROLE_L[me.role])}</small></span></button>` : ''}
@@ -1816,14 +1886,14 @@
           <button class="btn primary" data-act="newtrip">${ICON.plus} Nuovo viaggio</button>
         </div></div>
       <div class="hfilters">
-        <label class="ysel"><span>Anno</span><select data-year="1" aria-label="Anno da vedere">${years.map(yy => `<option value="${yy}"${yy === y ? ' selected' : ''}>${yy}</option>`).join('')}</select></label>
-        <div class="seg catseg" role="group" aria-label="Tipo">${[['tutte', 'Tutte'], ['gita', 'Gite'], ['tour', 'Tour'], ['evento', 'Eventi']].map(([v, l]) => `<button data-act="hcat" data-v="${v}" aria-pressed="${cat === v}" class="c-${v}">${l}</button>`).join('')}</div>
+        <label class="ysel"><span>Anno</span><select data-year="1" aria-label="Anno da vedere">${years.map(yy => `<option value="${esc(yy)}"${yy === y ? ' selected' : ''}>${esc(yy)}</option>`).join('')}</select></label>
+        <div class="seg catseg" role="group" aria-label="Tipo">${[['tutte', 'Tutte'], ['gita', 'Gite'], ['tour', 'Tour'], ['evento', 'Eventi']].map(([v, l]) => `<button data-act="hcat" data-v="${esc(v)}" aria-pressed="${esc(cat === v)}" class="c-${esc(v)}">${l}</button>`).join('')}</div>
         <label class="chk small"><input type="checkbox" data-act="hidepast"${UI.hidePast ? ' checked' : ''}> Nascondi quelle già fatte</label>
         <input class="search" type="search" data-hq="1" placeholder="Cerca viaggio o codice (es. T08)" value="${esc(UI.hq || '')}" aria-label="Cerca">
       </div>
       <nav class="mstrip" aria-label="Mesi">${MESI.map((m, i) => byM[i] ? `<a class="mchip" href="#m-${i}"><b>${MESI_L[i]}</b></a>` : `<span class="mchip off"><b>${MESI_L[i]}</b></span>`).join('')}</nav>
       <div class="thead" aria-hidden="true"><span>Data</span><span>Giorno</span><span>Codice</span><span>Viaggio</span><span>Bus</span><span></span></div>
-      <div class="months">${Object.keys(byM).map(Number).sort((a, b) => a - b).map(m => `<section class="month" id="m-${m}" aria-label="${MESI_L[m]} ${esc(y)}">
+      <div class="months">${Object.keys(byM).map(Number).sort((a, b) => a - b).map(m => `<section class="month" id="m-${esc(m)}" aria-label="${esc(MESI_L[m])} ${esc(y)}">
           <div class="tl">${byM[m].map(t => tripRow(t, today)).join('')}</div></section>`).join('') || `<div class="empty">Nessuna gita con questi filtri.</div>`}</div>`;
   }
   function tripRow(t, today) {
@@ -1831,7 +1901,7 @@
     const c = tripCat(t); const d = parseD(t.data); const n = nGiorni(t); const f = t.fine ? parseD(t.fine) : null;
     const past = (t.fine || t.data) < today;
     const when = n > 1 ? `${GIORNI[d.getDay()].slice(0, 3)} ${d.getDate()} ${MESI[d.getMonth()]} → ${GIORNI[f.getDay()].slice(0, 3)} ${f.getDate()} ${MESI[f.getMonth()]} · ${n} giorni` : `${GIORNI[d.getDay()]} · in giornata`;
-    const st = !T.pers ? '<span class="pill neutral">lista vuota</span>' : c === 'biglietteria' ? `<span class="pill neutral">${T.pers} biglietti</span>` : `<span class="pill ${T.seated === T.pers ? 'ok' : 'tbd'}">${T.pers} persone${T.seated < T.pers ? ` · ${T.pers - T.seated} senza posto` : ''}</span>`;
+    const st = !T.pers ? '<span class="pill neutral">lista vuota</span>' : c === 'biglietteria' ? `<span class="pill neutral">${T.pers} biglietti</span>` : `<span class="pill ${esc(T.seated === T.pers ? 'ok' : 'tbd')}">${T.pers} persone${T.seated < T.pers ? ` · ${T.pers - T.seated} senza posto` : ''}</span>`;
     const buses = t.buses.length ? `<span class="pill neutral">${ICON.bus} ${t.buses.length} bus · ${t.buses.reduce((a, b) => a + busStats(b).tot, 0)}/${T.cap}</span>` : '';
     const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
     // data grande, senza anno (l'anno si sceglie in alto): «10 Gennaio», per i tour «3–6 Gennaio» o «30 Dic – 2 Gen»
@@ -1839,8 +1909,8 @@
     const dateL = n <= 1 ? `<b>${d.getDate()}</b><span>${cap(MESI_L[d.getMonth()])}</span>` : sameM ? `<b>${d.getDate()}–${f.getDate()}</b><span>${cap(MESI_L[d.getMonth()])}</span>` : `<b>${d.getDate()}</b><span>${cap(MESI[d.getMonth()])}</span><em>–</em><b>${f.getDate()}</b><span>${cap(MESI[f.getMonth()])}</span>`;
     const dayL = GIORNI[d.getDay()].slice(0, 3).toUpperCase() + (n > 1 ? '–' + GIORNI[f.getDay()].slice(0, 3).toUpperCase() : '');
     const det = [n > 1 ? `${n} giorni` : '', t.quota && t.quota.hotel ? `Hotel ${esc(t.quota.hotel)}` : '', past ? 'già fatta' : ''].filter(Boolean);
-    return `<article class="trow v2 c-${c}${t.extra ? ' extra' : ''}${past ? ' past' : ''}" data-droptrip="${t.id}">
-      <div class="t2-blk" data-act="opentrip" data-id="${t.id}" title="${esc(CAT_L[c])}">
+    return `<article class="trow v2 c-${esc(c)}${t.extra ? ' extra' : ''}${past ? ' past' : ''}" data-droptrip="${esc(t.id)}">
+      <div class="t2-blk" data-act="opentrip" data-id="${esc(t.id)}" title="${esc(CAT_L[c])}">
         <div class="t2-d">${dateL}</div>
         <div class="t2-g">${dayL}</div>
         <div class="t2-c">${t.code ? `<span class="tcode">${esc(t.code)}</span>` : ''}</div>
@@ -1850,7 +1920,7 @@
       <div class="t2-x">${t.extra ? '<span class="xtra">extra</span>' : ''}</div>
       <div class="t2-sv"><div class="sv-i">${servIcons(t)}</div></div>
       <div class="t2-fc sv-c">${freeCounters(t)}</div>
-      <div class="tr-a"><button class="btn sm" data-act="opentrip" data-id="${t.id}" data-sec="lista" title="Lista prenotazioni">${ICON.list}<span>Lista</span></button>${c !== 'biglietteria' ? `<button class="btn sm" data-act="opentrip" data-id="${t.id}" data-sec="posti" title="Posti sul bus">${ICON.bus}<span>Posti</span></button>` : ''}</div>
+      <div class="tr-a"><button class="btn sm" data-act="opentrip" data-id="${esc(t.id)}" data-sec="lista" title="Lista prenotazioni">${ICON.list}<span>Lista</span></button>${c !== 'biglietteria' ? `<button class="btn sm" data-act="opentrip" data-id="${esc(t.id)}" data-sec="posti" title="Posti sul bus">${ICON.bus}<span>Posti</span></button>` : ''}</div>
     </article>`;
   }
   // posti ancora liberi: uno per bus (con più bus ognuno ha la sua lista), contando anche i nomi che mancano nelle comitive
@@ -1859,18 +1929,18 @@
     const multi = multiBus(t);
     const one = (b, lk, lab) => { const cap = (multi ? [b] : t.buses).reduce((a, x) => a + LMAP[x.layout].info.cap - Object.values(x.seats || {}).filter(y => y.res).length, 0); const free = cap - listLoad(t, lk);
       const cls = free <= 0 ? 'full' : free <= 5 ? 'low' : 'ok';
-      return `<span class="fc ${cls}" title="${esc(lab)}: ${cap} posti${free >= 0 ? `, ${free} liberi` : `, ${-free} persone in più`}">${ICON.bus}${multi ? `<em>${esc(b.label.replace(/^Bus\s*/i, 'B'))}</em>` : ''}${free > 0 ? `<b>${free}</b>${multi ? '' : ` ${free === 1 ? 'libero' : 'liberi'}`}` : free === 0 ? '<b>pieno</b>' : `<b>+${-free}</b>${multi ? '' : ' in più'}`}</span>`; };
+      return `<span class="fc ${esc(cls)}" title="${esc(lab)}: ${cap} posti${free >= 0 ? `, ${free} liberi` : `, ${-free} persone in più`}">${ICON.bus}${multi ? `<em>${esc(b.label.replace(/^Bus\s*/i, 'B'))}</em>` : ''}${free > 0 ? `<b>${free}</b>${multi ? '' : ` ${free === 1 ? 'libero' : 'liberi'}`}` : free === 0 ? '<b>pieno</b>' : `<b>+${-free}</b>${multi ? '' : ' in più'}`}</span>`; };
     return multi ? `<span class="fc-l">liberi</span>${t.buses.map(b => one(b, b.id, b.label)).join('')}` : one(t.buses[0], '', t.buses.length > 1 ? 'Bus' : t.buses[0].label);
   }
   function busRow(t, b) {
     const L = LMAP[b.layout]; const st = busStats(b);
     const pill = !st.tot ? '<span class="pill neutral">vuoto</span>' : st.todo > 0 ? `<span class="pill tbd">${st.todo} da sistemare</span>` : '<span class="pill ok">posti assegnati</span>';
     const wPlaced = Math.min(100, st.placed / st.cap * 100), wTodo = Math.min(100 - wPlaced, st.todo / st.cap * 100);
-    return `<button class="busrow" data-act="openbus" data-trip="${t.id}" data-bus="${b.id}">
+    return `<button class="busrow" data-act="openbus" data-trip="${esc(t.id)}" data-bus="${esc(b.id)}">
       <span class="bi">${ICON.bus}</span>
       <span><span class="bn">${esc(b.label)}</span> <span class="bm">· ${esc(L.nome)} · ${st.tot}/${st.cap} posti${b.autista ? ' · ' + esc(b.autista) : ''}</span></span>
       <span style="display:flex;gap:4px">${pill}</span>
-      <span class="bar" aria-hidden="true"><i style="width:${wPlaced}%"></i><i class="part" style="width:${Math.max(0, wTodo)}%"></i></span>
+      <span class="bar" aria-hidden="true"><i style="width:${esc(wPlaced)}%"></i><i class="part" style="width:${esc(Math.max(0, wTodo))}%"></i></span>
     </button>`;
   }
   function modelsView() {
@@ -1879,15 +1949,15 @@
       <div class="infobox">Manca la piantina del minibus da 19 posti: quando me la mandi la aggiungo. Nel Setra 417 (63 posti) il vostro file riporta «39» al posto del 30 nella fila 29–32: qui è corretto in 30.</div>`;
   }
   function modelCard(L, pick) {
-    return `<div class="model${pick && pick === L.id ? ' on' : ''}"${pick !== undefined ? ` data-act="picklayout" data-id="${L.id}" tabindex="0"` : ''}>
+    return `<div class="model${esc(pick && pick === L.id ? ' on' : '')}"${pick !== undefined ? ` data-act="picklayout" data-id="${esc(L.id)}" tabindex="0"` : ''}>
       <div><h3>${esc(L.nome)}</h3><div class="meta">${esc(L.desc)}${L.flotta ? ` · in flotta: ${L.flotta}` : ''}</div></div>
       <div class="mini">${L.floors.map((f, i) => deckHTML(null, L, i, { mini: true })).join('')}</div>
     </div>`;
   }
   function progBox(t) {
-    const pdf = t.pdf ? `<span class="prog"><button class="btn sm" data-act="openpdf" data-id="${t.id}">${ICON.link} ${esc(t.pdf.name)}</button><button class="kebab" data-act="delpdf" data-id="${t.id}" aria-label="Togli il PDF">${ICON.close}</button></span>` : '';
-    const link = t.programma ? `<a class="btn sm" href="${esc(t.programma)}" target="_blank" rel="noopener">${ICON.link} Link programma</a>` : '';
-    const drop = !t.pdf ? `<label class="pdfdrop" for="pdf-in-${t.id}">${ICON.upload} Trascina qui il programma (PDF o foto)<input id="pdf-in-${t.id}" class="pdf-in" data-trip="${t.id}" type="file" accept="application/pdf,.pdf,image/jpeg,image/png,.jpg,.jpeg,.png" hidden></label>` : '';
+    const pdf = t.pdf ? `<span class="prog"><button class="btn sm" data-act="openpdf" data-id="${esc(t.id)}">${ICON.link} ${esc(t.pdf.name)}</button><button class="kebab" data-act="delpdf" data-id="${esc(t.id)}" aria-label="Togli il PDF">${ICON.close}</button></span>` : '';
+    const link = safeUrl(t.programma) ? `<a class="btn sm" href="${esc(safeUrl(t.programma))}" target="_blank" rel="noopener">${ICON.link} Link programma</a>` : '';
+    const drop = !t.pdf ? `<label class="pdfdrop" for="pdf-in-${esc(t.id)}">${ICON.upload} Trascina qui il programma (PDF o foto)<input id="pdf-in-${esc(t.id)}" class="pdf-in" data-trip="${esc(t.id)}" type="file" accept="application/pdf,.pdf,image/jpeg,image/png,.jpg,.jpeg,.png" hidden></label>` : '';
     return pdf + link + drop;
   }
   function tripView() {
@@ -1898,11 +1968,11 @@
     if (!bus() && t.buses.length) UI.busId = t.buses[0].id;
     const D = syncAll(t); const SI = seatIndex(t); const T = summaryOf(t, D, SI);
     const head = `<div class="crumbs"><a data-act="nav" data-v="home">Viaggi</a><span>›</span><span>${esc(t.nome)}</span></div>
-      <div class="tripbar" data-droptrip="${t.id}"><h1>${esc(t.nome)}</h1><span class="tcat c-${tripCat(t)}">${CAT_L[tripCat(t)]}</span><span class="pill neutral">${esc(fmtTripDate(t, true))}</span>${progBox(t)}<button class="btn sm ghost" data-act="edittrip">${ICON.edit} Modifica gita</button>${lockBtnHTML(t)}</div>
+      <div class="tripbar" data-droptrip="${esc(t.id)}"><h1>${esc(t.nome)}</h1><span class="tcat c-${esc(tripCat(t))}">${CAT_L[tripCat(t)]}</span><span class="pill neutral">${esc(fmtTripDate(t, true))}</span>${progBox(t)}<button class="btn sm ghost" data-act="edittrip">${ICON.edit} Modifica gita</button>${lockBtnHTML(t)}</div>
       ${closedBannerHTML(t)}
       <div id="presence">${presenceHTML(t)}</div>
       ${casiBoxHTML(t.id)}
-      <div class="ptabs-row"><div class="ptabs" role="tablist"><button role="tab" data-act="sec" data-v="lista" aria-selected="${UI.sec !== 'posti'}">${ICON.list} ${bigl ? 'Biglietti venduti' : 'Lista prenotazioni'} <span>${T.pers} persone${T.att ? ` · ${T.att} in attesa` : ''}</span></button>${bigl ? '' : `<button role="tab" data-act="sec" data-v="posti" aria-selected="${UI.sec === 'posti'}">${ICON.bus} Posti sul bus <span>${T.seated}/${T.pers} con il posto</span></button>`}</div>${histBarHTML(t)}</div>`;
+      <div class="ptabs-row"><div class="ptabs" role="tablist"><button role="tab" data-act="sec" data-v="lista" aria-selected="${esc(UI.sec !== 'posti')}">${ICON.list} ${bigl ? 'Biglietti venduti' : 'Lista prenotazioni'} <span>${T.pers} persone${T.att ? ` · ${T.att} in attesa` : ''}</span></button>${bigl ? '' : `<button role="tab" data-act="sec" data-v="posti" aria-selected="${esc(UI.sec === 'posti')}">${ICON.bus} Posti sul bus <span>${T.seated}/${T.pers} con il posto</span></button>`}</div>${histBarHTML(t)}</div>`;
     const body = UI.sec === 'posti' ? postiView(t, D, SI, T) : listaView(t, D, SI, T);
     // l'incasso si apre in una finestra al centro, sia dalla lista sia dalla piantina
     const pp = UI.pay && UI.pay.tripId === t.id ? payPanelHTML(t) : ''; if (UI.pay && !pp) UI.pay = null;
@@ -1919,9 +1989,9 @@
     const withT = P.filter(p => personTkt(t, p, p.tipo || 'ad', TK)).length, noT = P.length - withT;
     const nv = v => (v == null || v === '' ? '' : esc(String(v).replace('.', ',')));
     const rows = e ? TK.sett : (Array.isArray(Q.tsett) ? Q.tsett : TK.sett.length ? TK.sett : [{ id: 'tk', nome: '', intero: null, ridotto: null }]);
-    const tbl = `<table class="tk-t${e ? '' : ' ed'}"><thead><tr><th>Tipo di biglietto</th><th>Intero</th><th>Ridotto</th>${e ? '' : '<th></th>'}</tr></thead><tbody>${rows.map((x, i) => e
+    const tbl = `<table class="tk-t${esc(e ? '' : ' ed')}"><thead><tr><th>Tipo di biglietto</th><th>Intero</th><th>Ridotto</th>${e ? '' : '<th></th>'}</tr></thead><tbody>${rows.map((x, i) => e
       ? `<tr><td><b>${esc(x.nome || 'Biglietto')}</b></td><td>${x.intero != null ? money(x.intero) : '—'}</td><td>${x.ridotto != null ? money(x.ridotto) : '—'}</td></tr>`
-      : `<tr><td><span class="th-in"><input class="hc" data-tks="${i}" data-k="nome" value="${esc(x.nome || '')}" placeholder="${i ? 'es. Tribuna' : 'es. Parterre'}" aria-label="Tipo di biglietto ${i + 1}"></span></td><td><span class="th-in eur"><input class="hc num" data-tks="${i}" data-k="intero" inputmode="decimal" value="${nv(x.intero)}" placeholder="intero" aria-label="Prezzo intero ${i + 1}"><i>€</i></span></td><td><span class="th-in eur"><input class="hc num" data-tks="${i}" data-k="ridotto" inputmode="decimal" value="${nv(x.ridotto)}" placeholder="ridotto" aria-label="Prezzo ridotto ${i + 1}"><i>€</i></span></td><td>${rows.length > 1 && can ? `<button class="kebab" data-act="tksdel" data-i="${i}" aria-label="Togli il tipo ${i + 1}">${ICON.close}</button>` : ''}</td></tr>`).join('')}</tbody></table>`;
+      : `<tr><td><span class="th-in"><input class="hc" data-tks="${i}" data-k="nome" value="${esc(x.nome || '')}" placeholder="${esc(i ? 'es. Tribuna' : 'es. Parterre')}" aria-label="Tipo di biglietto ${i + 1}"></span></td><td><span class="th-in eur"><input class="hc num" data-tks="${i}" data-k="intero" inputmode="decimal" value="${esc(nv(x.intero))}" placeholder="intero" aria-label="Prezzo intero ${i + 1}"><i>€</i></span></td><td><span class="th-in eur"><input class="hc num" data-tks="${i}" data-k="ridotto" inputmode="decimal" value="${esc(nv(x.ridotto))}" placeholder="ridotto" aria-label="Prezzo ridotto ${i + 1}"><i>€</i></span></td><td>${rows.length > 1 && can ? `<button class="kebab" data-act="tksdel" data-i="${i}" aria-label="Togli il tipo ${i + 1}">${ICON.close}</button>` : ''}</td></tr>`).join('')}</tbody></table>`;
     const dirCirc = e
       ? `<div class="tk-ro"><span>Diritti a biglietto <b>${money(TK.dir)}</b></span><span>Circuito <b>${esc(typeof circL === 'function' ? circL(TK.circ) : TK.circ)}</b></span></div>`
       : `<div class="tk-dc"><label class="th-f"><span>Diritti <small>a biglietto</small></span><span class="th-in eur"><input class="hc num" data-q="diritti" inputmode="decimal" value="${Q.diritti != null ? esc(String(Q.diritti).replace('.', ',')) : ''}" aria-label="Diritti a biglietto"><i>€</i></span></label><label class="th-f"><span>Circuito</span><span class="th-in"><select class="hc" data-qt="circuito"><option value="">—</option>${CIRCUITI.map(c => `<option${Q.circuito === c ? ' selected' : ''}>${c}</option>`).join('')}</select></span></label></div>`;
@@ -1939,9 +2009,9 @@
   const bgSee2 = () => ACC.can('cassa') || ACC.can('cassaAll');
   function headBlock(t) {
     const Q = t.quota; const tour = isTourT(t); const cat = tripCat(t); const bigl = cat === 'biglietteria'; const tk = bigl || cat === 'evento';
-    const money = (k, l, ph = '') => `<label class="th-f"><span>${l}</span><span class="th-in eur"><input class="hc num" data-q="${k}" inputmode="decimal" value="${Q[k] != null ? esc(String(Q[k]).replace('.', ',')) : ''}" placeholder="${ph}" aria-label="${esc(String(l).replace(/<[^>]+>/g, ''))}"><i>€</i></span></label>`;
-    const lab = (k, def, aria) => `<input class="hc lab" data-qt="${k}" value="${esc(Q[k] || def)}" aria-label="${aria}">`;
-    const date = (attr, v, l) => `<label class="th-f"><span>${l}</span><span class="th-in"><input class="hc" type="date" ${attr} value="${esc(v || '')}" aria-label="${l}"></span></label>`;
+    const money = (k, l, ph = '') => `<label class="th-f"><span>${l}</span><span class="th-in eur"><input class="hc num" data-q="${esc(k)}" inputmode="decimal" value="${Q[k] != null ? esc(String(Q[k]).replace('.', ',')) : ''}" placeholder="${esc(ph)}" aria-label="${esc(String(l).replace(/<[^>]+>/g, ''))}"><i>€</i></span></label>`;
+    const lab = (k, def, aria) => `<input class="hc lab" data-qt="${esc(k)}" value="${esc(Q[k] || def)}" aria-label="${esc(aria)}">`;
+    const date = (attr, v, l) => `<label class="th-f"><span>${l}</span><span class="th-in"><input class="hc" type="date" ${attr} value="${esc(v || '')}" aria-label="${esc(l)}"></span></label>`;
     const LU = (S.cfg.luoghi || []).filter(l => l.code || l.citta);
     const nDep = Math.min(6, Math.max(2, t.partenze.filter(d => d && (d.citta || d.luogo || d.code)).length + 1));
     const deps = !LU.length
@@ -1951,7 +2021,7 @@
         ${money('tkt1', 'Intero')}<label class="th-f"><span>${lab('tkt2L', 'ridotto', 'Nome del ridotto')}</span><span class="th-in eur"><input class="hc num" data-q="tkt2" inputmode="decimal" value="${Q.tkt2 != null ? esc(String(Q.tkt2).replace('.', ',')) : ''}" aria-label="Prezzo ridotto"><i>€</i></span></label>
         ${money('diritti', 'Diritti <small>a biglietto</small>')}<label class="th-f"><span>Circuito</span><span class="th-in"><select class="hc" data-qt="circuito"><option value="">—</option>${CIRCUITI.map(c => `<option${Q.circuito === c ? ' selected' : ''}>${c}</option>`).join('')}</select></span></label></div></section>` : '';
     const notes = notesOf(t);
-    return `<div class="thead2${bigl ? ' bigl' : ''}">
+    return `<div class="thead2${esc(bigl ? ' bigl' : '')}">
       ${bigl ? `<section class="th-sec"><div class="th-h">Data</div><div class="th-g">${date('data-tf="data"', t.data, 'Data dell\'evento')}</div></section>` : `
       <section class="th-sec"><div class="th-h">Quote e pagamenti</div><div class="th-g" style="--c:3">
         ${money('adulti', 'Adulti')}
@@ -1960,7 +2030,7 @@
         <div class="th-sep"></div>
         ${money('acconto', 'Acconto')}${money('saldo', 'Saldo')}${date('data-qt="saldoEntro"', Q.saldoEntro, 'Saldo entro il')}
       </div></section>
-      <section class="th-sec${cat === 'evento' && !tour ? ' dt' : ''}"><div class="th-h">${cat === 'evento' && !tour ? 'Data' : 'Date e hotel'}</div><div class="th-g" style="--c:2">
+      <section class="th-sec${esc(cat === 'evento' && !tour ? ' dt' : '')}"><div class="th-h">${cat === 'evento' && !tour ? 'Data' : 'Date e hotel'}</div><div class="th-g" style="--c:2">
         ${date('data-tf="data"', t.data, 'Partenza')}${date('data-tf="fine"', t.fine, 'Rientro')}
         ${tour ? `<label class="th-f wide"><span>Hotel</span><span class="th-in"><input class="hc" data-qt="hotel" value="${esc(Q.hotel || '')}" placeholder="nome hotel, città"></span></label>` : ''}
       </div></section>`}
@@ -1984,7 +2054,7 @@
   const ROOMT = [['singola', 'Singola'], ['matrimoniale', 'Matrimoniale'], ['tripla', 'Tripla'], ['quadrupla', 'Quadrupla'], ['matrimoniale + lettino', 'Matrimoniale + lettino']];
   function roomSel(attr, v, label) {
     const cur = String(v || '').trim(); const k = cur ? normCam(cur) : ''; const known = ROOMT.some(([x]) => x === k);
-    return `<select class="wc wsel room" ${attr} aria-label="${esc(label)}"><option value=""></option>${ROOMT.map(([x, l]) => `<option value="${x}"${known && k === x ? ' selected' : ''}>${l}</option>`).join('')}${cur && !known ? `<option value="${esc(cur)}" selected>${esc(cur)}</option>` : ''}</select>`;
+    return `<select class="wc wsel room" ${attr} aria-label="${esc(label)}"><option value=""></option>${ROOMT.map(([x, l]) => `<option value="${esc(x)}"${known && k === x ? ' selected' : ''}>${l}</option>`).join('')}${cur && !known ? `<option value="${esc(cur)}" selected>${esc(cur)}</option>` : ''}</select>`;
   }
   function wRow(t, r, i, cols, ctx, bigl) {
     const x = ctx.byRow[r.id]; const head = x && x.k === 0; const bk = x && x.bk;
@@ -1994,9 +2064,9 @@
     const pm = bk && !head && bk.persone.length > 1 ? personMoney(t, bk, r.id) : null; if (pm && pm.paid > 0 && pm.rest === 0 && !ok) cls += ' ppaid';
     const away = bk && !head && r.g && (() => { const rows = listRows(t, listKey(t, r)).filter(x => !isEmptyRow(x)); const k = rows.indexOf(r); const prev = rows[k - 1]; return !prev || !bk.persone.some(p => p.row === prev); })();
     const xg = bk && !head && multiBus(t) && listKey(t, r) !== listKey(t, bk.head) ? ` · comitiva ${bkName(bk)} x ${bk.persone.length} (${listName(t, listKey(t, bk.head))})` : away ? ` · comitiva ${bkName(bk)} x ${bk.persone.length} (spostata da sola in questo punto della lista)` : '';
-    const drag = x ? `<span class="dh" draggable="true" ${head ? `data-dragbk="${bk.id}" title="Trascina tutta la prenotazione (${esc(bkName(bk))} x ${bk.persone.length}) sulla piantina"` : `data-dragp="${r.id}" title="Trascina solo questa persona sulla piantina"`}>${ICON.grip}</span>` : '';
+    const drag = x ? `<span class="dh" draggable="true" ${head ? `data-dragbk="${esc(bk.id)}" title="Trascina tutta la prenotazione (${esc(bkName(bk))} x ${bk.persone.length}) sulla piantina"` : `data-dragp="${esc(r.id)}" title="Trascina solo questa persona sulla piantina"`}>${ICON.grip}</span>` : '';
     let seatTxt = '';
-    if (seat) { const p = bk.persone.find(q => q.id === r.id); const bad = p && p.req && hasAny(p.req) && !reqOk(LMAP[seat.b.layout], seat.s, p.req); seatTxt = `<span class="pill ${bad ? 'warn' : 'ok'}" title="${bad ? 'Il posto non rispetta la richiesta' : ''}">${esc(seat.b.label.replace(/^Bus\s*/i, 'B'))} · ${seat.s}</span>`; }
+    if (seat) { const p = bk.persone.find(q => q.id === r.id); const bad = p && p.req && hasAny(p.req) && !reqOk(LMAP[seat.b.layout], seat.s, p.req); seatTxt = `<span class="pill ${esc(bad ? 'warn' : 'ok')}" title="${bad ? 'Il posto non rispetta la richiesta' : esc(seat.b.label + ' · posto ' + seat.s)}">B${t.buses.indexOf(seat.b) + 1} ${seat.s}</span>`; }
     else if (x && r.bus) seatTxt = '<span class="pill tbd">da sistemare</span>';
     // 2.1.8: negli eventi chi è oltre i posti dei bus non ha il posto (e non si può incassare)
     if (ctx.OV && ctx.OV.ids.has(r.id)) seatTxt = `<span class="pill bad" title="Oltre i posti del bus: aggiungi un bus o metti in lista d'attesa">senza posto</span>`;
@@ -2008,9 +2078,9 @@
           : `<span title="${esc(`${TIPI[pv.tipo] || ''} · solo bus: la fila è vuota, il biglietto non si somma`)}"><small class="sb">solo bus</small>${esc(fmtNum(pv.v))} €</span>`; }
       return `<span title="${esc(`${TIPI[pv.tipo] || ''}${sup ? ` · ${fmtNum(pv.v - sup)} € + fila ${fmtNum(sup)} €` : ''}`)}">${sup ? '<small>fila</small>' : ''}${esc(fmtNum(pv.v))} €</span>`; })();
     const tip = head && bk._m ? `Totale ${euro(bk._m.due)} · pagato ${euro(bk._m.paid)}${bk._m.rest ? ' · da pagare ' + euro(bk._m.rest) : ''}${bk.mancano ? ` · mancano ${bk.mancano} nomi` : ''}` : '';
-    return `<tr class="${cls}" data-rowid="${r.id}"${fl ? ` title="Modificata adesso da ${esc(fl.by)}"` : xg ? ` title="${esc(xg.slice(3))}"` : ''}>
-      <td class="wn">${drag}<button class="rn" data-act="rowmenu" data-id="${r.id}" aria-label="Riga ${i + 1}: azioni${xg ? esc(xg) : ''}">${i + 1}</button>${xg ? '<i class="xg" aria-hidden="true">↗</i>' : ''}${r.stacc ? `<i class="stc" title="Staccata da ${esc(r.stacc.da)} il ${esc(fmtDate(r.stacc.il.slice(0, 10)))}${r.stacc.chi ? ' da ' + esc(r.stacc.chi) : ''}">${ICON.unlink}</i>` : ''}</td>
-      ${cols.filter(([f]) => f !== 'pagato').concat(bigl ? [] : [['posto', 'posto']], [['quota', 'quota']], cols.filter(([f]) => f === 'pagato')).map(([f, l]) => f === 'posto' ? `<td class="wpos">${seatTxt}</td>` : f === 'quota' ? `<td class="c-quota">${quotaTxt}</td>` : f === 'hotel' ? `<td class="c-hotel">${roomSel(`data-r="${r.id}" data-f="hotel"`, r.hotel, 'Camera riga ' + (i + 1))}</td>` : f === 'fila' && ctx.FI ? `<td class="c-fila">${filaSel(r, ctx.FI, i)}</td>` : f === 'part' && ctx.parts.length ? `<td class="c-part"><select class="wc wsel" data-r="${r.id}" data-f="part" aria-label="Partenza riga ${i + 1}"><option value=""></option>${ctx.parts.map(o => `<option value="${esc(o.code)}"${String(r.part || '').toUpperCase() === o.code ? ' selected' : ''} title="${esc(o.label)}">${esc(o.code)}</option>`).join('')}${r.part && !ctx.parts.some(o => o.code === String(r.part).toUpperCase()) ? `<option value="${esc(r.part)}" selected>${esc(r.part)}</option>` : ''}</select></td>` : head && f === 'pagato' ? `<td class="c-pagato"><button class="eurobtn${ok ? ' ok' : bk._m && bk._m.paid ? ' part' : ''}${UI.pay && UI.pay.bkId === bk.id ? ' on' : ''}" data-act="paypanel" data-id="${bk.id}" title="Incasso e documento (scontrino o fattura)" aria-label="Incasso e documento di ${esc(bkName(bk))}">${bk._m && bk._m.paid ? esc(fmtNum(bk._m.paid)) : '€'}</button></td>` : pm && f === 'pagato' ? `<td class="c-pagato"><button class="eurobtn pers${pm.rest === 0 && pm.paid > 0 ? ' ok' : pm.paid ? ' part' : ''}${UI.pay && UI.pay.pid === r.id ? ' on' : ''}" data-act="paypanel" data-id="${bk.id}" data-pid="${r.id}" title="Paga solo ${esc(r.cognome)} ${esc(r.nome)} (la sua quota)" aria-label="Incasso solo di ${esc(r.cognome)} ${esc(r.nome)}">${pm.paid ? esc(fmtNum(pm.paid)) : '€'}</button></td>` : `<td class="c-${f}${head && f === 'cognome' && bk.mancano ? ' miss' : ''}${f === 'emis' && r.emis && !emisISO(r.emis) ? ' bad' : ''}"${head && f === 'cognome' && tip ? ` title="${esc(tip)}"` : ''}><input class="wc" data-r="${r.id}" data-f="${f}" value="${esc(r[f] || '')}"${f === 'fila' && ctx.ev && ctx.TK && ctx.TK.sett.some(s => s.nome) ? ' list="tk-dl"' : ''}${f === 'emis' ? `${String(r.fila || '').trim() && !r.emis ? ' placeholder="gg/mm/aa"' : ''} inputmode="numeric"` : ''}${f === 'note' && String(r.note || '').trim() ? ` title="${esc(r.note)}"` : ''} aria-label="${esc(l)} riga ${i + 1}" autocomplete="off"></td>`).join('')}
+    return `<tr class="${esc(cls)}" data-rowid="${esc(r.id)}"${fl ? ` title="Modificata adesso da ${esc(fl.by)}"` : xg ? ` title="${esc(xg.slice(3))}"` : ''}>
+      <td class="wn">${drag}<button class="rn" data-act="rowmenu" data-id="${esc(r.id)}" aria-label="Riga ${i + 1}: azioni${xg ? esc(xg) : ''}">${i + 1}</button>${xg ? '<i class="xg" aria-hidden="true">↗</i>' : ''}${r.stacc ? `<i class="stc" title="Staccata da ${esc(r.stacc.da)} il ${esc(fmtDate(r.stacc.il.slice(0, 10)))}${r.stacc.chi ? ' da ' + esc(r.stacc.chi) : ''}">${ICON.unlink}</i>` : ''}</td>
+      ${cols.filter(([f]) => f !== 'pagato').concat(bigl ? [] : [['posto', 'posto']], [['quota', 'quota']], cols.filter(([f]) => f === 'pagato')).map(([f, l]) => f === 'posto' ? `<td class="wpos">${seatTxt}</td>` : f === 'quota' ? `<td class="c-quota">${quotaTxt}</td>` : f === 'hotel' ? `<td class="c-hotel">${roomSel(`data-r="${esc(r.id)}" data-f="hotel"`, r.hotel, 'Camera riga ' + (i + 1))}</td>` : f === 'fila' && ctx.FI ? `<td class="c-fila">${filaSel(r, ctx.FI, i)}</td>` : f === 'part' && ctx.parts.length ? `<td class="c-part"><select class="wc wsel" data-r="${esc(r.id)}" data-f="part" aria-label="Partenza riga ${i + 1}"><option value=""></option>${ctx.parts.map(o => `<option value="${esc(o.code)}"${String(r.part || '').toUpperCase() === o.code ? ' selected' : ''} title="${esc(o.label)}">${esc(o.code)}</option>`).join('')}${r.part && !ctx.parts.some(o => o.code === String(r.part).toUpperCase()) ? `<option value="${esc(r.part)}" selected>${esc(r.part)}</option>` : ''}</select></td>` : head && f === 'pagato' ? `<td class="c-pagato"><button class="eurobtn${esc(ok ? ' ok' : bk._m && bk._m.paid ? ' part' : '')}${UI.pay && UI.pay.bkId === bk.id ? ' on' : ''}" data-act="paypanel" data-id="${esc(bk.id)}" title="Incasso e documento (scontrino o fattura)" aria-label="Incasso e documento di ${esc(bkName(bk))}">${bk._m && bk._m.paid ? esc(fmtNum(bk._m.paid)) : '€'}</button></td>` : pm && f === 'pagato' ? `<td class="c-pagato"><button class="eurobtn pers${esc(pm.rest === 0 && pm.paid > 0 ? ' ok' : pm.paid ? ' part' : '')}${UI.pay && UI.pay.pid === r.id ? ' on' : ''}" data-act="paypanel" data-id="${esc(bk.id)}" data-pid="${esc(r.id)}" title="Paga solo ${esc(r.cognome)} ${esc(r.nome)} (la sua quota)" aria-label="Incasso solo di ${esc(r.cognome)} ${esc(r.nome)}">${pm.paid ? esc(fmtNum(pm.paid)) : '€'}</button></td>` : `<td class="c-${esc(f)}${head && f === 'cognome' && bk.mancano ? ' miss' : ''}${f === 'emis' && r.emis && !emisISO(r.emis) ? ' bad' : ''}"${head && f === 'cognome' && tip ? ` title="${esc(tip)}"` : ''}><input class="wc" data-r="${esc(r.id)}" data-f="${esc(f)}" value="${esc(r[f] || '')}"${f === 'fila' && ctx.ev && ctx.TK && ctx.TK.sett.some(s => s.nome) ? ' list="tk-dl"' : ''}${f === 'emis' ? `${String(r.fila || '').trim() && !r.emis ? ' placeholder="gg/mm/aa"' : ''} inputmode="numeric"` : ''}${(f === 'note' || f === 'nota2') && String(r[f] || '').trim() ? ` title="${esc(r[f])}"` : ''} aria-label="${esc(l)} riga ${i + 1}" autocomplete="off"></td>`).join('')}
 </tr>`;
   }
   // accompagnatore, autista e altro personale che dorme in hotel (vanno nella rooming list)
@@ -2029,24 +2099,24 @@
     return v; };
   function filaSel(r, FI, i) {
     const v = String(r.fila || '').trim();
-    if (!v && isEmptyRow(r)) return `<button class="fsel" data-act="filapick" data-id="${r.id}" aria-label="Fila riga ${i + 1}"></button>`;
-    return `<button class="fsel${v ? ' on' : ''}" data-act="filapick" data-id="${r.id}" aria-label="Fila riga ${i + 1}: ${esc(v ? filaLabel(v) : 'nessuna')}" title="${esc(v)}">${v ? esc(filaLabel(v)) : '<span>—</span>'}</button>`;
+    if (!v && isEmptyRow(r)) return `<button class="fsel" data-act="filapick" data-id="${esc(r.id)}" aria-label="Fila riga ${i + 1}"></button>`;
+    return `<button class="fsel${esc(v ? ' on' : '')}" data-act="filapick" data-id="${esc(r.id)}" aria-label="Fila riga ${i + 1}: ${esc(v ? filaLabel(v) : 'nessuna')}" title="${esc(v)}">${v ? esc(filaLabel(v)) : '<span>—</span>'}</button>`;
   }
   // una tabella per lista (con più bus: una per bus, più «Senza bus» se c'è qualcuno senza bus)
   // una tabella per lista (con più bus: una per bus, più «Senza bus» se c'è qualcuno senza bus)
   // Con più bus, in alto: «Tutti i bus» (una sotto l'altra), «Bus 1», «Bus 2»… (solo quella) e «Affiancate» (compatte, una accanto all'altra)
   function listTables(t, cols, ctx, bigl, SI) {
     const multi = multiBus(t);
-    const thead = `<thead><tr><th>N</th>${cols.filter(([f]) => f !== 'pagato').map(([f, l]) => `<th class="c-${f}">${esc(l)}</th>`).join('')}${bigl ? '' : '<th class="c-posto">posto</th>'}<th class="c-quota" title="Quanto paga la persona di questa riga">quota</th>${cols.filter(([f]) => f === 'pagato').map(([f, l]) => `<th class="c-${f}">${esc(l)}</th>`).join('')}</tr></thead>`;
+    const thead = `<thead><tr><th>N</th>${cols.filter(([f]) => f !== 'pagato').map(([f, l]) => `<th class="c-${esc(f)}">${esc(l)}</th>`).join('')}${bigl ? '' : '<th class="c-posto">posto</th>'}<th class="c-quota" title="Quanto paga la persona di questa riga">quota</th>${cols.filter(([f]) => f === 'pagato').map(([f, l]) => `<th class="c-${esc(f)}">${esc(l)}</th>`).join('')}</tr></thead>`;
     const Ls = tripLists(t).map(L => { const rows = listRows(t, L.id); const full = rows.filter(r => !isEmptyRow(r)); return Object.assign({}, L, { rows, full }); }).filter(L => !(multi && !L.id && !L.full.length));
     let view = multi ? (UI.lview || 'all') : 'all'; if (view !== 'all' && view !== 'side' && !t.buses.some(b => b.id === view)) view = UI.lview = 'all';
     const head = L => { const seated = L.full.filter(r => SI[r.id]).length; const cap = L.b ? busCap(L.b) : 0;
-      return multi ? `<div class="lhead${L.id ? '' : ' nobus'}"><h3>${L.b ? ICON.bus : ICON.alert} ${esc(L.label)}</h3><span>${L.full.length} ${L.full.length === 1 ? 'persona' : 'persone'}${L.b ? ` · ${seated} con il posto · ${cap} posti${L.full.length > cap ? ` · <b class="neg">${L.full.length - cap} in più dei posti</b>` : ''}` : ' · da mettere su un bus'}</span></div>` : ''; };
-    const tabs = multi ? `<div class="lviews" role="tablist" aria-label="Liste dei bus"><button role="tab" data-act="lview" data-v="all" aria-selected="${view === 'all'}">${ICON.list} Tutti i bus</button>${t.buses.map(b => `<button role="tab" data-act="lview" data-v="${b.id}" aria-selected="${view === b.id}" data-droplist="L:${esc(b.id)}">${ICON.bus} Lista ${esc(b.label)} <small>${listRows(t, b.id).filter(r => !isEmptyRow(r)).length}</small></button>`).join('')}<button role="tab" data-act="lview" data-v="side" aria-selected="${view === 'side'}">${ICON.dock} Affiancate</button></div>` : '';
-    if (view === 'side') return tabs + `<div class="lside" style="--n:${Ls.length}">${Ls.map(L => `<section class="lsec lcol" data-list="${esc(L.id)}">${head(L)}<div class="wtw" data-droplist="L:${esc(L.id)}">${sideTable(t, L, ctx)}</div></section>`).join('')}</div>`;
+      return multi ? `<div class="lhead${esc(L.id ? '' : ' nobus')}"><h3>${L.b ? ICON.bus : ICON.alert} ${esc(L.label)}</h3><span>${L.full.length} ${L.full.length === 1 ? 'persona' : 'persone'}${L.b ? ` · ${seated} con il posto · ${cap} posti${L.full.length > cap ? ` · <b class="neg">${L.full.length - cap} in più dei posti</b>` : ''}` : ' · da mettere su un bus'}</span></div>` : ''; };
+    const tabs = multi ? `<div class="lviews" role="tablist" aria-label="Liste dei bus"><button role="tab" data-act="lview" data-v="all" aria-selected="${esc(view === 'all')}">${ICON.list} Tutti i bus</button>${t.buses.map(b => `<button role="tab" data-act="lview" data-v="${esc(b.id)}" aria-selected="${esc(view === b.id)}" data-droplist="L:${esc(b.id)}">${ICON.bus} Lista ${esc(b.label)} <small>${listRows(t, b.id).filter(r => !isEmptyRow(r)).length}</small></button>`).join('')}<button role="tab" data-act="lview" data-v="side" aria-selected="${esc(view === 'side')}">${ICON.dock} Affiancate</button></div>` : '';
+    if (view === 'side') return tabs + `<div class="lside" style="--n:${esc(Ls.length)}">${Ls.map(L => `<section class="lsec lcol" data-list="${esc(L.id)}">${head(L)}<div class="wtw" data-droplist="L:${esc(L.id)}">${sideTable(t, L, ctx)}</div></section>`).join('')}</div>`;
     const show = view === 'all' ? Ls : Ls.filter(L => L.id === view);
     const nob = view !== 'all' && Ls.find(L => !L.id);
-    return tabs + show.map(L => `<section class="lsec" data-list="${esc(L.id)}">${head(L)}<div class="wtw" data-droplist="${multi ? 'L:' + esc(L.id) : '1'}"><table class="wl${ctx.ev ? ' wl-ev' : ''}">${thead}
+    return tabs + show.map(L => `<section class="lsec" data-list="${esc(L.id)}">${head(L)}<div class="wtw" data-droplist="${multi ? 'L:' + esc(L.id) : '1'}"><table class="wl${esc(ctx.ev ? ' wl-ev' : '')}">${thead}
         <tbody>${rowsShown(t, L.rows).map((r, i) => wRow(t, r, i, cols, ctx, bigl)).join('')}</tbody></table></div></section>`).join('')
       + (nob ? `<div class="lnobus small">${ICON.alert} ${nob.full.length} ${nob.full.length === 1 ? 'persona non è' : 'persone non sono'} su nessun bus: le vedi in «Tutti i bus».</div>` : '');
   }
@@ -2056,8 +2126,8 @@
     return `<table class="wl wl-side"><thead><tr><th>N</th><th>cognome e nome</th><th>posto</th></tr></thead><tbody>${L.full.map(r => {
       const x = ctx.byRow[r.id]; const bk = x && x.bk; const head = x && x.k === 0; const seat = ctx.SI[r.id]; n++;
       let cls = head ? 'gh' : ''; if (bk && saldato(bk)) cls += ' paid'; if ((UI.lsel || []).includes(r.id)) cls += ' lsel';
-      const drag = x ? `<span class="dh" draggable="true" ${head ? `data-dragbk="${bk.id}" title="Trascina tutta la prenotazione"` : `data-dragp="${r.id}" title="Trascina solo questa persona"`}>${ICON.grip}</span>` : '';
-      return `<tr class="${cls}" data-rowid="${r.id}"><td class="wn">${drag}<button class="rn" data-act="rowmenu" data-id="${r.id}" aria-label="Riga ${n}: azioni">${n}</button></td><td class="sd-n">${head ? `<b>${esc(String(r.cognome).replace(RX, '$1').trim())}</b>${bk.persone.length > 1 || bk.n > 1 ? ` <small>x ${Math.max(bk.n, bk.persone.length)}</small>` : ''}` : esc(String(r.cognome || '').trim())} ${esc(r.nome || '')}</td><td class="wpos">${seat ? `<span class="pill ok">${esc(seat.b.label.replace(/^Bus\s*/i, 'B'))} · ${seat.s}</span>` : '<span class="pill tbd">da sistemare</span>'}</td></tr>`;
+      const drag = x ? `<span class="dh" draggable="true" ${head ? `data-dragbk="${esc(bk.id)}" title="Trascina tutta la prenotazione"` : `data-dragp="${esc(r.id)}" title="Trascina solo questa persona"`}>${ICON.grip}</span>` : '';
+      return `<tr class="${esc(cls)}" data-rowid="${esc(r.id)}"><td class="wn">${drag}<button class="rn" data-act="rowmenu" data-id="${esc(r.id)}" aria-label="Riga ${esc(n)}: azioni">${n}</button></td><td class="sd-n">${head ? `<b>${esc(String(r.cognome).replace(RX, '$1').trim())}</b>${bk.persone.length > 1 || bk.n > 1 ? ` <small>x ${Math.max(bk.n, bk.persone.length)}</small>` : ''}` : esc(String(r.cognome || '').trim())} ${esc(r.nome || '')}</td><td class="wpos">${seat ? `<span class="pill ok">${esc(seat.b.label.replace(/^Bus\s*/i, 'B'))} · ${seat.s}</span>` : '<span class="pill tbd">da sistemare</span>'}</td></tr>`;
     }).join('') || '<tr><td colspan="3" class="emptyrow">Nessuno: trascina qui le persone</td></tr>'}</tbody></table>`;
   }
   // barra in basso quando ci sono righe selezionate
@@ -2073,15 +2143,17 @@
   }
   function listaView(t, D, SI, T) {
     const bigl = tripCat(t) === 'biglietteria'; const tour = !bigl && isTourT(t); const ev = tripCat(t) === 'evento'; const cols = listCols(tour, bigl, ev);
+    // 2.1.12: «note 2» = note interne, solo qui nella lista (non vanno nella stampa, che usa listCols senza questa colonna)
+    if (!bigl) cols.splice(cols.findIndex(([f]) => f === 'note') + 1, 0, ['nota2', 'note 2']);
     const byRow = {}; D.forEach((bk, gi) => bk.persone.forEach((p, k) => { byRow[p.id] = { bk, gi, k }; }));
     const ctx = { byRow, SI, parts: partOpts(t), FI: supplPrices(t) ? filaInfo(t, D) : null, ev, OV: ev ? overCap(t, D) : null, TK: ev ? tripTkt(t) : null };
     const Q = t.quota;
-    const sup = (k, l) => `<td><span class="sl">${l}</span><input class="hc num" data-qs="${k}" inputmode="decimal" value="${Q.suppl[k] != null ? esc(String(Q.suppl[k]).replace('.', ',')) : ''}" placeholder="€"></td>`;
+    const sup = (k, l) => `<td><span class="sl">${l}</span><input class="hc num" data-qs="${esc(k)}" inputmode="decimal" value="${Q.suppl[k] != null ? esc(String(Q.suppl[k]).replace('.', ',')) : ''}" placeholder="€"></td>`;
     const annTable = (k, title, dl = 'data di annullo') => {
       const rows = t.annullati.filter(r => r.stato === k);
       return `<h3 class="wt">${title}</h3><div class="wtw"><table class="wl wl-ann"><thead><tr><th>N</th>${cols.map(([, l]) => `<th>${esc(l)}</th>`).join('')}<th>${dl}</th></tr></thead><tbody>
-        ${rows.map((r, i) => `<tr><td class="wn"><button class="rn" data-act="annmenu" data-id="${r.id}" aria-label="Azioni">${i + 1}</button></td>${cols.map(([f, l]) => `<td><input class="wc" data-nr="${r.id}" data-f="${f}" value="${esc(r[f] || '')}" aria-label="${esc(l)}"></td>`).join('')}<td><input class="wc" data-nr="${r.id}" data-f="dataAnn" value="${esc(r.dataAnn || '')}" aria-label="data di annullo"></td></tr>`).join('') || `<tr><td colspan="${cols.length + 2}" class="emptyrow">—</td></tr>`}
-      </tbody></table></div><button class="btn sm ghost" data-act="annadd" data-k="${k}">${ICON.plus} riga</button>`;
+        ${rows.map((r, i) => `<tr><td class="wn"><button class="rn" data-act="annmenu" data-id="${esc(r.id)}" aria-label="Azioni">${i + 1}</button></td>${cols.map(([f, l]) => `<td><input class="wc" data-nr="${esc(r.id)}" data-f="${esc(f)}" value="${esc(r[f] || '')}" aria-label="${esc(l)}"></td>`).join('')}<td><input class="wc" data-nr="${esc(r.id)}" data-f="dataAnn" value="${esc(r.dataAnn || '')}" aria-label="data di annullo"></td></tr>`).join('') || `<tr><td colspan="${esc(cols.length + 2)}" class="emptyrow">—</td></tr>`}
+      </tbody></table></div><button class="btn sm ghost" data-act="annadd" data-k="${esc(k)}">${ICON.plus} riga</button>`;
     };
     const main = `
       ${headBlock(t)}
@@ -2090,7 +2162,7 @@
         <button class="btn sm" data-act="timport">${ICON.upload} Importa da Word</button>
         <button class="btn sm" data-act="printlist">${ICON.print} Stampa lista</button>
         ${tour ? `<button class="btn sm" data-act="rooming">${ICON.print} Rooming list</button>` : ''}
-        ${bigl ? '' : `<button class="btn sm${UI.dock ? ' dark' : ' primary'}" data-act="dock" aria-pressed="${!!UI.dock}">${ICON.dock} ${UI.dock ? 'Nascondi piantina' : 'Piantina accanto'}</button>`}
+        ${bigl ? '' : `<button class="btn sm${esc(UI.dock ? ' dark' : ' primary')}" data-act="dock" aria-pressed="${esc(!!UI.dock)}">${ICON.dock} ${UI.dock ? 'Nascondi piantina' : 'Piantina accanto'}</button>`}
       </div>
       ${ctx.OV && (ctx.OV.n > ctx.OV.cap || ctx.OV.ids.size) ? `<div class="warnbox capw" role="alert">${ICON.alert}<span><b>Posti finiti: ${ctx.OV.n > ctx.OV.cap ? `${ctx.OV.n} persone per ${ctx.OV.cap} posti sul bus.` : 'un bus è pieno.'}</b> ${ctx.OV.ids.size ? `${ctx.OV.ids.size === 1 ? 'La persona segnata' : `Le ${ctx.OV.ids.size} persone segnate`} «senza posto» non ${ctx.OV.ids.size === 1 ? 'si può' : 'si possono'} incassare.` : 'Mancano posti per i nomi ancora da scrivere.'} Aggiungi un bus da «Posti sul bus» oppure sposta qualcuno in lista d'attesa.</span></div>` : ''}
       ${listTables(t, cols, ctx, bigl, SI)}
@@ -2100,12 +2172,12 @@
         <label class="chk"><input type="checkbox" data-tchk="guida"${t.guida ? ' checked' : ''}> ------- x guida e 2° autista (sul bus resta un posto per loro)</label></div>`}
       <h3 class="wt">Lista d'attesa</h3>
       <div class="wtw"><table class="wl wl-att"><thead><tr><th>N</th>${ATTC.map(([, l]) => `<th>${esc(l)}</th>`).join('')}</tr></thead><tbody>
-        ${t.attesa.map((r, i) => `<tr${isEmptyRow(r) ? ' class="blank"' : ''}><td class="wn"><button class="rn" data-act="attmenu" data-id="${r.id}" aria-label="Azioni">${i + 1}</button></td>${ATTC.map(([f, l]) => `<td><input class="wc" data-ar="${r.id}" data-f="${f}" value="${esc(r[f] || '')}" aria-label="${esc(l)}"></td>`).join('')}</tr>`).join('')}
+        ${t.attesa.map((r, i) => `<tr${isEmptyRow(r) ? ' class="blank"' : ''}><td class="wn"><button class="rn" data-act="attmenu" data-id="${esc(r.id)}" aria-label="Azioni">${i + 1}</button></td>${ATTC.map(([f, l]) => `<td><input class="wc" data-ar="${esc(r.id)}" data-f="${esc(f)}" value="${esc(r[f] || '')}" aria-label="${esc(l)}"></td>`).join('')}</tr>`).join('')}
       </tbody></table></div>
       ${tour ? staffBox(t) : ''}
       ${bigl ? annTable('vende', 'Vuole vendere il biglietto', 'data richiesta') : annTable('da', 'Non partono più – da rimborsare') + annTable('fatto', 'Non partono più – già rimborsati') + annTable('no', 'Non partono più – hanno rinunciato senza avere rimborso')}`;
     const side = UI.dock && !bigl ? mapPanel(t, 'dock') : '';
-    return `<div class="lwrap${side ? ' dock' : ''}"><div class="lmain">${main}</div>${side ? `<aside class="ldock">${side}</aside>` : ''}</div>`;
+    return `<div class="lwrap${esc(side ? ' dock' : '')}"><div class="lmain">${main}</div>${side ? `<aside class="ldock">${side}</aside>` : ''}</div>`;
   }
 
   // ----- sezione 2: posti sul bus (lista + piantina insieme) -----
@@ -2123,7 +2195,7 @@
       <div class="panel-b"><div class="stats">
         <div class="stat"><b>${D.reduce((a, bk) => a + bk.persone.length, 0)}</b><span>persone</span></div>
         <div class="stat"><b>${D.reduce((a, bk) => a + bk.persone.length, 0) - free}</b><span>con il posto</span></div>
-        <div class="stat${free ? ' alert' : ''}"><b>${free}</b><span>senza posto</span></div></div>
+        <div class="stat${esc(free ? ' alert' : '')}"><b>${free}</b><span>senza posto</span></div></div>
         <label class="chk small"><input type="checkbox" data-act="onlyfree"${UI.onlyFree ? ' checked' : ''}> Mostra solo chi non ha il posto</label>
       </div>
       <div class="bklist" id="bklist" data-droplist="1">${list.map(bk => {
@@ -2134,22 +2206,22 @@
         const stTxt = st.txt ? `${esc(st.txt)}${st.none ? ` · ${st.none} senza` : ''}` : 'senza posto';
         const rqS = ps === 'ok' ? '✓ rispettata' : ps === 'ko' ? '✗ non rispettata' : ps === 'pref' ? '≈ non possibile' : 'da sistemare';
         const short = p => `${esc(p.cognome)} ${esc(String(p.nome || '').trim().slice(0, 1))}${p.nome ? '.' : ''}`;
-        return `<div class="lb lb2${UI.sel === bk.id ? ' sel' : ''}${st.none ? ' todo' : ''}" data-act="selbk" data-id="${bk.id}" draggable="true" data-dragbk="${bk.id}">
-          <div class="lb2-h"><span class="ln">${bk.ord}</span><span class="dot" style="background:${bk.head.c != null ? COLORS[bk.head.c % COLORS.length] : 'transparent'}"></span>
+        return `<div class="lb lb2${esc(UI.sel === bk.id ? ' sel' : '')}${st.none ? ' todo' : ''}" data-act="selbk" data-id="${esc(bk.id)}" draggable="true" data-dragbk="${esc(bk.id)}">
+          <div class="lb2-h"><span class="ln">${bk.ord}</span><span class="dot" style="background:${esc(bk.head.c != null ? COLORS[bk.head.c % COLORS.length] : 'transparent')}"></span>
             <span class="lb2-n" title="${esc(bkName(bk))} x ${bk.persone.length}"><b>${esc(bkName(bk))}</b> <small>x ${bk.persone.length}</small></span>
-            <span class="lb2-c">${parts.map(p => `<span class="code">${esc(p)}</span>`).join('')}</span><span class="lb2-s ${st.none ? (st.txt ? 'part' : 'none') : 'ok'}">${stTxt}</span></div>
+            <span class="lb2-c">${parts.map(p => `<span class="code">${esc(p)}</span>`).join('')}</span><span class="lb2-s ${esc(st.none ? (st.txt ? 'part' : 'none') : 'ok')}">${stTxt}</span></div>
           ${bk.mancano ? `<div class="lb2-m"><span class="lb2-w">mancano ${bk.mancano} ${bk.mancano === 1 ? 'nome' : 'nomi'}</span></div>` : ''}
-          ${rs.text ? `<div class="lb2-r ${ps || 'pending'}"><span>${esc(rs.text)}${rs.paid ? ' · pagato' : ''}</span><b>${rqS}</b></div>` : ''}
-          <div class="lb2-p">${bk.persone.map(p => `<span class="pchip${SI[p.id] ? ' on' : ''}${UI.selP === p.id ? ' sel' : ''}" draggable="true" data-dragp="${p.id}" data-act="selp" data-id="${p.id}" title="${esc(p.cognome)} ${esc(p.nome)} · trascina solo questa persona">${short(p)}${SI[p.id] ? ` <i>${SI[p.id].s}</i>` : ''}</span>`).join('')}</div>
+          ${rs.text ? `<div class="lb2-r ${esc(ps || 'pending')}"><span>${esc(rs.text)}${rs.paid ? ' · pagato' : ''}</span><b>${rqS}</b></div>` : ''}
+          <div class="lb2-p">${bk.persone.map(p => `<span class="pchip${esc(SI[p.id] ? ' on' : '')}${UI.selP === p.id ? ' sel' : ''}" draggable="true" data-dragp="${esc(p.id)}" data-act="selp" data-id="${esc(p.id)}" title="${esc(p.cognome)} ${esc(p.nome)} · trascina solo questa persona">${short(p)}${SI[p.id] ? ` <i>${SI[p.id].s}</i>` : ''}</span>`).join('')}</div>
         </div>`;
       }).join('') || '<div class="small" style="padding:14px">La lista è vuota: scrivila nella sezione «Lista prenotazioni» oppure importa il file Word.</div>'}</div>
     </section>`;
   }
   function mapPanel(t, mode) {
     const b = bus();
-    const tabs = `<div class="mtabs">${t.buses.map(x => { const st = busStats(x); return `<button class="mtab" data-act="tab" data-id="${x.id}" data-dropbus="${x.id}" aria-pressed="${x.id === UI.busId}" title="Lascia qui una prenotazione: la sistemo da sola su questo bus"><b>${esc(x.label)}</b><span>${st.tot}/${st.cap}</span></button>`; }).join('')}<button class="mtab add" data-act="addbus" data-trip="${t.id}" title="Aggiungi bus">${ICON.plus}${t.buses.length ? '' : ' Aggiungi bus'}</button></div>`;
-    if (!b) return `<section class="panel mapp ${mode}"><div class="panel-h">${tabs}</div><div class="panel-b"><div class="empty">Questa gita non ha ancora pullman: premi «+» e scegli la piantina.</div></div></section>`;
-    return `<section class="panel mapp ${mode}"><div class="panel-h">${tabs}</div><div class="mapwrap${mode === 'dock' ? ' compact' : ''}" id="mapwrap">${mapInner(t, b, mode)}</div>${mode === 'dock' ? `<div class="panel-f"><button class="btn primary sm" data-act="fill">${ICON.wand} Sistema chi non ha il posto</button><button class="btn sm" data-act="sec" data-v="posti">Apri «Posti sul bus»</button></div>` : ''}</section>`;
+    const tabs = `<div class="mtabs">${t.buses.map(x => { const st = busStats(x); const ns = (x.sosp || []).length; return `<button class="mtab" data-act="tab" data-id="${esc(x.id)}" data-dropbus="${esc(x.id)}" aria-pressed="${esc(x.id === UI.busId)}" title="Lascia qui una prenotazione: la sistemo da sola su questo bus"><b>${esc(x.label)}</b><span>${st.tot}/${st.cap}</span>${ns ? `<i class="sospb" title="${ns} in sospeso">${ns}</i>` : ''}</button>`; }).join('')}<button class="mtab add" data-act="addbus" data-trip="${esc(t.id)}" title="Aggiungi bus">${ICON.plus}${t.buses.length ? '' : ' Aggiungi bus'}</button></div>`;
+    if (!b) return `<section class="panel mapp ${esc(mode)}"><div class="panel-h">${tabs}</div><div class="panel-b"><div class="empty">Questa gita non ha ancora pullman: premi «+» e scegli la piantina.</div></div></section>`;
+    return `<section class="panel mapp ${esc(mode)}"><div class="panel-h">${tabs}</div><div class="mapwrap${esc(mode === 'dock' ? ' compact' : '')}" id="mapwrap">${mapInner(t, b, mode)}</div>${mode === 'dock' ? `<div class="panel-f"><button class="btn primary sm" data-act="fill">${ICON.wand} Sistema chi non ha il posto</button><button class="btn sm" data-act="sec" data-v="posti">Apri «Posti sul bus»</button></div>` : ''}</section>`;
   }
   function mapInner(t, b, mode) {
     const L = LMAP[b.layout]; const D = deriveBookings(t);
@@ -2163,12 +2235,14 @@
       hint = `<div class="hint"><span>Clicca il posto per <b>${esc(bkName(sel))} x ${sel.persone.length}</b>: va lì e gli altri del gruppo si siedono accanto.${rs.text ? `<span class="hreq">Richiesta: <b>${esc(rs.text)}</b> — posti adatti in verde</span>` : ''}</span><button class="btn sm" data-act="cancel">Fine</button></div>`;
     } else if (selP) {
       hint = `<div class="hint"><span>Clicca il posto per <b>${esc(String(selP.cognome).replace(RX, '$1'))} ${esc(selP.nome)}</b> (solo questa persona).</span><button class="btn sm" data-act="cancel">Fine</button></div>`;
-    } else hint = `<div class="hint idle">Trascina dalla lista una prenotazione o una persona e lasciala sul posto. Lasciandola sul nome del bus in alto, i posti li sceglie l'app con le vostre regole.</div>`;
+    } else hint = `<div class="hint idle">Trascina dalla lista una prenotazione o una persona e lasciala sul posto. Lasciandola sul nome del bus in alto, i posti li sceglie l'app con le vostre regole.${(() => { const k = G_SEAT.find(([x]) => gest().seat[x] === 'mvbk'); return k ? ` ${k[1].replace(/ su un posto occupato$/, '')} su un posto occupato: sposti tutta la prenotazione.` : ''; })()}</div>`;
     let want = null;
     const reqs = sel ? [sel.pref, ...sel.persone.map(p => p.req)] : [];
     if (reqs.some(hasAny)) { want = new Set(); reqs.filter(hasAny).forEach(r => wantSeats(L, r).forEach(s => { if (!b.seats[s]) want.add(s); })); }
-    return `${hint}<div class="floors${UI.sel || UI.selP ? ' placing' : ''}">${L.floors.map((f, i) => deckHTML(b, L, i, { interactive: true, want })).join('')}</div>
-      <div class="legend"><span><i class="lg-x"></i>«x 2», «x 5»: quanti sono nel gruppo</span><span><i class="lg-cross"></i>posto vuoto a fine gruppo</span>${want ? '<span><i style="background:#E3F5E9;border-color:#2B7A4B"></i>adatto alla richiesta</span>' : ''}<span>${busStats(b).free} posti liberi</span></div>`;
+    const sp = (b.sosp || []).map(pid => rowById(t, pid)).filter(Boolean);
+    const sosp = mode !== 'dock' || sp.length ? `<div class="sosp${sp.length ? ' on' : ''}" data-sospdrop="1"><div class="sosp-h"><b>${ICON.clock} Posti in sospeso</b><span>${sp.length ? `${sp.length === 1 ? '1 persona da rimettere' : sp.length + ' persone da rimettere'} sul bus: trascinala su un posto, oppure clicca il nome e poi il posto` : 'Trascina qui un posto per tenere da parte la persona mentre sistemi gli altri'}</span></div><div class="sosp-l">${sp.map(r => { const bk = D.find(x => x.persone.some(p => p.id === r.id)); return `<span class="schip${UI.selP === r.id ? ' on' : ''}" draggable="true" data-dragp="${esc(r.id)}"><button class="schip-n" data-act="selp" data-id="${esc(r.id)}" title="Clicca e poi tocca il posto dove metterla">${esc(String(r.cognome || '').replace(RX, '$1').trim())} ${esc(r.nome || '')}${bk && bk.persone.length > 1 ? ` <small>${esc(bkName(bk))} X ${bk.persone.length}</small>` : ''}${r.part ? ` <small>${esc(r.part)}</small>` : ''}</button><button class="schip-x" data-act="sospdel" data-id="${esc(r.id)}" title="Togli dal sospeso (resta senza posto)" aria-label="Togli dal sospeso">${ICON.close}</button></span>`; }).join('')}${Array.from({ length: Math.max(0, 3 - sp.length) }, () => '<span class="schip svuoto" aria-hidden="true"></span>').join('')}</div></div>` : '';
+    return `${hint}${sosp}<div class="floors${esc(UI.sel || UI.selP ? ' placing' : '')}">${L.floors.map((f, i) => deckHTML(b, L, i, { interactive: true, want })).join('')}</div>
+      <div class="legend"><span><i class="lg-x"></i>«X 2», «X 5»: quanti sono nel gruppo · in alto a destra la fila pagata</span><span><i class="lg-cross"></i>posto vuoto a fine gruppo</span>${want ? '<span><i style="background:#E3F5E9;border-color:#2B7A4B"></i>adatto alla richiesta</span>' : ''}<span>${busStats(b).free} posti liberi</span></div>`;
   }
   function depCounts(b) { const c = {}; b.bookings.forEach(bk => bk.persone.forEach(p => { const k = (p.part || '').toUpperCase(); c[k] = (c[k] || 0) + 1; })); return c; }
   function depsHTML(b) {
@@ -2178,7 +2252,7 @@
   }
   function busPanel(t, b) {
     const L = LMAP[b.layout];
-    const f = (id, label, key, ph = '') => `<div class="field"><label for="${id}">${label}</label><input id="${id}" data-bind="${key}" value="${esc(b[key] || '')}" placeholder="${esc(ph)}"></div>`;
+    const f = (id, label, key, ph = '') => `<div class="field"><label for="${esc(id)}">${label}</label><input id="${esc(id)}" data-bind="${esc(key)}" value="${esc(b[key] || '')}" placeholder="${esc(ph)}"></div>`;
     const noBus = deriveBookings(t).filter(bk => bk.persone.every(p => !p.row.bus)).length;
     return `<section class="panel side-r" aria-label="Dati del bus">
       <div class="panel-h"><h3>${esc(b.label)}</h3></div>
@@ -2188,6 +2262,7 @@
           <button class="btn dark" data-act="printmap">${ICON.print} Stampa piantina</button>
           <button class="btn dark" data-act="printcards">${ICON.cards} Stampa cartelli</button>
           <button class="btn wa" data-act="wa">${ICON.wa} Messaggi WhatsApp ai clienti</button>
+          <button class="btn dark" data-act="printacc">${ICON.print} Stampa lista passeggeri</button>
         </div>
         <div class="sep"></div>
         ${f('b-label', 'Nome del bus', 'label', 'Bus 1 RAG')}
@@ -2224,7 +2299,7 @@
   let pending = null;
   function openModal(title, body, foot, wide) {
     DIAG.ev('finestra', 'Aperta la finestra «' + String(title).replace(/<[^>]+>/g, '').replace(/&[a-z#0-9]+;/g, ' ').trim() + '»');
-    $('#modal-root').innerHTML = `<div class="scrim" data-act="scrim"><div class="modal${wide ? ' wide' : ''}" role="dialog" aria-modal="true" aria-label="${esc(title)}"><div class="modal-h"><h2>${title}</h2><button class="btn ghost" data-act="close" aria-label="Chiudi">${ICON.close}</button></div><div class="modal-b">${body}</div><div class="modal-f">${foot}</div></div></div>`;
+    $('#modal-root').innerHTML = `<div class="scrim" data-act="scrim"><div class="modal${esc(wide ? ' wide' : '')}" role="dialog" aria-modal="true" aria-label="${esc(title)}"><div class="modal-h"><h2>${title}</h2><button class="btn ghost" data-act="close" aria-label="Chiudi">${ICON.close}</button></div><div class="modal-b">${body}</div><div class="modal-f">${foot}</div></div></div>`;
     const first = $('#modal-root input, #modal-root textarea'); if (first) setTimeout(() => first.focus(), 30);
   }
   function closeModal() { $('#modal-root').innerHTML = ''; UI.modal = null; pending = null; }
@@ -2238,7 +2313,7 @@
     openModal(t ? 'Modifica gita' : 'Nuova gita', `<div class="tm">
       <div class="field"><label for="t-nome">Nome</label><input id="t-nome" class="tm-name" value="${esc(t ? t.nome : '')}" placeholder="es. Notre Dame de Paris - Messina"></div>
       <div class="tm-row">
-        <div class="field"><label for="t-cat">Tipo</label><select id="t-cat">${['gita', 'tour', 'evento'].concat(cat === 'biglietteria' ? ['biglietteria'] : []).map(c => `<option value="${c}"${cat === c ? ' selected' : ''}>${CAT_L[c]}</option>`).join('')}</select></div>
+        <div class="field"><label for="t-cat">Tipo</label><select id="t-cat">${['gita', 'tour', 'evento'].concat(cat === 'biglietteria' ? ['biglietteria'] : []).map(c => `<option value="${esc(c)}"${cat === c ? ' selected' : ''}>${CAT_L[c]}</option>`).join('')}</select></div>
         <div class="field"><label for="t-data">Partenza</label><input id="t-data" type="date" value="${esc(t ? t.data : todayISO())}"></div>
         <div class="field"><label for="t-fine">Rientro <small>se più giorni</small></label><input id="t-fine" type="date" value="${esc(t ? t.fine || '' : '')}"></div>
         <div class="field"><label for="t-code">Codice</label><input id="t-code" value="${esc(t ? t.code || '' : '')}" placeholder="G07, T08"></div>
@@ -2249,18 +2324,18 @@
         <div class="field"><label for="t-prog">Link al programma <small>PDF su Dropbox o pagina del sito</small></label><input id="t-prog" value="${esc(t ? t.programma || '' : '')}" placeholder="https://www.laterra.it/..."></div>
         <div class="field"><label for="t-danea">Codice prodotto Danea <small>per «Apri in Danea» nelle fatture</small></label><input id="t-danea" value="${esc(t ? t.codDanea || '' : '')}" placeholder="es. 261018 boschi e zafferana 18/10/26"></div>
       </details></div>`,
-      `${t ? `<button class="btn danger" data-act="deltrip" style="margin-right:auto">${ICON.trash} Elimina gita</button>` : ''}<button class="btn" data-act="close">Annulla</button><button class="btn primary" data-act="savetrip">${t ? 'Salva' : 'Crea'}</button>`);
+      `${t && (ACC.can('settings') || !(t.chiusa || t.histLock)) ? `<button class="btn danger" data-act="deltrip" style="margin-right:auto">${ICON.trash} Elimina gita</button>` : ''}<button class="btn" data-act="close">Annulla</button><button class="btn primary" data-act="savetrip">${t ? 'Salva' : 'Crea'}</button>`);
   }
   function busModal(tripId, change) {
     const t = S.trips.find(x => x.id === tripId); const b = change ? bus() : null;
     UI.modal = { kind: change ? 'layout' : 'bus', tripId, pick: b ? b.layout : '52' };
     const n = t.buses.length + 1;
     openModal(change ? 'Cambia piantina' : 'Aggiungi bus', `
-      ${change ? '<div class="infobox">I posti già assegnati restano dove sono se il nuovo pullman ha quel numero di posto; gli altri tornano «senza posto».</div>' : `<div class="grid2"><div class="field"><label for="nb-label">Nome del bus</label><input id="nb-label" value="Bus ${n}"></div><div class="field"><label for="nb-mezzo">Mezzo (ID o targa)</label><input id="nb-mezzo" placeholder="facoltativo"></div></div>
+      ${change ? '<div class="infobox">I posti già assegnati restano dove sono se il nuovo pullman ha quel numero di posto; gli altri tornano «senza posto».</div>' : `<div class="grid2"><div class="field"><label for="nb-label">Nome del bus</label><input id="nb-label" value="Bus ${esc(n)}"></div><div class="field"><label for="nb-mezzo">Mezzo (ID o targa)</label><input id="nb-mezzo" placeholder="facoltativo"></div></div>
       <div class="grid2"><div class="field"><label for="nb-autista">Autista</label><input id="nb-autista" placeholder="facoltativo"></div><div class="field"><label for="nb-acc">Accompagnatore</label><input id="nb-acc" placeholder="facoltativo"></div></div>`}
       <div class="field"><label>Scegli la piantina</label></div>
       <div class="models pick" id="pickgrid">${window.LAYOUTS.map(L => modelCard(L, UI.modal.pick)).join('')}</div>`,
-      `<button class="btn" data-act="close">Annulla</button><button class="btn primary" data-act="${change ? 'savelayout' : 'savebus'}">${change ? 'Cambia piantina' : 'Aggiungi bus'}</button>`, true);
+      `<button class="btn" data-act="close">Annulla</button><button class="btn primary" data-act="${esc(change ? 'savelayout' : 'savebus')}">${change ? 'Cambia piantina' : 'Aggiungi bus'}</button>`, true);
   }
 
   // ---------- stampa ----------
@@ -2322,6 +2397,28 @@
       ${bigl ? annT('vende', 'Vuole vendere il biglietto', 'data richiesta') : annT('da', 'Non partono più – da rimborsare') + annT('fatto', 'Non partono più – già rimborsati') + annT('no', 'Non partono più – hanno rinunciato senza avere rimborso')}
       <div class="pm-foot"><span>${full.length} righe</span><span>Stampato il ${fmtDate(todayISO())}</span></div></div>`;
   }
+  // lista per l'accompagnatore (2.1.14): solo le persone di questo bus; niente prezzi, incassi, note della gita,
+  // supplementi delle file e lista d'attesa. Restano data, partenze con gli orari, nome della gita e del bus, quante persone.
+  // La partenza di ognuno è colorata con il colore del luogo (Impostazioni › Luoghi di partenza).
+  function accPages(t, b) {
+    const tour = isTourT(t); const SI = seatIndex(t); const lk = multiBus(t) ? b.id : '';
+    const rows = listRows(t, lk).filter(r => !isEmptyRow(r)); const n = listLoad(t, lk);
+    const cols = [['cognome', 'Cognome'], ['nome', 'Nome'], ['tel', 'Contatto'], ['part', 'Partenza']].concat(tour ? [['hotel', 'Hotel'], ['cam', 'Camera']] : [], [['note', 'Note']]);
+    const bd = (b.partenze || []).filter(d => d.code || d.luogo);
+    const deps = bd.length ? bd.map(d => ({ code: String(d.code || '').toUpperCase(), city: '', luogo: d.luogo || '', ora: d.ora || '' }))
+      : (t.partenze || []).filter(d => d && (d.citta || d.luogo) && !/^no$/i.test(d.ora || '')).map(d => ({ code: '', city: d.citta || '', luogo: /^no$/i.test(d.luogo || '') ? '' : d.luogo || '', ora: d.ora || '' }));
+    const depOf = part => { const c = String(part || '').toUpperCase().trim(); if (!c) return -1; return deps.findIndex(d => (d.code && d.code === c) || (!d.code && codeIn(c, d.city))); };
+    const cnt = deps.map(() => 0); rows.forEach(r => { const i = depOf(r.part); if (i >= 0) cnt[i]++; });
+    const depLines = deps.map((d, i) => `<div class="accdep"><span class="accsw" style="background:${esc(partColor(d.code, d.city) || 'transparent')}">${esc(d.code || d.city)}</span> ${esc(d.luogo)}${d.ora ? ' · ore ' + esc(d.ora) : ''} <small>— ${cnt[i]} pers.</small></div>`).join('');
+    const cell = (r, f) => f === 'part' ? `<td class="accpart" style="background:${esc(partColor(r.part) || 'transparent')}">${esc(r.part || '')}</td>` : `<td>${esc(r[f] || '')}</td>`;
+    return `<div class="page lp acc">
+      <table class="lph"><tr><td class="tt" rowspan="2">${esc(t.nome)}</td><td>Data</td><td>${esc(fmtTripDate(t))}</td><td rowspan="2" class="deps">${depLines || '—'}</td></tr>
+        <tr><td>Bus</td><td><b>${esc(b.label)}</b>${b.mezzo ? ' · mezzo ' + esc(b.mezzo) : ''}${b.autista ? `<br>Autista: ${esc(b.autista)}` : ''}${b.accompagnatore ? `<br>Accompagnatore: ${esc(b.accompagnatore)}` : ''}</td></tr></table>
+      <h3 class="lt">Lista ${esc(b.label)} · ${n} ${n === 1 ? 'persona' : 'persone'}</h3>
+      <table class="lpt"><thead><tr><th>N</th>${cols.map(([, l]) => `<th>${esc(l)}</th>`).join('')}<th>Posto</th></tr></thead>
+      <tbody>${rows.map((r, i) => `<tr><td>${i + 1}</td>${cols.map(([f]) => cell(r, f)).join('')}<td>${SI[r.id] && SI[r.id].b === b ? esc(SI[r.id].s) : ''}</td></tr>`).join('') || `<tr><td colspan="${cols.length + 2}">Nessuna persona in questa lista.</td></tr>`}</tbody></table>
+      <div class="pm-foot"><span>${rows.length} righe</span><span>Stampato il ${fmtDate(todayISO())}</span></div></div>`;
+  }
   function mapPages(t, b) {
     const L = LMAP[b.layout]; const st = busStats(b);
     return L.floors.map((fl, fi) => `<div class="page pm">
@@ -2362,9 +2459,10 @@
     if (kind === 'list') { body = listPages(t); title = `Lista · ${t.nome}`; }
     else if (kind === 'rooming') { body = roomingPages(t); title = `Rooming list · ${t.nome}`; }
     else if (kind === 'map') { body = mapPages(t, b); title = `Piantina · ${b.label}`; }
+    else if (kind === 'acc') { body = accPages(t, b); title = `Lista per l'accompagnatore · ${b.label}`; }
     else {
       const r = cardPages(b, UI.cartOrder); body = r.html; title = `Cartelli · ${b.label} · lato autista ${r.sx} · lato hostess ${r.dx}`;
-      extra = `<div class="seg" role="group" aria-label="Ordine"><button data-act="cartorder" data-v="posto" aria-pressed="${UI.cartOrder === 'posto'}">Dal davanti al fondo</button><button data-act="cartorder" data-v="lista" aria-pressed="${UI.cartOrder === 'lista'}">Come la lista</button></div>`;
+      extra = `<div class="seg" role="group" aria-label="Ordine"><button data-act="cartorder" data-v="posto" aria-pressed="${esc(UI.cartOrder === 'posto')}">Dal davanti al fondo</button><button data-act="cartorder" data-v="lista" aria-pressed="${esc(UI.cartOrder === 'lista')}">Come la lista</button></div>`;
       if (!r.n) body = '<div class="page cp" style="display:grid;place-items:center;font-size:18px">Nessuna prenotazione su questo bus.</div>';
     }
     root.innerHTML = `<div class="pv-bar"><b>${esc(title)}</b>${extra}<button class="btn primary" data-act="doprint">${ICON.print} Stampa</button><button class="btn" data-act="closeprint">Chiudi</button></div><div class="pv-pages">${body}</div>`;
@@ -2410,8 +2508,22 @@
     const code = String(part || '').toUpperCase().trim(); const L = (S.cfg.luoghi || []).filter(l => l.code || l.citta);
     return L.find(l => code && String(l.code || '').toUpperCase() === code) || L.find(l => code && codeIn(code, l.citta)) || (pt && pt.luogo ? L.find(l => l.citta && String(pt.luogo).toUpperCase().includes(String(l.citta).toUpperCase())) : null) || null;
   }
+  // ---- colori dei luoghi di partenza (2.1.14): si scelgono in Impostazioni › Luoghi e colorano la partenza nella lista dell'accompagnatore ----
+  // I colori sono un elenco fisso (chiave → colore chiaro, leggibile anche in stampa).
+  const LCOL = [['', 'Nessuno', ''], ['verde', 'Verde', '#BDE5B0'], ['giallo', 'Giallo', '#FFEE85'], ['azzurro', 'Azzurro', '#B3E0F5'], ['viola', 'Viola', '#D9C2EE'], ['arancio', 'Arancio', '#FFC985'], ['rosa', 'Rosa', '#F8C4D6'], ['rosso', 'Rosso', '#F4A79E'], ['grigio', 'Grigio', '#D6D6D6']];
+  const LCOL_HEX = Object.fromEntries(LCOL.map(([k, , h]) => [k, h]));
+  // se il colore non è stato scelto: Ragusa verde, Modica giallo, Coffa azzurro, Ispica viola, Rosolini arancio
+  const LCOL_DEF = [['RAGUSA', 'verde'], ['MODICA', 'giallo'], ['COFFA', 'azzurro'], ['ISPICA', 'viola'], ['ROSOLINI', 'arancio']];
+  const lcolDefault = (code, city) => { const c = String(city || '').toUpperCase(); const k = String(code || '').toUpperCase().replace(/[^A-Z]/g, ''); const hit = LCOL_DEF.find(([n]) => (c && c.includes(n)) || (k && codeIn(k, n))); return hit ? hit[1] : ''; };
+  const lcolKey = l => (l && l.colore != null && Object.prototype.hasOwnProperty.call(LCOL_HEX, l.colore) ? l.colore : lcolDefault(l && l.code, l && l.citta));
+  // colore (preso sempre dall'elenco fisso) per un codice della colonna «part» o per il nome di una città
+  function partColor(part, city) {
+    const code = String(part || city || '').toUpperCase().trim(); if (!code) return '';
+    const l = luogoOf(code); const k = l ? lcolKey(l) : lcolDefault(code, city);
+    return Object.prototype.hasOwnProperty.call(LCOL_HEX, k) ? LCOL_HEX[k] : '';
+  }
   function mapsLink(part, pt) {
-    const l = luogoOf(part, pt); if (l && l.maps) return l.maps;
+    const l = luogoOf(part, pt); if (l && safeUrl(l.maps)) return safeUrl(l.maps);
     const q = l ? [l.luogo, l.citta].filter(Boolean).join(', ') : (pt && pt.luogo) || ''; return q ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}` : '';
   }
   function partenzaOf(t, b, part) {
@@ -2429,14 +2541,14 @@
     const seats = seatsOf(b, bk.id); const p0 = bk.persone.find(p => waNumber(p.tel)) || bk.persone[0] || {};
     const pt = partenzaOf(t, b, (bk.persone[0] || {}).part);
     const nomi = seats.map(s => { const p = bk.persone.find(x => x.id === b.seats[s].pid); return p ? `${p.cognome} ${p.nome}`.trim() : ''; }).filter(Boolean);
-    return { p0, seats, pt, part: (bk.persone[0] || {}).part, d: { v: 1, g: t.nome, d: t.data, f: t.fine || '', b: `${b.label}${LMAP[b.layout] ? ' · ' + LMAP[b.layout].nome : ''}`, l: b.layout, s: seats, n: nomi, c: (p0.nome || p0.cognome || '').split(' ')[0], pl: pt.luogo, po: pt.ora, a: b.accompagnatore || '', at: b.telAcc || '', h: (t.quota && t.quota.hotel) || '', r: t.programma || '' } };
+    return { p0, seats, pt, part: (bk.persone[0] || {}).part, d: { v: 1, g: t.nome, d: t.data, f: t.fine || '', b: `${b.label}${LMAP[b.layout] ? ' · ' + LMAP[b.layout].nome : ''}`, l: b.layout, s: seats, n: nomi, c: (p0.nome || p0.cognome || '').split(' ')[0], pl: pt.luogo, po: pt.ora, a: b.accompagnatore || '', at: b.telAcc || '', h: (t.quota && t.quota.hotel) || '', r: safeUrl(t.programma) } };
   }
   const postoBase = () => S.cfg.postoUrl || (/^https?:$/.test(location.protocol) ? new URL('./posto.html', location.href).href : POSTO_URL);
   const postoLink = d => `${postoBase()}#d=${b64url(d)}`;
   function waMessage(t, b, bk) {
     const x = waData(t, b, bk); const n = x.seats.length;
     const frase = !n ? 'Il posto sul pullman le verrà comunicato a breve.' : n === 1 ? `Il suo posto sul pullman è il n. ${x.seats[0]}.` : `I vostri posti sul pullman sono i n. ${x.seats.slice(0, -1).join(', ')} e ${x.seats[n - 1]}.`;
-    const map = { nome: String(x.p0.nome || '').split(' ')[0] || x.p0.cognome || '', cliente: `${x.p0.cognome || ''} ${x.p0.nome || ''}`.trim(), gita: t.nome, data: waDay(t.data) + (t.fine && t.fine !== t.data ? `, rientro ${waDay(t.fine)}` : ''), posti: fmtSeats(x.seats) || 'da assegnare', posti_frase: frase, bus: b.label, partenza: [x.pt.luogo, x.pt.ora ? 'ore ' + x.pt.ora : ''].filter(Boolean).join(', '), accompagnatore: [b.accompagnatore, b.telAcc].filter(Boolean).join(' '), link_posto: postoLink(x.d), programma: t.programma || '', mappa: mapsLink(x.part, x.pt), telefono: S.cfg.telAgenzia || '' };
+    const map = { nome: String(x.p0.nome || '').split(' ')[0] || x.p0.cognome || '', cliente: `${x.p0.cognome || ''} ${x.p0.nome || ''}`.trim(), gita: t.nome, data: waDay(t.data) + (t.fine && t.fine !== t.data ? `, rientro ${waDay(t.fine)}` : ''), posti: fmtSeats(x.seats) || 'da assegnare', posti_frase: frase, bus: b.label, partenza: [x.pt.luogo, x.pt.ora ? 'ore ' + x.pt.ora : ''].filter(Boolean).join(', '), accompagnatore: [b.accompagnatore, b.telAcc].filter(Boolean).join(' '), link_posto: postoLink(x.d), programma: safeUrl(t.programma), mappa: mapsLink(x.part, x.pt), telefono: S.cfg.telAgenzia || '' };
     return (S.cfg.waTemplate || DEFAULT_WA).split('\n').map(line => line.replace(/\{(\w+)\}/g, (m0, k) => (k in map ? map[k] : m0))).filter((line, i, arr) => !/:\s*$/.test(line.trim())).join('\n');
   }
   function postoPreview(t, b, bk) {
@@ -2584,7 +2696,9 @@
   // Il token di Meta resta solo in questo browser (chiave a parte): non entra nei dati, nella copia di sicurezza né su GitHub.
   const WAKEY = 'laterra.onboard.waapi';
   const WA_DEF = { ver: 'v23.0', phoneId: '', token: '', tplPosto: 'posto_pullman', tplProg: 'programma_gita', lang: 'it', tel: '' };
-  // le chiavi di Meta stanno in /config/chiavi.json (le modifica solo il Super Master; servono a tutti i computer per inviare)
+  // le chiavi di Meta stanno in /config/chiavi.json (le modifica solo il Super Master; servono a tutti i computer per inviare).
+  // Attenzione: il file arriva su ogni computer collegato, quindi chi ha accesso a quei computer può leggerlo.
+  // Su Meta usate un token di «utente di sistema» con i soli permessi WhatsApp, e rigeneratelo se un computer si perde.
   function waCfg() { const k = STORE.get('/config/chiavi.json'); return Object.assign({}, WA_DEF, (k && k.wa) || {}, { tel: S.cfg.telAgenzia || '' }); }
   function waCfgSave(c) { const k = Object.assign({}, STORE.get('/config/chiavi.json') || {}); delete c.tel; k.wa = c; k.u = Date.now(); STORE.put('/config/chiavi.json', k); }
   const waReady = c => !!(c.phoneId && c.token);
@@ -2754,11 +2868,11 @@
       ? `<div class="wa-top"><div><b>Invio automatico attivo</b><span>Ogni cliente riceve: il testo con giorno, ora, luogo, posti e accompagnatore; il video del pullman con i suoi posti in rosso; le foto del programma.</span></div>
          <button class="btn primary" data-act="wasendall" ${run || !todo.length ? 'disabled' : ''}>${ICON.wa} Invia a tutti${todo.length ? ` (${todo.length})` : ''}</button></div>`
       : `<div class="warnbox"><b>L'invio automatico non è ancora attivo.</b> Servono i codici dell'account WhatsApp Business di Meta: la guida passo passo è in <b>Impostazioni › WhatsApp ai clienti</b>; i codici li inserisce il tecnico. Intanto puoi segnare i consensi e vedere i video con il pulsante <b>Video</b>.</div>`;
-    const runBox = run ? `<div class="wa-run" role="status"><div class="bar"><i id="wa-run-bar" style="width:${Math.round(((run.done + (run.p || 0)) / Math.max(1, run.tot)) * 100)}%"></i></div><span id="wa-run-l">${run.done} di ${run.tot} · ${esc(run.cur)}</span><span class="small">Non chiudere questa finestra finché non ha finito.</span></div>` : '';
+    const runBox = run ? `<div class="wa-run" role="status"><div class="bar"><i id="wa-run-bar" style="width:${esc(Math.round(((run.done + (run.p || 0)) / Math.max(1, run.tot)) * 100))}%"></i></div><span id="wa-run-l">${run.done} di ${run.tot} · ${esc(run.cur)}</span><span class="small">Non chiudere questa finestra finché non ha finito.</span></div>` : '';
     const pv = UI.waPrev;
     const prevBox = pv ? `<div class="wa-prev"><div class="wa-prev-h"><b>Video per ${esc(pv.name)}</b><button class="btn sm ghost" data-act="waprevclose" aria-label="Chiudi anteprima">${ICON.close}</button></div>
-        ${pv.busy ? '<span class="small">Sto creando il video…</span>' : pv.err ? `<div class="warnbox">${esc(pv.err)}</div>` : `<div class="wa-prev-b"><video src="${pv.url}" controls autoplay muted playsinline></video><div><div class="msg">${esc(waFill(WA_TPL_POSTO, pv.params))}</div><a class="btn sm" href="${pv.url}" download="Posto ${esc(pv.name)}.mp4">${ICON.upload} Scarica il video (${pv.kb} KB)</a></div></div>`}</div>` : '';
-    const pill = st => `<span class="pill ${st.k === 'sent' ? 'ok' : st.k === 'ready' ? 'neutral' : st.k === 'err' ? 'warn' : 'tbd'}">${esc(st.txt)}</span>`;
+        ${pv.busy ? '<span class="small">Sto creando il video…</span>' : pv.err ? `<div class="warnbox">${esc(pv.err)}</div>` : `<div class="wa-prev-b"><video src="${esc(pv.url)}" controls autoplay muted playsinline></video><div><div class="msg">${esc(waFill(WA_TPL_POSTO, pv.params))}</div><a class="btn sm" href="${esc(pv.url)}" download="Posto ${esc(pv.name)}.mp4">${ICON.upload} Scarica il video (${pv.kb} KB)</a></div></div>`}</div>` : '';
+    const pill = st => `<span class="pill ${esc(st.k === 'sent' ? 'ok' : st.k === 'ready' ? 'neutral' : st.k === 'err' ? 'warn' : 'tbd')}">${esc(st.txt)}</span>`;
     openModal(`Messaggi WhatsApp · ${esc(b.label)}`, `
       ${head}${runBox}${telWarn}${progTxt}
       <div class="wa-sum"><span><b>${cnt('ready') + cnt('err')}</b> da inviare</span><span><b>${cnt('sent')}</b> inviati</span><span><b>${cnt('nook')}</b> senza consenso</span><span><b>${cnt('nonum')}</b> senza cellulare</span><span><b>${cnt('noseat')}</b> senza posto</span>
@@ -2767,10 +2881,10 @@
       <div class="walist">${list.map(({ bk, st }) => {
         const h = bk.full && bk.full.head; const msg = waMessage(t, b, bk);
         return `<div class="wa"><div class="who"><b>${esc(bkName(bk))} x ${bk.persone.length}</b><span>${st.num ? esc(`${st.x.p0.cognome} ${st.x.p0.nome} · ${st.x.p0.tel}`) : 'nessun numero di cellulare nella lista'}${st.x.seats.length ? ` · posti ${fmtSeats(st.x.seats)}` : ''}</span>
-            <label class="wa-ok"><input type="checkbox" data-act="waok" data-id="${bk.id}" ${h && (h.waOk || (h.cid && S.clients.clienti[h.cid] && S.clients.clienti[h.cid].waOk)) ? 'checked' : ''} ${run ? 'disabled' : ''}> consenso WhatsApp</label></div>
-          <div class="act">${pill(st)}<button class="btn sm" data-act="wavideo" data-id="${bk.id}" ${run || !st.x.seats.length ? 'disabled' : ''}>Video</button>
-            ${ready && (st.k === 'ready' || st.k === 'err' || st.k === 'sent') ? `<button class="btn sm" data-act="wasendone" data-id="${bk.id}" ${run ? 'disabled' : ''}>${st.k === 'sent' ? 'Rimanda' : 'Invia'}</button>` : ''}
-            ${st.num ? `<a class="btn sm ghost" href="https://wa.me/${st.num}?text=${encodeURIComponent(msg)}" target="_blank" rel="noopener" data-act="wasent" data-id="${bk.id}" title="Apre WhatsApp con il testo pronto: il video lo alleghi a mano">A mano</a>` : ''}</div>
+            <label class="wa-ok"><input type="checkbox" data-act="waok" data-id="${esc(bk.id)}" ${h && (h.waOk || (h.cid && S.clients.clienti[h.cid] && S.clients.clienti[h.cid].waOk)) ? 'checked' : ''} ${run ? 'disabled' : ''}> consenso WhatsApp</label></div>
+          <div class="act">${pill(st)}<button class="btn sm" data-act="wavideo" data-id="${esc(bk.id)}" ${run || !st.x.seats.length ? 'disabled' : ''}>Video</button>
+            ${ready && (st.k === 'ready' || st.k === 'err' || st.k === 'sent') ? `<button class="btn sm" data-act="wasendone" data-id="${esc(bk.id)}" ${run ? 'disabled' : ''}>${st.k === 'sent' ? 'Rimanda' : 'Invia'}</button>` : ''}
+            ${st.num ? `<a class="btn sm ghost" href="https://wa.me/${esc(st.num)}?text=${encodeURIComponent(msg)}" target="_blank" rel="noopener" data-act="wasent" data-id="${esc(bk.id)}" title="Apre WhatsApp con il testo pronto: il video lo alleghi a mano">A mano</a>` : ''}</div>
         </div>`;
       }).join('') || '<div class="small" style="padding:12px">Nessuna prenotazione su questo bus.</div>'}</div>
       <div class="small">«A mano» apre WhatsApp Business con il testo pronto, per i casi singoli o se l'invio automatico non è attivo: il video lo scarichi con «Video» e lo alleghi tu.</div>`,
@@ -2826,7 +2940,7 @@
   // ---------- account, accesso e registro tecnico ----------
   // Ruoli: «super» (Super Master: il tecnico per la manutenzione, invisibile agli altri), «master», «operatore»,
   // «contabilita» (ufficio contabilità: vede solo cassa e contabilità, senza modificare).
-  // Le password non si salvano mai: si salva solo un'impronta PBKDF2 (150.000 passaggi) con un sale diverso per ognuno.
+  // Le password non si salvano mai: si salva solo un'impronta PBKDF2 (600.000 passaggi) con un sale diverso per ognuno.
   const ROLE_L = { super: 'Super Master', master: 'Master', operatore: 'Operatore', contabilita: 'Contabilità' };
   const PERM = {
     super: ['viaggi', 'anag', 'cassa', 'cassaAll', 'conta', 'settings', 'users', 'tech'],
@@ -2835,7 +2949,12 @@
     contabilita: ['cassaAll', 'conta', 'readonly']
   };
   const SESK = 'vip-session-v1', LASTAG = 'vip-last-ag', FAILK = 'vip-login-fails';
-  const ITER = 150000;
+  // 600.000 passaggi (raccomandazione OWASP per PBKDF2-SHA256). Le impronte vecchie (150.000) funzionano ancora
+  // e si aggiornano da sole al primo accesso riuscito.
+  const ITER = 600000, ITER_OLD = 150000;
+  // Sicurezza: dopo 30 minuti senza usare l'app (o quando cambia il giorno) bisogna rientrare con la password
+  const IDLE_MS = 30 * 60000;
+  const dayKey = ts => { const d = new Date(ts || 0); return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`; };
   const b64 = buf => btoa(String.fromCharCode(...new Uint8Array(buf)));
   async function pwHash(pw, salt, iter) {
     const k = await crypto.subtle.importKey('raw', new TextEncoder().encode(pw), 'PBKDF2', false, ['deriveBits']);
@@ -2846,7 +2965,7 @@
   const normName = s => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
   const ACC = {
     sess: null,
-    loadSess() { try { this.sess = JSON.parse(localStorage.getItem(SESK) || sessionStorage.getItem(SESK) || 'null'); } catch (e) { this.sess = null; } },
+    loadSess() { try { this.sess = JSON.parse(localStorage.getItem(SESK) || sessionStorage.getItem(SESK) || 'null'); } catch (e) { this.sess = null; } if (this.sess && this.expired()) { this.sess = null; this.saveSess(false); GATE.msg = 'Per sicurezza la sessione si è chiusa: accedi di nuovo.'; } },
     saveSess(remember) { if (remember === undefined) remember = !!(this.sess && this.sess.r); if (this.sess) this.sess.r = !!remember; const v = JSON.stringify(this.sess); try { localStorage.removeItem(SESK); sessionStorage.removeItem(SESK); if (this.sess) (remember ? localStorage : sessionStorage).setItem(SESK, v); } catch (e) { /* niente */ } },
     users() { return (S && S.users && S.users.users) || {}; },
     me() { const s = this.sess; const u = s && this.users()[s.uid]; if (!u || u.active === false) return null; if ((u.resetN || 0) !== (s.rn || 0)) return null; return Object.assign({ id: s.uid }, u); },
@@ -2861,7 +2980,13 @@
       flush(); return id;
     },
     async setPw(id, pw, mustChange) { const u = this.users()[id]; const salt = newSalt(); Object.assign(u, { salt, iter: ITER, hash: await pwHash(pw, salt, ITER), mustChange: !!mustChange, pwAt: new Date().toISOString() }); if (mustChange) u.resetN = (u.resetN || 0) + 1; flush(); },
-    async check(name, pw) { const n = normName(name); for (const [id, u] of Object.entries(this.users())) { if (normName(u.name) !== n || u.active === false) continue; if ((await pwHash(pw, u.salt, u.iter || ITER)) === u.hash) return id; } return null; },
+    async check(name, pw) { const n = normName(name); for (const [id, u] of Object.entries(this.users())) { if (normName(u.name) !== n || u.active === false) continue; if ((await pwHash(pw, u.salt, u.iter || ITER_OLD)) === u.hash) return id; } return null; },
+    // impronta vecchia (meno passaggi): si rifà con la password appena controllata, senza cambiare nient'altro
+    async upgrade(id, pw) { const u = this.users()[id]; if (!u || (u.iter || ITER_OLD) >= ITER) return; const salt = newSalt(); Object.assign(u, { salt, iter: ITER, hash: await pwHash(pw, salt, ITER) }); flush(); },
+    // sessione scaduta: troppo tempo senza usare l'app, oppure è cambiato il giorno
+    expired(s) { s = s || this.sess; if (!s) return false; const last = +s.la || +s.at || 0; return Date.now() - last > IDLE_MS || dayKey(last) !== dayKey(Date.now()); },
+    // l'operatore sta usando l'app: si annota l'ora (sul disco al massimo una volta al minuto)
+    touch() { const s = this.sess; if (!s) return; const now = Date.now(); const old = +s.la || 0; s.la = now; if (now - old > 60000) this.saveSess(); },
     // registro tecnico: un file al giorno per computer, letto solo dal Super Master
     tlog(lv, m) {
       DIAG.ev('registro-' + lv, m);
@@ -2878,7 +3003,7 @@
   window.ACC = ACC;
 
   // ---------- schermate prima di entrare ----------
-  const GATE = { step: null, taps: 0, msg: '', busy: false, setup: 1, hello: '', remember: true };
+  const GATE = { step: null, taps: 0, msg: '', busy: false, setup: 1, hello: '', remember: false };
   const LOCAL_MODE = 'vip-local-mode';
   function gateStep() {
     const st = STORE.status();
@@ -2910,8 +3035,8 @@
       const s1 = GATE.setup === 1;
       return `<div class="gate"><div class="g-card wide">${gLogo()}${gTitle()}
         <p class="g-sub">${s1 ? '<b>Primo avvio · passo 1 di 2.</b> Crea l\'account del tecnico (Super Master): serve per la manutenzione, gli altri non lo vedono. Si apre toccando 10 volte il logo nella schermata di accesso.' : '<b>Primo avvio · passo 2 di 2.</b> Crea l\'account Master: gestisce operatori, agenzie e impostazioni.'}</p>${msg}
-        <form class="g-form" data-form="${s1 ? 'setup1' : 'setup2'}">
-          <label>Nome account<input name="n" autocomplete="username" required value="${s1 ? 'Tecnico' : ''}"></label>
+        <form class="g-form" data-form="${esc(s1 ? 'setup1' : 'setup2')}">
+          <label>Nome account<input name="n" autocomplete="username" required value="${esc(s1 ? 'Tecnico' : '')}"></label>
           <label>Password (almeno 8 caratteri)<input name="p" type="password" autocomplete="new-password" required minlength="8"></label>
           <label>Ripeti la password<input name="p2" type="password" autocomplete="new-password" required minlength="8"></label>
           <button class="g-btn" type="submit"${GATE.busy ? ' disabled' : ''}>${s1 ? 'Crea il Super Master' : 'Crea il Master ed entra'}</button>
@@ -2945,7 +3070,7 @@
       const me = ACC.me(); const ok = ACC.allowedAg(me); let last = ''; try { last = localStorage.getItem(LASTAG) || ''; } catch (e) { /* niente */ }
       return `<div class="gate top"><div class="g-ag">${gLogo()}<h1>Dove lavori oggi, ${esc(me.name)}?</h1><p class="g-sub">Scegli l'agenzia: gli incassi di oggi andranno nella sua cassa.</p>
         <div class="g-agrid">${S.cfg.agenzie.map(a => ok.includes(a.id)
-          ? `<button class="g-agc${a.id === last ? ' last' : ''}" data-act="gpickag" data-id="${a.id}"><span class="g-pin">${PIN}</span>${a.id === last ? '<span class="g-tag">Ultima usata</span>' : ''}<b>${esc(a.nome)}</b><span class="g-addr">${esc(a.indirizzo || '')}</span><span class="g-cassa"><span>${esc(a.cassa || 'Cassa ' + a.nome)}</span><span class="go">Entra ›</span></span></button>`
+          ? `<button class="g-agc${esc(a.id === last ? ' last' : '')}" data-act="gpickag" data-id="${esc(a.id)}"><span class="g-pin">${PIN}</span>${a.id === last ? '<span class="g-tag">Ultima usata</span>' : ''}<b>${esc(a.nome)}</b><span class="g-addr">${esc(a.indirizzo || '')}</span><span class="g-cassa"><span>${esc(a.cassa || 'Cassa ' + a.nome)}</span><span class="go">Entra ›</span></span></button>`
           : `<div class="g-agc off"><span class="g-pin">${LOCK}</span><span class="g-tag">Non abilitata</span><b>${esc(a.nome)}</b><span class="g-addr">Il Master ha limitato il tuo account ad altre agenzie.</span><span class="g-cassa">${esc(a.cassa || a.nome)}</span></div>`).join('')}</div>
         <div class="g-who"><span class="av">${esc((me.name || '?')[0].toUpperCase())}</span><span><b>${esc(me.name)}</b> · ${esc(ROLE_L[me.role])}</span><button class="g-link" data-act="logout">Non sei tu? Esci</button></div></div></div>`;
     }
@@ -2968,8 +3093,8 @@
       if (kind === 'setup1' && STORE.status().linked) { try { await STORE.syncNow(); } catch (e) { /* si riprova dopo */ } if (Object.values(ACC.users()).some(u => u.active !== false)) { GATE.busy = false; GATE.msg = 'Il primo avvio è già stato fatto da un altro computer: entra con il tuo account.'; return render(); } }
       const id = await ACC.create(f.n, f.p, kind === 'setup1' ? 'super' : 'master', []);
       GATE.busy = false;
-      if (kind === 'setup1') { ACC.sess = { uid: id, at: Date.now() }; ACC.saveSess(false); GATE.setup = 2; ACC.tlog('info', 'Primo avvio: creato il Super Master'); return render(); }
-      ACC.sess = { uid: id, at: Date.now() }; ACC.saveSess(true); ACC.tlog('info', `Primo avvio: creato il Master «${f.n}»`);
+      if (kind === 'setup1') { ACC.sess = { uid: id, at: Date.now(), la: Date.now() }; ACC.saveSess(false); GATE.setup = 2; ACC.tlog('info', 'Primo avvio: creato il Super Master'); return render(); }
+      ACC.sess = { uid: id, at: Date.now(), la: Date.now() }; ACC.saveSess(false); ACC.tlog('info', `Primo avvio: creato il Master «${f.n}»`);
       GATE.hello = String(f.n).trim(); return hello();
     }
     if (kind === 'login' || kind === 'tech') {
@@ -2983,7 +3108,7 @@
         GATE.msg = 'Nome o password non corretti.'; return render();
       }
       try { localStorage.removeItem(FAILK); } catch (e) { /* niente */ }
-      ACC.sess = { uid: id, at: Date.now(), rn: u.resetN || 0 }; ACC.saveSess(GATE.remember); ACC.tlog('info', u.role === 'super' ? 'Accesso tecnico del Super Master' : 'Accesso');
+      ACC.sess = { uid: id, at: Date.now(), la: Date.now(), rn: u.resetN || 0 }; ACC.saveSess(GATE.remember); ACC.upgrade(id, f.p).catch(() => {}); ACC.tlog('info', u.role === 'super' ? 'Accesso tecnico del Super Master' : 'Accesso');
       GATE.hello = u.name; GATE.step = null; UI.view = u.role === 'contabilita' ? 'conta' : u.role === 'super' ? 'super' : 'home';
       return u.mustChange ? render() : hello();
     }
@@ -3003,7 +3128,17 @@
     GATE.step = 'hello'; render();
     setTimeout(() => { if (GATE.step === 'hello') { GATE.step = null; render(); } }, 2600);
   }
-  function logout() { ACC.tlog('info', 'Uscita'); ACC.sess = null; ACC.saveSess(false); GATE.step = null; GATE.msg = ''; UI.view = 'home'; UI.tripId = null; closeModal(); render(); }
+  function logout(why) { ACC.tlog('info', why ? 'Uscita automatica: ' + why : 'Uscita'); ACC.sess = null; ACC.saveSess(false); GATE.step = null; GATE.msg = why ? `Per sicurezza la sessione si è chiusa (${why}): accedi di nuovo.` : ''; UI.view = 'home'; UI.tripId = null; closeModal(); render(); }
+  // controllo dell'inattività: ogni 30 secondi e quando l'app torna in primo piano
+  function idleCheck() {
+    const s = ACC.sess; if (!s) return;
+    // un'altra finestra dell'app può aver lavorato nel frattempo: vale l'ora più recente
+    try { const o = JSON.parse(localStorage.getItem(SESK) || sessionStorage.getItem(SESK) || 'null'); if (o && o.uid === s.uid && +o.la > (+s.la || 0)) s.la = +o.la; } catch (e) { /* niente */ }
+    if (ACC.expired()) logout(dayKey(+s.la || +s.at) !== dayKey(Date.now()) ? 'è cambiato il giorno' : '30 minuti senza usare l\'app');
+  }
+  ['pointerdown', 'keydown', 'wheel', 'touchstart'].forEach(ev => document.addEventListener(ev, () => ACC.touch(), { capture: true, passive: true }));
+  setInterval(idleCheck, 30000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) idleCheck(); });
 
   // ---------- anagrafica clienti ----------
   // Si riempie da sola con le persone scritte nelle liste dei viaggi; si può anche modificare a mano.
@@ -3077,7 +3212,7 @@
   }
   function acPaint() {
     if (!AC.el) return;
-    AC.el.innerHTML = `<div class="ac-h">Già in anagrafica <span>↓ per scegliere, Invio per compilare la riga · se non serve continua a scrivere</span></div>${AC.items.map(([id, x], i) => `<div class="ac-i${i === AC.i ? ' on' : ''}" role="option" aria-selected="${i === AC.i}" data-act="acpick" data-id="${id}"><span class="av">${esc(((x.nome || '')[0] || '') + ((x.cognome || '')[0] || ''))}</span><span class="ac-t"><b>${esc(x.cognome)} ${esc(x.nome)}</b><span>${esc([x.nascita ? `${/a$/i.test(x.nome || '') ? 'nata' : 'nato'} il ${x.nascita}` : '', x.tel, x.part ? 'parte da ' + x.part : ''].filter(Boolean).join(' · '))}</span></span><span class="ac-n">${AC.cnt[id] ? `${AC.cnt[id]} ${AC.cnt[id] === 1 ? 'viaggio' : 'viaggi'}` : 'nuovo'}</span></div>`).join('')}<div class="ac-f">Invio compila la riga · Esc per scrivere un cliente nuovo</div>`;
+    AC.el.innerHTML = `<div class="ac-h">Già in anagrafica <span>↓ per scegliere, Invio per compilare la riga · se non serve continua a scrivere</span></div>${AC.items.map(([id, x], i) => `<div class="ac-i${esc(i === AC.i ? ' on' : '')}" role="option" aria-selected="${esc(i === AC.i)}" data-act="acpick" data-id="${esc(id)}"><span class="av">${esc(((x.nome || '')[0] || '') + ((x.cognome || '')[0] || ''))}</span><span class="ac-t"><b>${esc(x.cognome)} ${esc(x.nome)}</b><span>${esc([x.nascita ? `${/a$/i.test(x.nome || '') ? 'nata' : 'nato'} il ${x.nascita}` : '', x.tel, x.part ? 'parte da ' + x.part : ''].filter(Boolean).join(' · '))}</span></span><span class="ac-n">${AC.cnt[id] ? `${AC.cnt[id]} ${AC.cnt[id] === 1 ? 'viaggio' : 'viaggi'}` : 'nuovo'}</span></div>`).join('')}<div class="ac-f">Invio compila la riga · Esc per scrivere un cliente nuovo</div>`;
   }
   function acPick(id) {
     const t = trip(); const r = t && rowById(t, AC.rowId); const x = clients()[id]; if (!r || !x) return acClose();
@@ -3117,12 +3252,12 @@
         <div class="cl-ht"><h2>${esc(sel.cognome)} ${esc(sel.nome)}</h2><div class="sub">${sel.since ? `In anagrafica dal ${esc(fmtDate(sel.since))} · ` : ''}${hist.length} ${hist.length === 1 ? 'viaggio' : 'viaggi'}${sel.part ? ` · parte di solito da ${esc(sel.part)}` : ''}</div>
           <div class="chips">${sel.waOk ? '<span class="pill ok">Consenso WhatsApp</span>' : '<span class="pill neutral">Senza consenso WhatsApp</span>'}</div></div>
         ${ro ? '' : `<label class="chk"><input type="checkbox" data-clchk="waOk"${sel.waOk ? ' checked' : ''}> Consenso WhatsApp</label>`}</div>
-      <div class="cl-grid"><div class="box cl-f">${CLF.map(([f, l]) => `<label class="cl-r"><span>${esc(l)}</span><input data-cl="${f}" value="${esc(sel[f] || '')}"${ro ? ' readonly' : ''} autocomplete="off"></label>`).join('')}
-          ${ro ? '' : `<div class="cl-act"><button class="btn sm danger" data-act="cldel" data-id="${UI.cl}">${ICON.trash} Elimina dall'anagrafica</button></div>`}</div>
-        <div class="box cl-h"><h3>Viaggi fatti e prenotati</h3>${hist.map(h => { const m = paidOf(h); const fut = (h.t.fine || h.t.data) >= todayISO(); return `<button class="cl-trip" data-act="opentrip" data-id="${h.t.id}"><span><b>${esc(h.t.nome)}</b><span>${esc(fmtTripDate(h.t))}${h.bk.persone.length > 1 ? ` · ${esc(bkName(h.bk))} x ${h.bk.persone.length}` : ''}</span></span><span class="pill ${m.saldato ? 'ok' : fut ? 'neutral' : 'tbd'}">${m.saldato ? 'Saldato' : fut ? 'Prenotato' : 'Da saldare'}</span></button>`; }).join('') || '<div class="small">Ancora nessun viaggio collegato.</div>'}</div></div>` : '<div class="empty">Nessun cliente. Si aggiungono da soli quando scrivi le liste dei viaggi.</div>';
+      <div class="cl-grid"><div class="box cl-f">${CLF.map(([f, l]) => `<label class="cl-r"><span>${esc(l)}</span><input data-cl="${esc(f)}" value="${esc(sel[f] || '')}"${ro ? ' readonly' : ''} autocomplete="off"></label>`).join('')}
+          ${ro ? '' : `<div class="cl-act"><button class="btn sm danger" data-act="cldel" data-id="${esc(UI.cl)}">${ICON.trash} Elimina dall'anagrafica</button></div>`}</div>
+        <div class="box cl-h"><h3>Viaggi fatti e prenotati</h3>${hist.map(h => { const m = paidOf(h); const fut = (h.t.fine || h.t.data) >= todayISO(); return `<button class="cl-trip" data-act="opentrip" data-id="${esc(h.t.id)}"><span><b>${esc(h.t.nome)}</b><span>${esc(fmtTripDate(h.t))}${h.bk.persone.length > 1 ? ` · ${esc(bkName(h.bk))} x ${h.bk.persone.length}` : ''}</span></span><span class="pill ${esc(m.saldato ? 'ok' : fut ? 'neutral' : 'tbd')}">${m.saldato ? 'Saldato' : fut ? 'Prenotato' : 'Da saldare'}</span></button>`; }).join('') || '<div class="small">Ancora nessun viaggio collegato.</div>'}</div></div>` : '<div class="empty">Nessun cliente. Si aggiungono da soli quando scrivi le liste dei viaggi.</div>';
     return `<div class="pagehead"><div><h1>Anagrafica</h1><div class="sub">${tot} clienti · si aggiorna da sola con le liste dei viaggi</div></div>${ro ? '' : `<div class="hbtns"><label class="btn" for="imp-cl">${ICON.upload} Importa da Word o Excel<input id="imp-cl" type="file" accept=".xlsx,.xlsm,.csv,.txt,.docx,.xls,.doc" hidden data-impfile="1"></label><button class="btn primary" data-act="clnew">${ICON.plus} Nuovo cliente</button></div>`}</div>
       <div class="anag"><section class="box cl-list" aria-label="Elenco clienti"><input class="search" type="search" data-aq="1" placeholder="Cerca per nome, telefono, città" value="${esc(UI.aq || '')}" aria-label="Cerca cliente">
-        <div class="cl-scroll">${groups.map(g => `<div class="cl-g">${esc(g.l)}</div>${g.items.map(([id, x]) => `<button class="cl-i${id === UI.cl ? ' on' : ''}" data-act="clsel" data-id="${id}"><span class="av">${esc(((x.nome || '')[0] || '') + ((x.cognome || '')[0] || ''))}</span><span><b>${esc(x.cognome)} ${esc(x.nome)}</b><span>${esc([x.part, ix[id] ? `${ix[id].length} viaggi` : ''].filter(Boolean).join(' · '))}</span></span></button>`).join('')}`).join('') || '<div class="small" style="padding:12px">Nessun cliente trovato.</div>'}${list.length > 400 ? `<div class="small" style="padding:12px">Ne mostro 400 su ${list.length}: affina la ricerca.</div>` : ''}</div></section>
+        <div class="cl-scroll">${groups.map(g => `<div class="cl-g">${esc(g.l)}</div>${g.items.map(([id, x]) => `<button class="cl-i${esc(id === UI.cl ? ' on' : '')}" data-act="clsel" data-id="${esc(id)}"><span class="av">${esc(((x.nome || '')[0] || '') + ((x.cognome || '')[0] || ''))}</span><span><b>${esc(x.cognome)} ${esc(x.nome)}</b><span>${esc([x.part, ix[id] ? `${ix[id].length} viaggi` : ''].filter(Boolean).join(' · '))}</span></span></button>`).join('')}`).join('') || '<div class="small" style="padding:12px">Nessun cliente trovato.</div>'}${list.length > 400 ? `<div class="small" style="padding:12px">Ne mostro 400 su ${list.length}: affina la ricerca.</div>` : ''}</div></section>
         <section class="cl-det" aria-label="Scheda cliente">${detail}</section></div>`;
   }
 
@@ -3283,8 +3418,8 @@
       ${I.tabs.length > 1 ? `<div class="field"><label for="imp-tab">Foglio o tabella</label><select id="imp-tab" data-impt="1">${I.tabs.map((t, i) => `<option value="${i}"${i === I.ti ? ' selected' : ''}>${esc(t.name)} · ${t.rows.length} righe</option>`).join('')}</select></div>` : ''}
       <div class="infobox">Controlla la riga grigia: sopra ogni colonna c'è cosa contiene. Se è sbagliato, cambialo dal menu. Le colonne «— non importare —» si saltano.</div>
       <label class="chk"><input type="checkbox" data-imph="1"${I.head >= 0 ? ' checked' : ''}> La prima riga è l'intestazione (non è un cliente)${I.head >= 0 ? `: «${esc(tab.rows[I.head].filter(Boolean).slice(0, 5).join(' · '))}»` : ''}</label>
-      <div class="imp-w"><table class="imp-t"><thead><tr><th class="res">Risultato</th>${Array.from({ length: width }, (_, c) => `<th><select data-impc="${c}" aria-label="Colonna ${c + 1}">${IMPF.map(([k, l]) => `<option value="${k}"${I.map[c] === k ? ' selected' : ''}>${l}</option>`).join('')}</select></th>`).join('')}</tr></thead>
-        <tbody>${prev.map(r => { const o = impRecord(r, I.map); return `<tr><td class="res">${o.cognome && o.nome ? `<b>${esc(o.cognome)}</b> ${esc(o.nome)}${o.nascita ? '<br><small>' + esc(o.nascita) + '</small>' : ''}` : '<small>saltata</small>'}</td>${Array.from({ length: width }, (_, c) => `<td class="${I.map[c] ? '' : 'off'}">${esc(String(I.map[c] === 'nascita' ? impDate(r[c]) : (I.map[c] === 'tel' || I.map[c] === 'tel2') ? impTel(r[c]) : (r[c] || '')).slice(0, 40))}</td>`).join('')}</tr>`; }).join('')}</tbody></table></div>
+      <div class="imp-w"><table class="imp-t"><thead><tr><th class="res">Risultato</th>${Array.from({ length: width }, (_, c) => `<th><select data-impc="${esc(c)}" aria-label="Colonna ${esc(c + 1)}">${IMPF.map(([k, l]) => `<option value="${esc(k)}"${I.map[c] === k ? ' selected' : ''}>${l}</option>`).join('')}</select></th>`).join('')}</tr></thead>
+        <tbody>${prev.map(r => { const o = impRecord(r, I.map); return `<tr><td class="res">${o.cognome && o.nome ? `<b>${esc(o.cognome)}</b> ${esc(o.nome)}${o.nascita ? '<br><small>' + esc(o.nascita) + '</small>' : ''}` : '<small>saltata</small>'}</td>${Array.from({ length: width }, (_, c) => `<td class="${esc(I.map[c] ? '' : 'off')}">${esc(String(I.map[c] === 'nascita' ? impDate(r[c]) : (I.map[c] === 'tel' || I.map[c] === 'tel2') ? impTel(r[c]) : (r[c] || '')).slice(0, 40))}</td>`).join('')}</tr>`; }).join('')}</tbody></table></div>
       <div class="imp-sum"><div><b>${P.recs.length - P.dup}</b><span>clienti nel file</span></div><div><b>${P.nuovi}</b><span>nuovi</span></div><div><b>${P.agg}</b><span>già presenti, si completano</span></div><div><b>${P.uguali}</b><span>già presenti, uguali</span></div></div>
       ${P.scarti > 0 || P.dup ? `<div class="small">${P.scarti > 0 ? `${P.scarti} righe senza cognome o nome saltate. ` : ''}${P.dup ? `${P.dup} righe ripetute nel file contate una volta sola.` : ''}</div>` : ''}
       ${!I.map.includes('cognome') && !I.map.includes('cn') ? '<div class="warnbox">Scegli quale colonna contiene il cognome (o «Cognome e nome insieme»).</div>' : ''}
@@ -3379,16 +3514,16 @@
     const inc = movs.filter(isInc); const per = sumBy(inc, (m, p) => mg(p.m)); const perAg = sumBy(inc, m => m.ag); const tot = totOf(movs);
     const cnt = k => inc.filter(m => m.parts.some(p => mg(p.m) === k)).length;
     const d = parseD(day); const prev = new Date(d); prev.setDate(d.getDate() - 1); const next = new Date(d); next.setDate(d.getDate() + 1);
-    const agBtns = all ? `<div class="seg" role="group" aria-label="Agenzia">${[['tutte', 'Tutte'], ...S.cfg.agenzie.map(a => [a.id, a.nome])].map(([k, l]) => `<button data-act="cag" data-v="${k}" aria-pressed="${agf === k}">${esc(l)}</button>`).join('')}</div>` : `<span class="pill neutral">${esc(agName(agf))} · ${esc(cassaName(agf))}</span>`;
+    const agBtns = all ? `<div class="seg" role="group" aria-label="Agenzia">${[['tutte', 'Tutte'], ...S.cfg.agenzie.map(a => [a.id, a.nome])].map(([k, l]) => `<button data-act="cag" data-v="${esc(k)}" aria-pressed="${esc(agf === k)}">${esc(l)}</button>`).join('')}</div>` : `<span class="pill neutral">${esc(agName(agf))} · ${esc(cassaName(agf))}</span>`;
     const closeAg = agf !== 'tutte' ? agf : (ACC.sess.ag || '');
     const ch = closeAg && chiusura(day, closeAg);
     const canClose = !ACC.can('readonly') && closeAg && (ACC.sess.ag === closeAg || ACC.can('cassaAll'));
     const stornati = new Set(movs.filter(m => m.storno).map(m => m.storno));
     return `${cassaTabs()}<div class="pagehead"><div><h1>${day === todayISO() ? 'Resoconto di oggi' : 'Resoconto del ' + esc(fmtDate(day))}</h1><div class="sub">${esc(fmtDate(day, true))} · ${movs.length} ${movs.length === 1 ? 'movimento' : 'movimenti'}${ch ? ` · <b>cassa ${esc(agName(closeAg))} chiusa</b> da ${esc(ch.who)} alle ${esc(hm(ch.at))}` : ''}</div></div>
-        <div class="hbtns">${agBtns}<button class="btn" data-act="cday" data-v="${dayISO(prev)}">‹ Giorno prima</button>${day < todayISO() ? `<button class="btn" data-act="cday" data-v="${dayISO(next)}">Giorno dopo ›</button>` : ''}<input type="date" class="btn" data-cdate="1" value="${esc(day)}" aria-label="Scegli il giorno"><button class="btn" data-act="cprint">${ICON.print} Stampa</button>${!ACC.can('readonly') && ACC.sess.ag ? '<button class="btn" data-act="cashmov" data-k="prelievo">Prelievo</button><button class="btn" data-act="cashmov" data-k="apporto">Apporto</button>' : ''}${canClose ? `<button class="btn primary" data-act="cclose">${ch ? 'Rivedi la chiusura' : 'Chiudi la cassa'}${agf === 'tutte' ? ' di ' + esc(agName(closeAg)) : ''}</button>` : ''}</div></div>
-      <div class="tiles"><div class="tile dark"><span>Totale del giorno</span><b>${money(tot)}</b></div>${METG.map(([k, l]) => `<div class="tile"><span><i class="mdot ${MET_C[k]}"></i>${l}</span><b>${money(per[k] || 0)}</b><small>${cnt(k)} ${cnt(k) === 1 ? 'incasso' : 'incassi'}</small></div>`).join('')}</div>
+        <div class="hbtns">${agBtns}<button class="btn" data-act="cday" data-v="${esc(dayISO(prev))}">‹ Giorno prima</button>${day < todayISO() ? `<button class="btn" data-act="cday" data-v="${esc(dayISO(next))}">Giorno dopo ›</button>` : ''}<input type="date" class="btn" data-cdate="1" value="${esc(day)}" aria-label="Scegli il giorno"><button class="btn" data-act="cprint">${ICON.print} Stampa</button>${!ACC.can('readonly') && ACC.sess.ag ? '<button class="btn" data-act="cashmov" data-k="prelievo">Prelievo</button><button class="btn" data-act="cashmov" data-k="apporto">Apporto</button>' : ''}${canClose ? `<button class="btn primary" data-act="cclose">${ch ? 'Rivedi la chiusura' : 'Chiudi la cassa'}${agf === 'tutte' ? ' di ' + esc(agName(closeAg)) : ''}</button>` : ''}</div></div>
+      <div class="tiles"><div class="tile dark"><span>Totale del giorno</span><b>${money(tot)}</b></div>${METG.map(([k, l]) => `<div class="tile"><span><i class="mdot ${esc(MET_C[k])}"></i>${l}</span><b>${money(per[k] || 0)}</b><small>${cnt(k)} ${cnt(k) === 1 ? 'incasso' : 'incassi'}</small></div>`).join('')}</div>
       <section class="box tablecard"><div class="tscroll"><table class="rt"><thead><tr><th>Ora</th><th>Cliente</th><th>Viaggio</th><th>Documento</th><th>Operatore</th><th>Agenzia</th><th>Metodo</th><th class="r">Importo</th><th></th></tr></thead><tbody>
-        ${movs.map(m => `<tr class="${m.tipo === 'storno' || m.tipo === 'prelievo' ? 'neg' : ''}${stornati.has(m.id) ? ' gone' : ''}"><td>${esc(hm(m.at))}</td><td><b>${esc(m.cliente)}</b><br><small>${esc(m.tipo)}${m.note ? ' · ' + esc(m.note) : ''}</small></td><td>${esc(m.tripN || m.desc || '')}${m.cat ? `<br><small>${esc(m.cat)}</small>` : ''}</td><td>${docPill(m)}</td><td>${esc(m.who)}</td><td>${esc(agName(m.ag))}</td><td>${(m.parts || []).map(p => `<span class="mpill ${MET_C[p.m]}">${esc(MET_L[p.m] || p.m)}${m.parts.length > 1 ? ' ' + esc(fmtNum(p.a)) : ''}</span>`).join(' ')}</td><td class="r"><b>${money(m.tot)}</b></td><td class="r">${isInc(m) && m.tipo !== 'storno' && !stornati.has(m.id) && !ACC.can('readonly') && (ACC.can('cassaAll') || (m.uid === ACC.sess.uid && m.day === todayISO())) ? `<button class="btn sm ghost" data-act="storno" data-id="${m.id}">Storna</button>` : stornati.has(m.id) ? '<small>stornato</small>' : ''}</td></tr>`).join('') || `<tr><td colspan="9" class="emptyrow">Nessun incasso in questo giorno.</td></tr>`}
+        ${movs.map(m => `<tr class="${esc(m.tipo === 'storno' || m.tipo === 'prelievo' ? 'neg' : '')}${stornati.has(m.id) ? ' gone' : ''}"><td>${esc(hm(m.at))}</td><td><b>${esc(m.cliente)}</b><br><small>${esc(m.tipo)}${m.note ? ' · ' + esc(m.note) : ''}</small></td><td>${esc(m.tripN || m.desc || '')}${m.cat ? `<br><small>${esc(m.cat)}</small>` : ''}</td><td>${docPill(m)}</td><td>${esc(m.who)}</td><td>${esc(agName(m.ag))}</td><td>${(m.parts || []).map(p => `<span class="mpill ${esc(MET_C[p.m])}">${esc(MET_L[p.m] || p.m)}${m.parts.length > 1 ? ' ' + esc(fmtNum(p.a)) : ''}</span>`).join(' ')}</td><td class="r"><b>${money(m.tot)}</b></td><td class="r">${isInc(m) && m.tipo !== 'storno' && !stornati.has(m.id) && !ACC.can('readonly') && (ACC.can('cassaAll') || (m.uid === ACC.sess.uid && m.day === todayISO())) ? `<button class="btn sm ghost" data-act="storno" data-id="${esc(m.id)}">Storna</button>` : stornati.has(m.id) ? '<small>stornato</small>' : ''}</td></tr>`).join('') || `<tr><td colspan="9" class="emptyrow">Nessun incasso in questo giorno.</td></tr>`}
       </tbody></table></div>
       ${movs.length && agf === 'tutte' ? `<div class="rt-foot">${S.cfg.agenzie.map(a => `<span>${esc(a.nome)} <b>${money(perAg[a.id] || 0)}</b></span>`).join('')}<span>Totale <b>${money(tot)}</b></span></div>` : ''}</section>`;
   }
@@ -3401,7 +3536,7 @@
     openModal(`Chiusura cassa · ${esc(agName(ag))} · ${esc(fmtDate(day))}`, `
       <div class="infobox">Resoconto completo della <b>${esc(cassaName(ag))}</b>: controlla i totali di ogni metodo con lo scontrino del POS, l'estratto dei bonifici e i contanti in cassa.</div>
       <table class="rt close"><thead><tr><th>Metodo</th><th class="r">Movimenti</th><th class="r">Totale</th><th class="r">Controllato</th></tr></thead><tbody>
-        ${METG.map(([k, l]) => `<tr><td><i class="mdot ${MET_C[k]}"></i>${l}</td><td class="r">${movs.filter(m => m.parts.some(p => mg(p.m) === k)).length}</td><td class="r"><b>${money(per[k] || 0)}</b></td><td class="r"><input class="cc-in" data-cc="${k}" inputmode="decimal" placeholder="${esc(fmtNum(per[k] || 0))}" value="${ch && ch.contati && ch.contati[k] != null ? esc(fmtNum(ch.contati[k])) : ''}" aria-label="${l} controllato"></td></tr>`).join('')}
+        ${METG.map(([k, l]) => `<tr><td><i class="mdot ${esc(MET_C[k])}"></i>${l}</td><td class="r">${movs.filter(m => m.parts.some(p => mg(p.m) === k)).length}</td><td class="r"><b>${money(per[k] || 0)}</b></td><td class="r"><input class="cc-in" data-cc="${esc(k)}" inputmode="decimal" placeholder="${esc(fmtNum(per[k] || 0))}" value="${ch && ch.contati && ch.contati[k] != null ? esc(fmtNum(ch.contati[k])) : ''}" aria-label="${esc(l)} controllato"></td></tr>`).join('')}
         <tr class="tot"><td>Totale</td><td class="r">${movs.length}</td><td class="r"><b>${money(tot)}</b></td><td class="r" id="cc-diff"></td></tr></tbody></table>
       <div class="infobox">Contanti in cassa secondo l'app: <b>${money(sal.fine)}</b> (inizio giornata ${money(sal.inizio)}, incassati ${money(sal.inc)}${sal.prel ? `, prelievi ${money(sal.prel)}` : ''}${sal.app ? `, apporti ${money(sal.app)}` : ''}).</div>
       <div class="small">Nella colonna «Controllato» scrivi quanto risulta a te (contanti contati, totale dello scontrino POS…). Se lasci vuoto, vale il totale dell'app.</div>
@@ -3452,9 +3587,9 @@
     const upcoming = S.trips.filter(t => (t.fine || t.data) >= todayISO() && t.rows.some(r => !isEmptyRow(r)));
     const tl = [...new Set([...tripsM, ...upcoming])].sort((a, b) => a.data.localeCompare(b.data)).slice(0, 40);
     const tripLine = t => { let due = 0, paid = 0, unk = false; deriveBookings(t).forEach(bk => { const m = bkMoney(t, bk); paid += m.paid; if (m.due == null) unk = true; else due += m.due; }); const inMon = totOf(movs.filter(m => m.tripId === t.id)); const pc = due ? Math.min(100, Math.round(paid / due * 100)) : 0;
-      return `<tr><td><b>${esc(t.nome)}</b><br><small>${esc(fmtTripDate(t))}</small></td><td class="r">${money(inMon)}</td><td class="r">${money(paid)}</td><td class="r">${unk ? 'prezzi da completare' : money(due)}</td><td class="bar-c"><span class="bar1"><i style="width:${pc}%"></i></span></td></tr>`; };
+      return `<tr><td><b>${esc(t.nome)}</b><br><small>${esc(fmtTripDate(t))}</small></td><td class="r">${money(inMon)}</td><td class="r">${money(paid)}</td><td class="r">${unk ? 'prezzi da completare' : money(due)}</td><td class="bar-c"><span class="bar1"><i style="width:${esc(pc)}%"></i></span></td></tr>`; };
     return `${contaTabs()}<div class="pagehead"><div><h1>Contabilità · ${esc(MESI_L[mm - 1])} ${yy}</h1><div class="sub">Incassi, chiusure di cassa e viaggi: tutto in sola lettura, pronto da esportare.</div></div>
-        <div class="hbtns"><button class="btn" data-act="cmon" data-v="${prev}">‹</button><input type="month" class="btn" data-cmon="1" value="${esc(mon)}" aria-label="Mese"><button class="btn" data-act="cmon" data-v="${next}">›</button><button class="btn" data-act="cexport">Scarica per Excel</button><button class="btn" data-act="cprintm">${ICON.print} Stampa il mese</button></div></div>
+        <div class="hbtns"><button class="btn" data-act="cmon" data-v="${esc(prev)}">‹</button><input type="month" class="btn" data-cmon="1" value="${esc(mon)}" aria-label="Mese"><button class="btn" data-act="cmon" data-v="${esc(next)}">›</button><button class="btn" data-act="cexport">Scarica per Excel</button><button class="btn" data-act="cprintm">${ICON.print} Stampa il mese</button></div></div>
       <section class="box tablecard"><h2 class="ch">Incassi di ${esc(MESI_L[mm - 1])} ${yy} per agenzia e metodo</h2><div class="tscroll"><table class="rt"><thead><tr><th>Agenzia · cassa</th>${METG.map(([, l]) => `<th class="r">${l}</th>`).join('')}<th class="r">Totale</th></tr></thead><tbody>
         ${S.cfg.agenzie.map(a => `<tr><td>${esc(a.nome)} · ${esc(a.cassa || a.nome)}</td>${METG.map(([k]) => `<td class="r">${money(cell(a.id, k))}</td>`).join('')}<td class="r"><b>${money(cell(a.id))}</b></td></tr>`).join('')}
         <tr class="tot"><td>Totale</td>${METG.map(([k]) => `<td class="r">${money(cell(null, k))}</td>`).join('')}<td class="r"><b>${money(cell(null))}</b></td></tr></tbody></table></div></section>
@@ -3492,7 +3627,7 @@
   function docPill(m) {
     if (!m.doc) return m.tipo === 'storno' ? '<small>storno</small>' : '';
     const l = DOC_L[m.doc] || m.doc;
-    return `<span class="mpill ${m.docStato === 'da_emettere' ? 'm-pp' : 'm-alt'}" title="${m.docStato === 'da_emettere' ? 'Documento da emettere: la stampante non è ancora collegata' : ''}">${esc(l)}${m.docStato === 'da_emettere' ? (m.danea ? ' · preparata per Danea' : ' · da emettere') : ''}</span>`;
+    return `<span class="mpill ${esc(m.docStato === 'da_emettere' ? 'm-pp' : 'm-alt')}" title="${esc(m.docStato === 'da_emettere' ? 'Documento da emettere: la stampante non è ancora collegata' : '')}">${esc(l)}${m.docStato === 'da_emettere' ? (m.danea ? ' · preparata per Danea' : ' · da emettere') : ''}</span>`;
   }
   const yy2 = iso => { const [y, m, d] = String(iso || '').split('-'); return d ? `${d}/${m}/${y.slice(2)}` : ''; };
 
@@ -3550,7 +3685,7 @@
   // sezioni apribili del riquadro: restano aperte o chiuse anche quando la finestra si ridisegna
   document.addEventListener('toggle', e => { const d = e.target; if (d && d.dataset && d.dataset.pdet && UI.pay) { UI.pay.open = UI.pay.open || {}; UI.pay.open[d.dataset.pdet] = d.open; } }, true);
   function payRefresh() { if (!UI.pay) return; const t = trip(); const bk = t && t.id === UI.pay.tripId && deriveBookings(t).find(x => x.id === UI.pay.bkId); if (!bk) UI.pay = null; render(); }
-  const nIn = (k, v, extra = '') => `<input class="pf-in num" data-pf="${k}" inputmode="decimal" value="${v === '' || v == null ? '' : esc(fmtNum(+v))}" ${extra} autocomplete="off">`;
+  const nIn = (k, v, extra = '') => `<input class="pf-in num" data-pf="${esc(k)}" inputmode="decimal" value="${v === '' || v == null ? '' : esc(fmtNum(+v))}" ${extra} autocomplete="off">`;
   // riepilogo delle righe in una frase, per la sezione chiusa «Righe del documento»
   function linesSummary(f, T) {
     const L = f.lines.filter(l => +l.q).map(l => `${l.q} × ${l.l || 'quota'} ${fmtNum((+l.bus || 0) + (+l.tkt || 0))} €`);
@@ -3579,15 +3714,15 @@
     const colA = `
       ${canPay && blk ? `<div class="warnbox pp-blk" role="alert">${ICON.alert}<span>${esc(blk)}</span></div>` : ''}
       ${comit ? `<div class="pp-sec"><span class="pp-l">Chi paga</span><div class="pp-who" role="radiogroup" aria-label="Chi paga">
-        <button type="button" role="radio" data-act="paywho" data-id="${bk.id}" data-pid="" aria-checked="${!pid}">${ICON.users} Tutta la comitiva</button>
-        ${bk.persone.map(p => { const pm = personMoney(t, bk, p.id); return `<button type="button" role="radio" data-act="paywho" data-id="${bk.id}" data-pid="${p.id}" aria-checked="${pid === p.id}">${esc(p.cognome)} ${esc(p.nome)}${pm.paid ? ` <small>${pm.rest === 0 ? '✓ ' : ''}${esc(fmtNum(pm.paid))}</small>` : ''}</button>`; }).join('')}</div></div>` : ''}
+        <button type="button" role="radio" data-act="paywho" data-id="${esc(bk.id)}" data-pid="" aria-checked="${esc(!pid)}">${ICON.users} Tutta la comitiva</button>
+        ${bk.persone.map(p => { const pm = personMoney(t, bk, p.id); return `<button type="button" role="radio" data-act="paywho" data-id="${esc(bk.id)}" data-pid="${esc(p.id)}" aria-checked="${esc(pid === p.id)}">${esc(p.cognome)} ${esc(p.nome)}${pm.paid ? ` <small>${pm.rest === 0 ? '✓ ' : ''}${esc(fmtNum(pm.paid))}</small>` : ''}</button>`; }).join('')}</div></div>` : ''}
       <div class="pay-sum"><div><span>${P ? 'Quota' : m.indiv && m.indiv.length ? 'Totale (senza chi paga da sé)' : 'Totale'}</span><b>${m.due != null ? money(m.due) : '—'}</b></div><div><span>Già pagato</span><b>${money(m.paid)}</b></div><div class="hi"><span>Da pagare</span><b>${m.rest != null ? money(m.rest) : '—'}</b></div></div>
       ${P ? `<div class="small pp-gsum">Tutta la comitiva: totale ${m0.due != null ? money(m0.due) : '—'} · pagato ${money(m0.paid)} · da pagare ${m0.rest != null ? money(m0.rest) : '—'}</div>` : m.indiv && m.indiv.length ? `<div class="small pp-gsum">Pagano per conto loro: <b>${m.indiv.map(id => esc(pName(id))).join(', ')}</b> — non sono compresi qui.</div>` : ''}
       ${m.due == null ? '<div class="warnbox small">Mancano i prezzi del viaggio in testa alla lista: il totale si calcola dalle righe del documento.</div>' : ''}
-      <div class="pp-sec"><span class="pp-l">Documento</span>${f.tour ? '<div class="pp-doc1">Fattura</div>' : `<div class="seg wrap" role="radiogroup" aria-label="Documento">${DOCS.filter(([k]) => k !== 'fattura').map(([k, l]) => `<button type="button" role="radio" data-act="pfdoc" data-k="${k}" aria-pressed="${f.doc === k}">${l}</button>`).join('')}</div>`}</div>
+      <div class="pp-sec"><span class="pp-l">Documento</span>${f.tour ? '<div class="pp-doc1">Fattura</div>' : `<div class="seg wrap" role="radiogroup" aria-label="Documento">${DOCS.filter(([k]) => k !== 'fattura').map(([k, l]) => `<button type="button" role="radio" data-act="pfdoc" data-k="${esc(k)}" aria-pressed="${esc(f.doc === k)}">${l}</button>`).join('')}</div>`}</div>
       <label class="pp-1">Cognome e nome${f.doc === 'fattura' ? ' (come appare nel resoconto)' : ''}<input data-pf="cliente" value="${esc(f.cliente)}" autocomplete="off"></label>
       <div class="pp-sec pp-paybox"><span class="pp-l">Incassato adesso</span><div class="pp-impr"><input id="pf-imp" class="pf-in num pay-imp" data-pf="imp" inputmode="decimal" value="${f.imp === '' ? '' : esc(fmtNum(+f.imp))}" placeholder="0,00" autocomplete="off" aria-label="Importo incassato adesso"><span class="pay-warn" id="pp-warn" role="status">${payWarnTxt(f, m)}</span></div>
-        <div class="pay-met" role="radiogroup" aria-label="Metodo di pagamento">${[...METODI, ['misto', 'Misto']].map(([k, l]) => `<button type="button" role="radio" aria-checked="${f.met === k}" data-act="pfmet" data-k="${k}"${k === 'misto' ? ' title="Più metodi insieme, es. contanti + POS"' : ''}>${l}</button>`).join('')}</div>
+        <div class="pay-met" role="radiogroup" aria-label="Metodo di pagamento">${[...METODI, ['misto', 'Misto']].map(([k, l]) => `<button type="button" role="radio" aria-checked="${esc(f.met === k)}" data-act="pfmet" data-k="${esc(k)}"${k === 'misto' ? ' title="Più metodi insieme, es. contanti + POS"' : ''}>${l}</button>`).join('')}</div>
         ${f.met === 'misto' ? mixHTML(f) : ''}
         <div id="pp-buono">${typeof buonoPayHTML === 'function' ? buonoPayHTML(f) : ''}</div></div>
       <details class="pp-det" data-pdet="altri"${isOpen('altri', !easy) ? ' open' : ''}><summary><span>Altri dati: pratica, canale, pagante, note</span>${(() => { const x = [f.pratica ? 'pratica ' + f.pratica : '', f.pagante ? 'pagante ' + f.pagante : '', f.note ? 'note' : '', !P && f.legacy ? 'pagato prima ' + f.legacy + ' €' : ''].filter(Boolean); return x.length ? `<small>${esc(x.join(' · '))}</small>` : ''; })()}</summary><div class="pp-detb">${altri}</div></details>
@@ -3606,7 +3741,7 @@
       </div></details>
       <div class="pp-tot" id="pp-tot">${payTotHTML(T, f.bigl)}</div>
       <div id="pp-rt">${rtPreviewHTML(f)}</div>
-      ${hist.length ? `<div class="pp-sec"><span class="pp-l">Incassi registrati</span><div class="pay-hist">${hist.map(x => `<div class="${x.tipo === 'storno' ? 'neg' : ''}${storn.has(x.id) ? ' gone' : ''}"><span>${esc(fmtDate(x.day).slice(0, 5))} · ${esc(x.who)}${x.pid && !pid ? ` · <b>${esc(pName(x.pid) || x.pnome || '')}</b>` : ''}<br>${docPill(x)}${rtInfo(x) ? `<br><small class="rt-num">${esc(rtInfo(x))}</small>` : ''}</span><span>${(x.parts || []).map(p => `<span class="mpill ${MET_C[p.m] || 'm-alt'}">${esc(MET_L[p.m] || p.m)}${p.bnum ? ' ' + esc(p.bnum) : ''}</span>`).join(' ')}</span><b>${money(x.tot)}</b>${x.doc === 'fattura' && x.tipo !== 'storno' && !storn.has(x.id) ? `<button class="btn sm${x.danea ? '' : ' primary'}" data-act="danea1" data-id="${x.id}" title="Scarica la fattura per Danea">${x.danea ? 'Di nuovo in Danea' : 'Apri in Danea'}</button>` : ''}${x.tipo !== 'storno' && !storn.has(x.id) && ACC.can('cassa') && (ACC.can('cassaAll') || (x.uid === ACC.sess.uid && x.day === todayISO())) ? `<button class="btn sm ghost" data-act="storno" data-id="${x.id}">Storna</button>` : ''}</div>`).join('')}</div></div>` : ''}`;
+      ${hist.length ? `<div class="pp-sec"><span class="pp-l">Incassi registrati</span><div class="pay-hist">${hist.map(x => `<div class="${esc(x.tipo === 'storno' ? 'neg' : '')}${storn.has(x.id) ? ' gone' : ''}"><span>${esc(fmtDate(x.day).slice(0, 5))} · ${esc(x.who)}${x.pid && !pid ? ` · <b>${esc(pName(x.pid) || x.pnome || '')}</b>` : ''}<br>${docPill(x)}${rtInfo(x) ? `<br><small class="rt-num">${esc(rtInfo(x))}</small>` : ''}</span><span>${(x.parts || []).map(p => `<span class="mpill ${esc(MET_C[p.m] || 'm-alt')}">${esc(MET_L[p.m] || p.m)}${p.bnum ? ' ' + esc(p.bnum) : ''}</span>`).join(' ')}</span><b>${money(x.tot)}</b>${x.doc === 'fattura' && x.tipo !== 'storno' && !storn.has(x.id) ? `<button class="btn sm${esc(x.danea ? '' : ' primary')}" data-act="danea1" data-id="${esc(x.id)}" title="Scarica la fattura per Danea">${x.danea ? 'Di nuovo in Danea' : 'Apri in Danea'}</button>` : ''}${x.tipo !== 'storno' && !storn.has(x.id) && ACC.can('cassa') && (ACC.can('cassaAll') || (x.uid === ACC.sess.uid && x.day === todayISO())) ? `<button class="btn sm ghost" data-act="storno" data-id="${esc(x.id)}">Storna</button>` : ''}</div>`).join('')}</div></div>` : ''}`;
     return `<div class="paymodal" role="dialog" aria-modal="true" aria-label="Incasso e documento"><div class="pm-scrim"></div>
       <section class="panel paypanel">
       <div class="panel-h"><div class="pp-ht"><h3>${P ? `${esc(P.cognome)} ${esc(P.nome)}` : `${esc(bkName(bk))} x ${Math.max(bk.n || 0, bk.persone.length)}`}</h3><span>${P ? `della comitiva ${esc(bkName(bk))} x ${bk.persone.length} · ` : ''}${esc(t.nome)} · ${esc(fmtTripDate(t))}</span></div><button class="pm-x" data-act="pfclose" aria-label="Chiudi l'incasso">${ICON.close}</button></div>
@@ -3641,7 +3776,7 @@
   // Con contanti e POS basta scriverne uno: l'altro si riempie da solo con quello che manca.
   const MIX_MAIN = ['contanti', 'pos'];
   function mixHTML(f) {
-    const row = ([k, l]) => `<div class="pay-row"><span>${l}</span><input data-pfm="${k}" inputmode="decimal" value="${f.mix[k] ? esc(fmtNum(f.mix[k])) : ''}" placeholder="0,00" aria-label="${l}" autocomplete="off"><button type="button" class="btn sm ghost" data-act="pfrest" data-k="${k}" title="Metti qui quello che manca">resto</button></div>`;
+    const row = ([k, l]) => `<div class="pay-row"><span>${l}</span><input data-pfm="${esc(k)}" inputmode="decimal" value="${f.mix[k] ? esc(fmtNum(f.mix[k])) : ''}" placeholder="0,00" aria-label="${esc(l)}" autocomplete="off"><button type="button" class="btn sm ghost" data-act="pfrest" data-k="${esc(k)}" title="Metti qui quello che manca">resto</button></div>`;
     const others = METODI.filter(([k]) => !MIX_MAIN.includes(k)); const openO = others.some(([k]) => f.mix[k]);
     return `<div class="pp-mix">${METODI.filter(([k]) => MIX_MAIN.includes(k)).map(row).join('')}
       <details${openO ? ' open' : ''}><summary>Altri metodi (bonifico, PostePay, buono…)</summary>${others.map(row).join('')}</details>
@@ -3744,7 +3879,7 @@
     UI.modal = { kind: 'cashmov', k: kind };
     openModal(`${kind === 'prelievo' ? 'Prelievo dalla cassa' : 'Apporto in cassa'} · ${esc(agName(ACC.sess.ag))}`, `
       <div class="field"><label for="cm-imp">Importo in contanti</label><input id="cm-imp" class="pay-imp" inputmode="decimal" placeholder="0,00" autocomplete="off"></div>
-      <div class="field"><label for="cm-note">Motivo</label><input id="cm-note" placeholder="${kind === 'prelievo' ? 'es. versamento in banca' : 'es. fondo cassa'}"></div>`,
+      <div class="field"><label for="cm-note">Motivo</label><input id="cm-note" placeholder="${esc(kind === 'prelievo' ? 'es. versamento in banca' : 'es. fondo cassa')}"></div>`,
       `<button class="btn" data-act="close">Annulla</button><button class="btn primary" data-act="cashsave">Registra</button>`);
   }
   function cashMovSave() {
@@ -3766,7 +3901,7 @@
   }
 
   // ---------- Contabilità · resoconto giornaliero (come il foglio CASSA) ----------
-  const contaTabs = () => `<div class="ctabs seg" role="tablist" aria-label="Contabilità"><button role="tab" data-act="ctab" data-v="giorno" aria-pressed="${UI.ctab !== 'mese'}">Resoconto giornaliero</button><button role="tab" data-act="ctab" data-v="mese" aria-pressed="${UI.ctab === 'mese'}">Mese</button></div>`;
+  const contaTabs = () => `<div class="ctabs seg" role="tablist" aria-label="Contabilità"><button role="tab" data-act="ctab" data-v="giorno" aria-pressed="${esc(UI.ctab !== 'mese')}">Resoconto giornaliero</button><button role="tab" data-act="ctab" data-v="mese" aria-pressed="${esc(UI.ctab === 'mese')}">Mese</button></div>`;
   const XL_H = ['Data', 'Op.', 'Doc.', 'V.Banco', 'Fattura', 'Categoria', 'Cognome e Nome', 'Descrizione', 'Circuito', 'Emis. Cont.', 'Emis. Antic.', 'Note prat.', 'Q1', '€ 1 Bus', 'Tkt intero', 'Q2', '€ 2 Bus', 'Tkt ridotto2', 'Q3', '€ 3 Bus', 'Tkt ridotto3', 'Suppl. Fila', 'Diritti', 'Totale', 'CHECK', 'Cash', 'Pos', '€ altro', 'Modalità', 'Pratica', 'Data.Pag.', 'Pagante', 'Saldo', 'Danea', 'Check D.', '€ Tot.Tkt', 'N.Tot. Tkt', 'Check Tkt', 'Tot.Diritti', 'Tot. Bus', 'Note', 'Tkt+Diritti', 'Agenzia'];
   function xlRow(m, saldo) {
     // con più di 3 righe (es. più tipi di biglietto) dalla terza in poi si uniscono in Q3 = 1 con i totali: le somme restano giuste
@@ -3781,7 +3916,7 @@
   }
   function exportCassa(movs, name) {
     movs = movs.slice().sort((a, b) => a.at.localeCompare(b.at));
-    const q = v => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`; const n = v => typeof v === 'number' ? String(r2(v)).replace('.', ',') : v;
+    const q = v => `"${csvSafe(v).replace(/"/g, '""')}"`; const n = v => typeof v === 'number' ? String(r2(v)).replace('.', ',') : v;
     const run = {}; const rows = [XL_H];
     movs.forEach(m => { const c = (m.parts || []).filter(p => p.m === 'contanti').reduce((a, p) => a + p.a, 0); if (run[m.ag] == null) run[m.ag] = cashSaldo(m.ag, m.day).inizio; run[m.ag] = r2(run[m.ag] + c); rows.push(xlRow(m, run[m.ag]).map(n)); });
     const csv = '﻿' + rows.map(r => r.map(q).join(';')).join('\r\n');
@@ -3804,10 +3939,10 @@
     const d = parseD(day); const prev = new Date(d); prev.setDate(d.getDate() - 1); const next = new Date(d); next.setDate(d.getDate() + 1);
     let run = sal.inizio;
     return `${contaTabs()}<div class="pagehead"><div><h1>Resoconto del ${esc(fmtDate(day))}</h1><div class="sub">${esc(fmtDate(day, true))} · ${inc.length} ${inc.length === 1 ? 'incasso' : 'incassi'}${ag !== 'tutte' ? ' · ' + esc(agName(ag)) : ' · tutte le agenzie'}</div></div>
-        <div class="hbtns"><div class="seg" role="group" aria-label="Agenzia">${[['tutte', 'Tutte'], ...S.cfg.agenzie.map(a => [a.id, a.nome])].map(([k, l]) => `<button data-act="gag" data-v="${k}" aria-pressed="${ag === k}">${esc(l)}</button>`).join('')}</div>
-          <button class="btn" data-act="gday" data-v="${dayISO(prev)}">‹</button><input type="date" class="btn" data-gdate="1" value="${esc(day)}" aria-label="Giorno"><button class="btn" data-act="gday" data-v="${dayISO(next)}">›</button>
+        <div class="hbtns"><div class="seg" role="group" aria-label="Agenzia">${[['tutte', 'Tutte'], ...S.cfg.agenzie.map(a => [a.id, a.nome])].map(([k, l]) => `<button data-act="gag" data-v="${esc(k)}" aria-pressed="${esc(ag === k)}">${esc(l)}</button>`).join('')}</div>
+          <button class="btn" data-act="gday" data-v="${esc(dayISO(prev))}">‹</button><input type="date" class="btn" data-gdate="1" value="${esc(day)}" aria-label="Giorno"><button class="btn" data-act="gday" data-v="${esc(dayISO(next))}">›</button>
           ${inc.some(m => m.doc === 'fattura') ? '<button class="btn" data-act="daneaday">Fatture del giorno per Danea</button>' : ''}${rtCfg().daneaScontrini && inc.some(m => m.doc === 'scontrino') ? '<button class="btn" data-act="daneascon">Scontrini del giorno per Danea</button>' : ''}<button class="btn" data-act="gexport">Scarica per Excel (foglio CASSA)</button></div></div>
-      <div class="tiles"><div class="tile dark"><span>Incassato</span><b>${money(tot)}</b><small>${inc.length} movimenti</small></div>${METG.map(([k, l]) => `<div class="tile"><span><i class="mdot ${MET_C[k]}"></i>${l}</span><b>${money(per[k] || 0)}</b>${k === 'altro' && Object.keys(altri).length ? `<small>${Object.entries(altri).map(([x, v]) => `${esc(MET_L[x] || x)} ${esc(fmtNum(v))}`).join(' · ')}</small>` : ''}</div>`).join('')}</div>
+      <div class="tiles"><div class="tile dark"><span>Incassato</span><b>${money(tot)}</b><small>${inc.length} movimenti</small></div>${METG.map(([k, l]) => `<div class="tile"><span><i class="mdot ${esc(MET_C[k])}"></i>${l}</span><b>${money(per[k] || 0)}</b>${k === 'altro' && Object.keys(altri).length ? `<small>${Object.entries(altri).map(([x, v]) => `${esc(MET_L[x] || x)} ${esc(fmtNum(v))}`).join(' · ')}</small>` : ''}</div>`).join('')}</div>
       <div class="three">
         <section class="box form"><h3>Cassa contanti</h3><div class="kv"><span>Inizio giornata</span><b>${money(sal.inizio)}</b></div><div class="kv"><span>Contanti incassati</span><b>${money(sal.inc)}</b></div>${sal.prel ? `<div class="kv"><span>Prelievi</span><b>− ${money(sal.prel)}</b></div>` : ''}${sal.app ? `<div class="kv"><span>Apporti</span><b>+ ${money(sal.app)}</b></div>` : ''}<div class="kv tot"><span>Fine giornata</span><b>${money(sal.fine)}</b></div>${ch && ch.contati && ch.contati.contanti != null ? `<div class="kv"><span>Contati alla chiusura</span><b>${money(ch.contati.contanti)} ${Math.abs(ch.contati.contanti - (per.contanti || 0)) < 0.01 ? '<span class="pill ok">quadra</span>' : ''}</b></div>` : ''}</section>
         <section class="box form"><h3>Documenti</h3><div class="kv"><span>Scontrini (parte agenzia)</span><b>${scon.length} · ${money(scon.reduce((a, m) => a + (m.agenzia != null ? m.agenzia : m.tot), 0))}</b></div><div class="kv"><span>Da emettere</span><b>${inc.filter(m => m.docStato === 'da_emettere').length}</b></div><div class="kv"><span>Fatture</span><b>${fatt.length} · ${money(fatt.reduce((a, m) => a + m.tot, 0))}</b></div><div class="kv"><span>Caparre</span><b>${money(inc.filter(m => m.doc === 'caparra').reduce((a, m) => a + m.tot, 0))}</b></div><div class="kv tot"><span>Totale parte agenzia (Danea)</span><b>${money(agTot)}</b></div></section>
@@ -3815,7 +3950,7 @@
       <section class="box tablecard"><h2 class="ch">Per categoria</h2><div class="tscroll"><table class="rt"><thead><tr><th>Categoria</th><th class="r">Incassi</th><th class="r">Totale</th><th class="r">Parte agenzia</th><th class="r">Biglietti</th></tr></thead><tbody>${Object.entries(byCat).map(([k, o]) => `<tr><td>${esc(k)}</td><td class="r">${o.n}</td><td class="r">${money(o.tot)}</td><td class="r">${money(o.ag)}</td><td class="r">${money(o.tk)}</td></tr>`).join('') || '<tr><td colspan="5" class="emptyrow">Nessun incasso.</td></tr>'}</tbody></table></div></section>
       <section class="box tablecard"><h2 class="ch">Movimenti del giorno</h2><div class="tscroll"><table class="rt xl"><thead><tr><th>Ora</th><th>Op.</th><th>Doc.</th><th>Categoria</th><th>Cognome e nome</th><th>Descrizione</th><th>Circuito</th><th class="r">Q</th><th class="r">€ bus</th><th class="r">€ tkt</th><th class="r">Suppl.</th><th class="r">Diritti</th><th class="r">Totale</th><th class="r">Cash</th><th class="r">POS</th><th class="r">Altro</th><th class="r">Danea</th><th class="r">Saldo</th><th>Agenzia</th></tr></thead><tbody>
         ${movs.map(m => { const c = (m.parts || []).filter(p => p.m === 'contanti').reduce((a, p) => a + p.a, 0); run = r2(run + c); const x = xlRow(m, run); const L = m.lines || [];
-          return `<tr class="${m.tipo === 'storno' || m.tipo === 'prelievo' ? 'neg' : ''}"><td>${esc(hm(m.at))}</td><td>${esc(x[1])}</td><td>${esc(x[2])}${m.docStato === 'da_emettere' ? '<br><small>da emettere</small>' : ''}${rtInfo(m) ? `<br><small class="rt-num">${esc(rtInfo(m))}</small>` : ''}</td><td>${esc(x[5])}</td><td>${esc(x[6])}</td><td>${esc(x[7])}</td><td>${esc(m.circuito || '')}</td><td class="r">${L.reduce((a, l) => a + l.q, 0) || ''}</td><td class="r">${L.length ? money(L.reduce((a, l) => a + l.q * l.bus, 0)) : ''}</td><td class="r">${L.some(l => l.tkt) ? money(L.reduce((a, l) => a + l.q * l.tkt, 0)) : ''}</td><td class="r">${m.suppl ? money(m.suppl) : ''}</td><td class="r">${x[38] ? money(x[38]) : ''}</td><td class="r"><b>${isInc(m) ? money(x[23]) : ''}</b></td><td class="r">${x[25] ? money(x[25]) : ''}</td><td class="r">${x[26] ? money(x[26]) : ''}</td><td class="r">${x[27] ? money(x[27]) + '<br><small>' + esc(x[28]) + '</small>' : ''}</td><td class="r">${isInc(m) ? money(x[33]) : ''}</td><td class="r">${money(run)}</td><td>${esc(x[42])}</td></tr>`; }).join('') || '<tr><td colspan="19" class="emptyrow">Nessun movimento.</td></tr>'}
+          return `<tr class="${esc(m.tipo === 'storno' || m.tipo === 'prelievo' ? 'neg' : '')}"><td>${esc(hm(m.at))}</td><td>${esc(x[1])}</td><td>${esc(x[2])}${m.docStato === 'da_emettere' ? '<br><small>da emettere</small>' : ''}${rtInfo(m) ? `<br><small class="rt-num">${esc(rtInfo(m))}</small>` : ''}</td><td>${esc(x[5])}</td><td>${esc(x[6])}</td><td>${esc(x[7])}</td><td>${esc(m.circuito || '')}</td><td class="r">${L.reduce((a, l) => a + l.q, 0) || ''}</td><td class="r">${L.length ? money(L.reduce((a, l) => a + l.q * l.bus, 0)) : ''}</td><td class="r">${L.some(l => l.tkt) ? money(L.reduce((a, l) => a + l.q * l.tkt, 0)) : ''}</td><td class="r">${m.suppl ? money(m.suppl) : ''}</td><td class="r">${x[38] ? money(x[38]) : ''}</td><td class="r"><b>${isInc(m) ? money(x[23]) : ''}</b></td><td class="r">${x[25] ? money(x[25]) : ''}</td><td class="r">${x[26] ? money(x[26]) : ''}</td><td class="r">${x[27] ? money(x[27]) + '<br><small>' + esc(x[28]) + '</small>' : ''}</td><td class="r">${isInc(m) ? money(x[33]) : ''}</td><td class="r">${money(run)}</td><td>${esc(x[42])}</td></tr>`; }).join('') || '<tr><td colspan="19" class="emptyrow">Nessun movimento.</td></tr>'}
       </tbody></table></div></section>`;
   }
 
@@ -3837,7 +3972,7 @@
     const n = buoniAll().filter(b => String(b.num || '').startsWith(pre)).reduce((a, b) => Math.max(a, parseInt(String(b.num).slice(pre.length), 10) || 0), 0);
     return pre + String(n + 1).padStart(3, '0');
   }
-  const cassaTabs = () => `<div class="ctabs seg" role="tablist" aria-label="Cassa"><button role="tab" data-act="ctabc" data-v="cassa" aria-pressed="${UI.ctabC !== 'buoni'}">Resoconto di cassa</button><button role="tab" data-act="ctabc" data-v="buoni" aria-pressed="${UI.ctabC === 'buoni'}">${ICON.star} Buoni regalo</button></div>`;
+  const cassaTabs = () => `<div class="ctabs seg" role="tablist" aria-label="Cassa"><button role="tab" data-act="ctabc" data-v="cassa" aria-pressed="${esc(UI.ctabC !== 'buoni')}">Resoconto di cassa</button><button role="tab" data-act="ctabc" data-v="buoni" aria-pressed="${esc(UI.ctabC === 'buoni')}">${ICON.star} Buoni regalo</button></div>`;
   function buoniView() {
     const q = String(UI.bq || '').trim().toLowerCase(); const arch = UI.btab === 'arch';
     const L = buoniAll().map(b => Object.assign({}, b, { res: buonoRes(b), ann: buonoAnnullato(b) }))
@@ -3849,12 +3984,12 @@
     const lastUse = b => { const u = buonoUses(b.id); return u.length ? u[u.length - 1] : null; };
     return `${cassaTabs()}<div class="pagehead"><div><h1>Buoni regalo</h1><div class="sub">${act.length} ${act.length === 1 ? 'buono attivo' : 'buoni attivi'} · ancora da spendere <b>${money(totRes)}</b></div></div>
         <div class="hbtns"><input class="search" data-bq="1" value="${esc(UI.bq || '')}" placeholder="Cerca numero o nome" aria-label="Cerca un buono">${canNew ? `<button class="btn primary" data-act="bnew">${ICON.plus} Nuovo buono</button>` : ''}</div></div>
-      <div class="seg bu-tabs" role="tablist"><button role="tab" data-act="btab" data-v="att" aria-pressed="${!arch}">Attivi</button><button role="tab" data-act="btab" data-v="arch" aria-pressed="${arch}">Archivio buoni · spesi o annullati</button></div>
+      <div class="seg bu-tabs" role="tablist"><button role="tab" data-act="btab" data-v="att" aria-pressed="${esc(!arch)}">Attivi</button><button role="tab" data-act="btab" data-v="arch" aria-pressed="${esc(arch)}">Archivio buoni · spesi o annullati</button></div>
       <section class="box tablecard"><div class="tscroll"><table class="rt bu-t"><thead><tr><th>N° pratica</th><th>Data</th><th>Chi riceve il buono</th><th class="r">${arch ? 'Importo' : 'Ancora da spendere'}</th><th>Chi fa il buono</th>${arch ? '<th>Speso</th>' : ''}<th></th></tr></thead><tbody>
         ${L.map(b => { const lu = arch ? lastUse(b) : null; return `<tr${b.ann ? ' class="gone"' : ''}><td><b class="bu-n">${esc(b.num)}</b></td><td>${esc(fmtDate(b.day || String(b.at).slice(0, 10)))}</td><td><b>${esc(b.dest || '—')}</b></td>
           <td class="r">${arch ? `${money(b.importo)}${b.ann ? '<br><small>annullato</small>' : ''}` : `<b class="bu-res">${money(b.res)}</b>${b.res < (+b.importo || 0) - 0.009 ? `<br><small>su ${money(b.importo)}</small>` : ''}`}</td>
           <td>${esc(b.from || '—')}<br><small>${esc(b.who || '')}${b.ag ? ' · ' + esc(agName(b.ag)) : ''}</small></td>${arch ? `<td>${b.ann ? 'annullato' : lu ? esc(fmtDate(lu.day)) + '<br><small>' + esc(lu.tripN || lu.desc || '') + '</small>' : '—'}</td>` : ''}
-          <td class="r"><button class="btn sm" data-act="bdet" data-id="${esc(b.id)}">Dettagli</button></td></tr>`; }).join('') || `<tr><td colspan="${arch ? 7 : 6}" class="emptyrow">${q ? 'Nessun buono trovato' : arch ? 'Nessun buono speso o annullato' : 'Nessun buono attivo: premi «Nuovo buono»'}</td></tr>`}
+          <td class="r"><button class="btn sm" data-act="bdet" data-id="${esc(b.id)}">Dettagli</button></td></tr>`; }).join('') || `<tr><td colspan="${esc(arch ? 7 : 6)}" class="emptyrow">${q ? 'Nessun buono trovato' : arch ? 'Nessun buono speso o annullato' : 'Nessun buono attivo: premi «Nuovo buono»'}</td></tr>`}
       </tbody></table></div></section>
       <div class="small bu-help">Il buono si incassa quando si crea (va nel resoconto di cassa come «BuonoRegalo»). Quando il cliente paga un viaggio, nell'incasso scegli <b>Buono regalo</b> e il numero del buono: l'importo si scala da solo. Un buono si può usare anche in più volte, finché arriva a zero; poi passa nell'archivio.</div>`;
   }
@@ -3866,7 +4001,7 @@
       <div class="field"><label for="bu-dest">Chi riceve il buono</label><input id="bu-dest" autocomplete="off" placeholder="es. Rossi Maria"></div>
       <div class="grid2"><div class="field"><label for="bu-from">Chi fa il buono (paga)</label><input id="bu-from" autocomplete="off" placeholder="es. Bianchi Ugo"></div><div class="field"><label for="bu-tel">Telefono di chi lo fa <small>facoltativo</small></label><input id="bu-tel" inputmode="tel" autocomplete="off"></div></div>
       <div class="field"><label for="bu-imp">Importo del buono</label><input id="bu-imp" class="pay-imp" inputmode="decimal" placeholder="0,00" autocomplete="off"></div>
-      <div class="field"><label>Pagato con</label><div class="pay-met" role="radiogroup" aria-label="Pagato con">${METODI.filter(([k]) => k !== 'buono' && k !== 'voucher').map(([k, l]) => `<button type="button" role="radio" data-act="bmet" data-k="${k}" aria-checked="${k === 'contanti'}">${l}</button>`).join('')}</div></div>
+      <div class="field"><label>Pagato con</label><div class="pay-met" role="radiogroup" aria-label="Pagato con">${METODI.filter(([k]) => k !== 'buono' && k !== 'voucher').map(([k, l]) => `<button type="button" role="radio" data-act="bmet" data-k="${esc(k)}" aria-checked="${esc(k === 'contanti')}">${l}</button>`).join('')}</div></div>
       <div class="field"><label for="bu-note">Note <small>facoltative</small></label><input id="bu-note" autocomplete="off" placeholder="es. regalo di compleanno"></div>
       <div class="small">L'incasso va nella <b>${esc(cassaName(ACC.sess.ag))}</b>, registrato da <b>${esc(ACC.me().name)}</b>.</div></div>`,
       `<button class="btn" data-act="close">Annulla</button><button class="btn primary" data-act="bsave">Crea il buono e incassa</button>`);
@@ -3890,7 +4025,7 @@
       <div class="pay-sum"><div><span>Importo</span><b>${money(b.importo)}</b></div><div><span>Speso</span><b>${money(ann ? 0 : buonoUsed(b.id))}</b></div><div class="hi"><span>${ann ? 'Annullato' : 'Ancora da spendere'}</span><b>${money(res)}</b></div></div>
       ${b.note ? `<div class="small">Note: ${esc(b.note)}</div>` : ''}
       <h3 class="bu-h">Dove è stato usato</h3>
-      ${uses.length ? `<div class="pay-hist">${uses.map(m => { const a = r2((m.parts || []).filter(p => p.m === 'buono' && p.buono === b.id).reduce((x, p) => x + p.a, 0)); return `<div class="${a < 0 ? 'neg' : ''}"><span>${esc(fmtDate(m.day).slice(0, 5))} · ${esc(m.tripN || m.desc || '')}<br><small>${esc(m.cliente || '')} · ${esc(m.who || '')}${m.ag ? ' · ' + esc(agName(m.ag)) : ''}${a < 0 ? ' · storno' : ''}</small></span><b>${money(a)}</b></div>`; }).join('')}</div>` : '<div class="small">Non ancora usato.</div>'}</div>`,
+      ${uses.length ? `<div class="pay-hist">${uses.map(m => { const a = r2((m.parts || []).filter(p => p.m === 'buono' && p.buono === b.id).reduce((x, p) => x + p.a, 0)); return `<div class="${esc(a < 0 ? 'neg' : '')}"><span>${esc(fmtDate(m.day).slice(0, 5))} · ${esc(m.tripN || m.desc || '')}<br><small>${esc(m.cliente || '')} · ${esc(m.who || '')}${m.ag ? ' · ' + esc(agName(m.ag)) : ''}${a < 0 ? ' · storno' : ''}</small></span><b>${money(a)}</b></div>`; }).join('')}</div>` : '<div class="small">Non ancora usato.</div>'}</div>`,
       `<button class="btn" data-act="close">Chiudi</button>`);
   }
   // ---- nel riquadro dell'incasso: scegliere il buono con cui si paga ----
@@ -3956,7 +4091,7 @@
   const CIRC_L = { 'T.OneRG': 'TicketOne RG', 'T.OneMD': 'TicketOne MD', BoxRG: 'Boxol RG', BoxMD: 'Boxol MD', Viva: 'Vivaticket', CiaoRG: 'CiaoTickets RG', CiaoMD: 'CiaoTickets MD', CiaoMDR: 'CiaoTickets MDR', LiveRG: 'LiveTicket RG', LiveMD: 'LiveTicket MD', 'B-Fast': 'B-Fast', 'On-Line': 'On-Line' };
   const CIRC_W = ['T.OneRG', 'T.OneMD', 'B-Fast'];   // circuiti con l'addebito settimanale del portafoglio
   const circL = c => CIRC_L[c] || c || '—';
-  const circB = c => `<span class="bg-c c-${String(c || '').replace(/[^a-z]/gi, '')}">${esc(circL(c))}</span>`;
+  const circB = c => `<span class="bg-c c-${esc(String(c || '').replace(/[^a-z]/gi, ''))}">${esc(circL(c))}</span>`;
   const bgDirDef = c => (/^T\.One/.test(c) ? 2 : 3);
   const bgCan = () => ACC.can('cassa') && !ACC.can('readonly');
   const bgSee = () => ACC.can('cassa') || ACC.can('cassaAll');
@@ -4014,7 +4149,7 @@
     const evs = bgEvents().filter(e => !bgTripOf(e) && (e.data >= todayISO() || e.data === t.data)).sort((a, b) => near(a) - near(b) || a.data.localeCompare(b.data));
     if (!keep) UI.modal = { kind: 'bglink', tripId: t.id, sel: (evs.find(e => e.data === t.data) || {}).id || 'new' };
     const M = UI.modal; const TK = tripTkt(t);
-    const opt = (id, html) => `<button type="button" role="radio" class="bl-o" data-act="bglksel" data-id="${esc(id)}" aria-checked="${M.sel === id}">${html}</button>`;
+    const opt = (id, html) => `<button type="button" role="radio" class="bl-o" data-act="bglksel" data-id="${esc(id)}" aria-checked="${esc(M.sel === id)}">${html}</button>`;
     openModal('Collega alla Biglietteria', `<div class="bl">
       <p class="small">Il viaggio <b>${esc(t.nome)}</b> (${esc(fmtDate(t.data))}) diventa l'evento con il bus in Biglietteria: i tipi di biglietto, i diritti e il circuito saranno quelli dell'evento, e in Biglietteria vedrai anche i biglietti venduti con il bus e quelli non ancora pagati.</p>
       <div class="bl-l" role="radiogroup" aria-label="Evento">
@@ -4058,9 +4193,9 @@
     openModal('Vendi biglietto + bus', `<div class="bge bgb">
       <div class="bg-busi">${ICON.bus}<span><b>${esc(t.nome)}</b> · ${esc(fmtDate(t.data))}<br><small>${t.buses.length ? `${OV.cap} posti sul bus · <b>${free}</b> ${free === 1 ? 'libero' : 'liberi'}` : 'il viaggio non ha ancora un bus'}</small></span></div>
       ${t.chiusa ? `<div class="warnbox small">${esc(closedMsg(t))}: non si possono aggiungere prenotazioni.</div>` : !t.buses.length || free <= 0 ? `<div class="warnbox small">${ICON.alert} Posti finiti: aggiungi un bus al viaggio prima di vendere altri pacchetti biglietto + bus.</div>` : `
-      <div class="grid2"><div class="field"><label for="bgb-n">Quante persone</label><input id="bgb-n" data-bgb="n" class="pay-imp" inputmode="numeric" value="${M.n}" style="max-width:120px"></div><div class="field"><label for="bgb-t">Telefono</label><input id="bgb-t" data-bgb="tel" inputmode="tel" value="${esc(M.tel)}" autocomplete="off" placeholder="facoltativo"></div></div>
-      <div class="field"><label>Nomi</label><div class="bgb-pp">${M.pp.map((p, i) => `<div class="bgb-p"><span>${i + 1}</span><input data-bgbp="${i}" data-k="cognome" value="${esc(p.cognome)}" placeholder="${i ? 'Cognome (se diverso)' : 'Cognome'}" aria-label="Cognome ${i + 1}" autocomplete="off"><input data-bgbp="${i}" data-k="nome" value="${esc(p.nome)}" placeholder="Nome" aria-label="Nome ${i + 1}" autocomplete="off"></div>`).join('')}</div></div>
-      <div class="field"><label>Biglietto</label><div class="bg-chips">${(e.settori || []).map(x => `<button type="button" data-act="bgbset" data-v="${esc(x.nome)}" aria-pressed="${M.sett === x.nome}">${esc(x.nome)} <small>${esc(fmt2(+x.intero || 0))} €${x.ridotto ? ' · rid. ' + esc(fmt2(+x.ridotto)) + ' €' : ''}</small></button>`).join('')}</div></div>
+      <div class="grid2"><div class="field"><label for="bgb-n">Quante persone</label><input id="bgb-n" data-bgb="n" class="pay-imp" inputmode="numeric" value="${esc(M.n)}" style="max-width:120px"></div><div class="field"><label for="bgb-t">Telefono</label><input id="bgb-t" data-bgb="tel" inputmode="tel" value="${esc(M.tel)}" autocomplete="off" placeholder="facoltativo"></div></div>
+      <div class="field"><label>Nomi</label><div class="bgb-pp">${M.pp.map((p, i) => `<div class="bgb-p"><span>${i + 1}</span><input data-bgbp="${i}" data-k="cognome" value="${esc(p.cognome)}" placeholder="${esc(i ? 'Cognome (se diverso)' : 'Cognome')}" aria-label="Cognome ${i + 1}" autocomplete="off"><input data-bgbp="${i}" data-k="nome" value="${esc(p.nome)}" placeholder="Nome" aria-label="Nome ${i + 1}" autocomplete="off"></div>`).join('')}</div></div>
+      <div class="field"><label>Biglietto</label><div class="bg-chips">${(e.settori || []).map(x => `<button type="button" data-act="bgbset" data-v="${esc(x.nome)}" aria-pressed="${esc(M.sett === x.nome)}">${esc(x.nome)} <small>${esc(fmt2(+x.intero || 0))} €${x.ridotto ? ' · rid. ' + esc(fmt2(+x.ridotto)) + ' €' : ''}</small></button>`).join('')}</div></div>
       <div class="grid2"><div class="field"><label for="bgb-d">Biglietti emessi il</label><input id="bgb-d" type="date" data-bgb="emis" value="${esc(M.emis)}"></div><div></div></div>
       <div class="small">Le persone entrano nella lista del viaggio con la fila «${esc(M.sett)}» e la data di emissione; poi si apre l'incasso con bus + biglietto. ${M.n > free ? `<b class="neg">Restano solo ${free} posti.</b>` : ''}</div>`}</div>`,
       `<button class="btn" data-act="close">Annulla</button>${!t.chiusa && t.buses.length && free > 0 ? `<button class="btn primary" data-act="bgbsave">Metti in lista e incassa</button>` : `<button class="btn" data-act="bgbusopen" data-id="${esc(t.id)}">Apri il viaggio</button>`}`);
@@ -4113,7 +4248,7 @@
   function bglView() {
     if (!bgSee()) return '<div class="infobox">La biglietteria non è disponibile per il tuo account.</div>';
     const st = bgS(); const nS = bgVend().filter(venSosp).length;
-    const tabs = `<div class="seg bg-tabs" role="tablist" aria-label="Biglietteria">${BG_TABS.map(([k, l, ic]) => `<button role="tab" data-act="bgtab" data-v="${k}" aria-pressed="${st.tab === k}">${ICON[ic]}<span>${l}${k === 'sospesi' && nS ? ` <i>${nS}</i>` : ''}</span></button>`).join('')}</div>`;
+    const tabs = `<div class="seg bg-tabs" role="tablist" aria-label="Biglietteria">${BG_TABS.map(([k, l, ic]) => `<button role="tab" data-act="bgtab" data-v="${esc(k)}" aria-pressed="${esc(st.tab === k)}">${ICON[ic]}<span>${l}${k === 'sospesi' && nS ? ` <i>${nS}</i>` : ''}</span></button>`).join('')}</div>`;
     const V = { vendita: bgVendita, sospesi: bgSospesi, eventi: bgEventi, agenzia: bgAgenzia, controllo: bgControllo };
     return (V[st.tab] || bgVendita)(tabs);
   }
@@ -4143,10 +4278,10 @@
         : `<label class="bg-f">Evento<div class="bg-sel">${ICON.search}<input data-bgq="1" value="${esc(st.evq || '')}" placeholder="scrivi il nome dell'evento o il luogo" autocomplete="off"></div></label>
         <div class="bu-list">${evList.map(x => `<button type="button" data-act="bgevpick" data-id="${esc(x.id)}"><b>${esc(dd2(x.data))}</b><span>${esc(x.nome)}${x.luogo ? ' · ' + esc(x.luogo) : ''}</span>${circB(x.circ)}</button>`).join('') || `<div class="small">${evs.length ? 'Nessun evento trovato.' : 'Nessun evento in vendita.'} Crealo nella scheda «Eventi».</div>`}</div>`}
       ${eT ? `<div class="bg-bus">${ICON.bus}<span>Con il bus: <b>${esc(eT.nome)}</b><br><small>${eT.buses.length ? (eOV.free > 0 ? `<b>${eOV.free}</b> ${eOV.free === 1 ? 'posto libero' : 'posti liberi'} sul bus` : '<b class="neg">posti finiti</b>') : 'il viaggio non ha ancora un bus'}${eT.chiusa ? ' · lista chiusa' : ''}</small></span><button type="button" class="btn sm primary" data-act="bgbus" data-id="${esc(e.id)}"${canSell && !eT.chiusa && eT.buses.length && eOV.free > 0 ? '' : ' disabled'}>${ICON.plus} Vendi biglietto + bus</button></div><div class="small">Qui sotto: solo il biglietto, senza il bus.</div>` : ''}
-      ${e ? `<div class="bg-f"><span class="bg-l">Settore</span><div class="bg-chips">${(e.settori || []).map(s => `<button type="button" data-act="bgsett" data-id="${esc(s.id)}" aria-pressed="${st.sett === s.id}">${esc(s.nome)} <small>${esc(fmt2(+s.intero || 0))} €${s.ridotto ? ' · rid. ' + esc(fmt2(+s.ridotto)) + ' €' : ''}</small></button>`).join('') || '<span class="small">L\'evento non ha settori: aggiungili in «Eventi».</span>'}</div></div>` : ''}
-      ${sett && stk.length ? `<div class="bg-f"><span class="bg-l">Da dove viene il biglietto</span><div class="seg bg-src"><button type="button" data-act="bgsrc" data-v="new" aria-pressed="${st.src !== 'stock'}">Emetti un biglietto nuovo</button>${stk.map(s => `<button type="button" data-act="bgsrc" data-v="stock" data-id="${esc(s.id)}" aria-pressed="${!!SK && SK.id === s.id}">Biglietto dell'agenzia <small>${stLiberi(s)} liberi · emessi il ${esc(dd2(s.emis))}</small></button>`).join('')}</div></div>` : ''}
+      ${e ? `<div class="bg-f"><span class="bg-l">Settore</span><div class="bg-chips">${(e.settori || []).map(s => `<button type="button" data-act="bgsett" data-id="${esc(s.id)}" aria-pressed="${esc(st.sett === s.id)}">${esc(s.nome)} <small>${esc(fmt2(+s.intero || 0))} €${s.ridotto ? ' · rid. ' + esc(fmt2(+s.ridotto)) + ' €' : ''}</small></button>`).join('') || '<span class="small">L\'evento non ha settori: aggiungili in «Eventi».</span>'}</div></div>` : ''}
+      ${sett && stk.length ? `<div class="bg-f"><span class="bg-l">Da dove viene il biglietto</span><div class="seg bg-src"><button type="button" data-act="bgsrc" data-v="new" aria-pressed="${esc(st.src !== 'stock')}">Emetti un biglietto nuovo</button>${stk.map(s => `<button type="button" data-act="bgsrc" data-v="stock" data-id="${esc(s.id)}" aria-pressed="${esc(!!SK && SK.id === s.id)}">Biglietto dell'agenzia <small>${stLiberi(s)} liberi · emessi il ${esc(dd2(s.emis))}</small></button>`).join('')}</div></div>` : ''}
       ${sett ? `<table class="bg-tar"><thead><tr><th>Tariffa</th><th>Quantità</th><th class="r">Prezzo</th><th class="r">Diritti</th><th class="r">Totale</th></tr></thead><tbody>
-        ${rows.map(r => `<tr${r.q ? '' : ' class="off"'}><td>${esc(r.l)}</td><td><input class="bg-q" data-bgqt="${esc(r.l)}" inputmode="numeric" value="${r.q || ''}" placeholder="0" aria-label="Quantità ${esc(r.l)}"></td><td class="r"><input class="bg-p" data-bgpr="${esc(r.l)}" inputmode="decimal" value="${esc(fmt2(r.pr))}"${SK ? ' disabled' : ''} aria-label="Prezzo ${esc(r.l)}"></td><td class="r">${esc(fmt2(dirV))} €</td><td class="r" id="bgt-${esc(r.l.replace(/\W/g, ''))}">${r.q ? `<b>${money(r.q * (r.pr + dirV))}</b>` : '—'}</td></tr>`).join('')}</tbody></table>
+        ${rows.map(r => `<tr${r.q ? '' : ' class="off"'}><td>${esc(r.l)}</td><td><input class="bg-q" data-bgqt="${esc(r.l)}" inputmode="numeric" value="${esc(r.q || '')}" placeholder="0" aria-label="Quantità ${esc(r.l)}"></td><td class="r"><input class="bg-p" data-bgpr="${esc(r.l)}" inputmode="decimal" value="${esc(fmt2(r.pr))}"${SK ? ' disabled' : ''} aria-label="Prezzo ${esc(r.l)}"></td><td class="r">${esc(fmt2(dirV))} €</td><td class="r" id="bgt-${esc(r.l.replace(/\W/g, ''))}">${r.q ? `<b>${money(r.q * (r.pr + dirV))}</b>` : '—'}</td></tr>`).join('')}</tbody></table>
         <div class="bg-g3"><label class="bg-f">Cliente<input data-bgf="cliente" value="${esc(st.cliente || '')}" placeholder="Cognome e nome" autocomplete="off"></label><label class="bg-f">Telefono<input data-bgf="tel" value="${esc(st.tel || '')}" inputmode="tel" autocomplete="off" placeholder="facoltativo"></label><label class="bg-f">Emesso sul circuito il<input type="date" data-bgf="emis" value="${esc(SK ? SK.emis : st.emis || today)}"${SK ? ' disabled' : ''}></label></div>
         <label class="bg-f">Diritti di prevendita a biglietto €<input class="bg-p sm" data-bgf="dirV" inputmode="decimal" value="${esc(fmt2(dirV))}"></label>
         <div class="bg-sum" id="bg-sum">${bgSumHTML(nq, tTkt, tDir, T)}</div>
@@ -4154,7 +4289,7 @@
         <div class="small">«Incassa» registra la vendita e apre l'incasso (contanti, POS, misto, buono regalo…). «Sospeso» la mette tra i sospesi finché il cliente non paga.</div>` : ''}
     </section>`;
     const list = `<section class="box tablecard bg-today"><h2 class="ch">Vendite di oggi</h2><div class="tscroll"><table class="rt"><thead><tr><th>Ora</th><th>Cliente</th><th>Evento e settore</th><th class="r">Totale</th><th></th><th></th></tr></thead><tbody>
-      ${L.map(x => `<tr${x.tipo === 'rimborso' ? ' class="neg"' : ''}><td>${esc(hm(x.at))}</td><td><b>${esc(x.cliente || '—')}</b><br><small>${esc((x.righe || []).filter(r => r.q).map(r => `${r.q} ${r.tar.toLowerCase()}`).join(' + '))}${x.rimb ? ' · ' + x.rimb + ' rimborsati' : ''}</small></td><td>${esc(evLbl(bgEv(x.evId)) || x.evN)}<br><small>${esc(x.sett || '')} · ${esc(circL(x.circ))}${x.stock ? ' · dell\'agenzia' : ''}</small></td><td class="r"><b>${money(x.tot)}</b></td><td>${venSosp(x) ? '<span class="pill tbd">sospeso</span>' : venQ(x) <= 0 ? '<span class="pill neutral">rimborsato</span>' : '<span class="pill ok">pagato</span>'}</td><td class="r"><button class="kebab" data-act="bgvmenu" data-id="${esc(x.id)}" aria-label="Azioni">⋯</button></td></tr>`).join('') || '<tr><td colspan="6" class="emptyrow">Nessuna vendita oggi</td></tr>'}
+      ${L.map(x => `<tr${x.tipo === 'rimborso' ? ' class="neg"' : ''}><td>${esc(hm(x.at))}</td><td><b>${esc(x.cliente || '—')}</b><br><small>${esc((x.righe || []).filter(r => r.q).map(r => `${r.q} ${r.tar.toLowerCase()}`).join(' + '))}${x.rimb ? ' · ' + esc(x.rimb) + ' rimborsati' : ''}</small></td><td>${esc(evLbl(bgEv(x.evId)) || x.evN)}<br><small>${esc(x.sett || '')} · ${esc(circL(x.circ))}${x.stock ? ' · dell\'agenzia' : ''}</small></td><td class="r"><b>${money(x.tot)}</b></td><td>${venSosp(x) ? '<span class="pill tbd">sospeso</span>' : venQ(x) <= 0 ? '<span class="pill neutral">rimborsato</span>' : '<span class="pill ok">pagato</span>'}</td><td class="r"><button class="kebab" data-act="bgvmenu" data-id="${esc(x.id)}" aria-label="Azioni">⋯</button></td></tr>`).join('') || '<tr><td colspan="6" class="emptyrow">Nessuna vendita oggi</td></tr>'}
     </tbody></table></div></section>`;
     return `${bgHead(`${esc(agName(ag) || 'tutte le agenzie')} · ${esc(fmtDate(today, true))}${ACC.me() ? ' · ' + esc(ACC.me().name) : ''}`)}${tabs}
       <div class="tiles"><div class="tile dark"><span>Emessi oggi</span><b>${nT} ${nT === 1 ? 'biglietto' : 'biglietti'}</b><small>${money(tot)} con i diritti · ${em.length} ${em.length === 1 ? 'vendita' : 'vendite'}</small></div><div class="tile"><span>Incassati</span><b>${money(inc)}</b><small>biglietti e diritti</small></div><div class="tile"><span>Sospesi di oggi</span><b${sos ? ' class="neg"' : ''}>${money(sos)}</b><small>da incassare</small></div><div class="tile"><span>Diritti di prevendita</span><b>${money(dir)}</b><small>parte dell'agenzia</small></div></div>
@@ -4199,10 +4334,10 @@
     openModal(`Incasso biglietti · ${esc(x.cliente)}`, `<div class="bgp">
       <div class="bgp-ev"><b>${esc(x.evN)}</b> · ${esc(x.sett)} · ${esc(circL(x.circ))}<br><small>${esc((x.righe || []).map(r => `${r.q} ${r.tar.toLowerCase()} × ${fmt2(r.prezzo)} €`).join(' + '))} + diritti ${esc(fmt2(x.dir))} € a biglietto · emessi il ${esc(dd2(x.emis))}</small></div>
       <div class="pay-sum"><div><span>Totale</span><b>${money(x.tot)}</b></div><div><span>Già pagato</span><b>${money(venPaid(x))}</b></div><div class="hi"><span>Da pagare</span><b>${money(due)}</b></div></div>
-      <div class="pp-sec"><span class="pp-l">Documento</span><div class="seg" role="radiogroup">${[['scontrino', 'Scontrino (diritti)'], ['nessuno', 'Senza documento']].map(([k, l]) => `<button type="button" data-act="bgpdoc" data-k="${k}" aria-pressed="${M.doc === k}">${l}</button>`).join('')}</div></div>
+      <div class="pp-sec"><span class="pp-l">Documento</span><div class="seg" role="radiogroup">${[['scontrino', 'Scontrino (diritti)'], ['nessuno', 'Senza documento']].map(([k, l]) => `<button type="button" data-act="bgpdoc" data-k="${esc(k)}" aria-pressed="${esc(M.doc === k)}">${l}</button>`).join('')}</div></div>
       <div class="pp-sec"><span class="pp-l">Incassato adesso</span><input class="pay-imp" data-bgp="imp" inputmode="decimal" value="${M.imp ? esc(fmt2(+M.imp)) : ''}" placeholder="0,00"></div>
-      <div class="pay-met" role="radiogroup">${[...METODI, ['misto', 'Misto']].map(([k, l]) => `<button type="button" role="radio" aria-checked="${M.met === k}" data-act="bgpmet" data-k="${k}">${l}</button>`).join('')}</div>
-      ${isMix ? `<div class="pp-mix">${METODI.map(([k, l]) => `<div class="pay-row"><span>${l}</span><input data-bgpm="${k}" inputmode="decimal" value="${M.mix[k] ? esc(fmt2(M.mix[k])) : ''}" placeholder="0,00"></div>`).join('')}</div>` : ''}
+      <div class="pay-met" role="radiogroup">${[...METODI, ['misto', 'Misto']].map(([k, l]) => `<button type="button" role="radio" aria-checked="${esc(M.met === k)}" data-act="bgpmet" data-k="${esc(k)}">${l}</button>`).join('')}</div>
+      ${isMix ? `<div class="pp-mix">${METODI.map(([k, l]) => `<div class="pay-row"><span>${l}</span><input data-bgpm="${esc(k)}" inputmode="decimal" value="${M.mix[k] ? esc(fmt2(M.mix[k])) : ''}" placeholder="0,00"></div>`).join('')}</div>` : ''}
       ${M.met === 'buono' || bpart ? `<label class="bg-f">Buono regalo<select data-bgp="buono"><option value="">— scegli il buono —</option>${buoni.map(b => `<option value="${esc(b.id)}"${M.buono === b.id ? ' selected' : ''}>${esc(b.num)} · ${esc(b.dest || '')} · ${esc(money(b.res))}</option>`).join('')}</select></label>` : ''}
       <label class="bg-f">Note pratica<input data-bgp="note" value="${esc(M.note || '')}" autocomplete="off"></label>
       <div class="small">Registrato da <b>${esc(ACC.me().name)}</b> · <b>${esc(agName(ACC.sess.ag))}</b> · ${esc(cassaName(ACC.sess.ag))}</div></div>`,
@@ -4227,7 +4362,7 @@
   // ---- menu di una vendita: incassa, rimborso, cambio nome, annulla ----
   function bgVenMenu(id, el) {
     const x = bgVend().find(v => v.id === id); if (!x) return; const paid = venPaid(x);
-    const B = (act, ico, txt, cls = '') => `<button class="${cls}" data-act="${act}" data-id="${esc(id)}">${ico}<span>${txt}</span></button>`;
+    const B = (act, ico, txt, cls = '') => `<button class="${esc(cls)}" data-act="${esc(act)}" data-id="${esc(id)}">${ico}<span>${txt}</span></button>`;
     let h = `<div class="ph"><b>${esc(x.cliente)}</b><span>${esc(x.evN)} · ${esc(x.sett)} · ${venQ(x)} ${venQ(x) === 1 ? 'biglietto' : 'biglietti'}</span></div>`;
     if (bgCan()) {
       h += `<div class="pm-sec">${venSosp(x) ? B('bgvpay', ICON.euro, `Incassa <small>da pagare ${money(venDue(x))}</small>`) : ''}${x.tipo !== 'cambio' && venQ(x) > 0 ? B('bgvcambio', ICON.edit, 'Cambio nome <small>5,00 € + 5,00 € di diritti (si può cambiare)</small>') : ''}</div>`;
@@ -4240,8 +4375,8 @@
     UI.modal = { kind: 'bgrimb', id, met: 'contanti' };
     const per = x.nT ? r2(x.totTkt / x.nT) : 0;
     openModal(`Rimborso biglietti · ${esc(x.cliente)}`, `<div class="bgp"><div class="bgp-ev"><b>${esc(x.evN)}</b> · ${esc(x.sett)}<br><small>${venQ(x)} biglietti · ${money(per)} a biglietto (i diritti non si rimborsano)</small></div>
-      <div class="grid2"><div class="field"><label for="bgr-q">Quanti biglietti</label><input id="bgr-q" inputmode="numeric" value="${venQ(x)}"></div><div class="field"><label for="bgr-a">Importo da restituire</label><input id="bgr-a" inputmode="decimal" value="${esc(fmt2(r2(per * venQ(x))))}"></div></div>
-      <div class="field"><label>Come lo restituisci</label><div class="pay-met">${METODI.filter(([k]) => !['buono', 'voucher'].includes(k)).map(([k, l]) => `<button type="button" role="radio" aria-checked="${k === 'contanti'}" data-act="bgrmet" data-k="${k}">${l}</button>`).join('')}</div></div></div>`,
+      <div class="grid2"><div class="field"><label for="bgr-q">Quanti biglietti</label><input id="bgr-q" inputmode="numeric" value="${esc(venQ(x))}"></div><div class="field"><label for="bgr-a">Importo da restituire</label><input id="bgr-a" inputmode="decimal" value="${esc(fmt2(r2(per * venQ(x))))}"></div></div>
+      <div class="field"><label>Come lo restituisci</label><div class="pay-met">${METODI.filter(([k]) => !['buono', 'voucher'].includes(k)).map(([k, l]) => `<button type="button" role="radio" aria-checked="${esc(k === 'contanti')}" data-act="bgrmet" data-k="${esc(k)}">${l}</button>`).join('')}</div></div></div>`,
       `<button class="btn" data-act="close">Annulla</button><button class="btn primary" data-act="bgrsave">Registra il rimborso</button>`);
   }
   function bgRimbSave() {
@@ -4272,7 +4407,7 @@
     // 2.1.8: pacchetti biglietto + bus dei viaggi collegati, non ancora saldati (si incassano dalla lista del viaggio)
     const TS = bgEvents().map(e => ({ e, t: bgTripOf(e) })).filter(x => x.t && (f === 'tutti' || x.e.circ === f)).map(x => Object.assign(x, { k: bgTripTk(x.t) })).filter(x => x.k.bks.length).sort((a, b) => String(a.e.data).localeCompare(String(b.e.data)));
     return `${bgHead(`${n} ${n === 1 ? 'biglietto emesso' : 'biglietti emessi'} e non ancora pagati · <b>${money(tot)}</b> da incassare`)}${tabs}
-      <div class="bg-filt"><span class="bg-l">Circuito</span><div class="seg"><button data-act="bgscirc" data-v="tutti" aria-pressed="${f === 'tutti'}">Tutti</button>${circs.map(c => `<button data-act="bgscirc" data-v="${esc(c)}" aria-pressed="${f === c}">${esc(circL(c))}</button>`).join('')}</div></div>
+      <div class="bg-filt"><span class="bg-l">Circuito</span><div class="seg"><button data-act="bgscirc" data-v="tutti" aria-pressed="${esc(f === 'tutti')}">Tutti</button>${circs.map(c => `<button data-act="bgscirc" data-v="${esc(c)}" aria-pressed="${esc(f === c)}">${esc(circL(c))}</button>`).join('')}</div></div>
       ${groups.map(g => { const s = r2(g.xs.reduce((a, x) => a + venDue(x), 0)), q = g.xs.reduce((a, x) => a + venQ(x), 0); return `<section class="box tablecard bg-ev"><div class="bg-evh"><h2>${esc(g.e ? evLbl(g.e) : g.xs[0].evN)}</h2>${circB(g.xs[0].circ)}<span class="bg-evs">${q} ${q === 1 ? 'biglietto' : 'biglietti'} · <b>${money(s)}</b></span></div><div class="tscroll"><table class="rt"><thead><tr><th>Emesso il</th><th>Acquirente</th><th>Settore e tariffa</th><th class="r">N.</th><th class="r">€ a biglietto</th><th class="r">Da incassare</th><th>Agenzia</th><th></th></tr></thead><tbody>
         ${g.xs.map(x => `<tr><td>${esc(dd2(x.emis))}</td><td><b>${esc(x.cliente)}</b>${x.tel ? `<br><small>${esc(x.tel)}</small>` : ''}</td><td>${esc(x.sett)} · ${esc((x.righe || []).map(r => r.tar.toLowerCase()).join(' + '))}</td><td class="r">${venQ(x)}</td><td class="r">${esc((x.righe || []).map(r => fmt2(r.prezzo)).join(' / '))} €</td><td class="r"><b>${money(venDue(x))}</b></td><td>${esc(agName(x.ag))}</td><td class="r">${bgCan() ? `<button class="btn sm primary" data-act="bgvpay" data-id="${esc(x.id)}">${ICON.euro} Incassa</button>` : ''}</td></tr>`).join('')}</tbody></table></div></section>`; }).join('')}
       ${SL.length ? `<section class="box tablecard bg-ev"><div class="bg-evh"><h2>Biglietti dell'agenzia ancora liberi</h2><span class="bg-evs">${SL.reduce((a, s) => a + stLiberi(s), 0)} biglietti · <b>${money(r2(SL.reduce((a, s) => a + stLiberi(s) * s.prezzo, 0)))}</b></span></div><div class="tscroll"><table class="rt"><thead><tr><th>Emessi il</th><th>Evento</th><th>Settore</th><th>Circuito</th><th class="r">Liberi</th><th class="r">€ a biglietto</th></tr></thead><tbody>${SL.map(s => `<tr><td>${esc(dd2(s.emis))}</td><td><b>${esc(evLbl(bgEv(s.evId)))}</b></td><td>${esc(s.sett)}</td><td>${circB(s.circ)}</td><td class="r">${stLiberi(s)}</td><td class="r">${money(s.prezzo)}</td></tr>`).join('')}</tbody></table></div></section>` : ''}
@@ -4304,7 +4439,7 @@
       <div class="grid3"><div class="field"><label for="bge-d">Data</label><input id="bge-d" type="date" data-bge="data" value="${esc(E.data)}"></div><div class="field"><label for="bge-o">Ora <small>facoltativa</small></label><input id="bge-o" data-bge="ora" value="${esc(E.ora || '')}" placeholder="21:00"></div>
         <div class="field"><label for="bge-c">Circuito</label><select id="bge-c" data-bge="circ">${CIRCUITI.map(c => `<option value="${esc(c)}"${E.circ === c ? ' selected' : ''}>${esc(circL(c))}</option>`).join('')}</select></div></div>
       <div class="field"><label for="bge-r">Diritti di prevendita a biglietto €</label><input id="bge-r" data-bge="dir" inputmode="decimal" value="${typeof E.dir === 'number' ? esc(fmt2(E.dir)) : esc(String(E.dir || ''))}" style="max-width:140px"></div>
-      <div class="field"><label>Settori e prezzi</label><div class="bge-s">${(E.settori || []).map((s, i) => `<div class="bge-r"><input data-bges="${i}" data-k="nome" value="${esc(s.nome)}" placeholder="settore (es. Parterre)" aria-label="Settore ${i + 1}"><input data-bges="${i}" data-k="intero" inputmode="decimal" value="${bgNumV(s.intero)}" placeholder="intero €" aria-label="Prezzo intero"><input data-bges="${i}" data-k="ridotto" inputmode="decimal" value="${bgNumV(s.ridotto)}" placeholder="ridotto €" aria-label="Prezzo ridotto"><button class="kebab" data-act="bgesdel" data-i="${i}" aria-label="Togli il settore">${ICON.close}</button></div>`).join('')}</div><button class="btn sm ghost" data-act="bgesadd">${ICON.plus} Aggiungi settore</button></div>
+      <div class="field"><label>Settori e prezzi</label><div class="bge-s">${(E.settori || []).map((s, i) => `<div class="bge-r"><input data-bges="${i}" data-k="nome" value="${esc(s.nome)}" placeholder="settore (es. Parterre)" aria-label="Settore ${i + 1}"><input data-bges="${i}" data-k="intero" inputmode="decimal" value="${esc(bgNumV(s.intero))}" placeholder="intero €" aria-label="Prezzo intero"><input data-bges="${i}" data-k="ridotto" inputmode="decimal" value="${esc(bgNumV(s.ridotto))}" placeholder="ridotto €" aria-label="Prezzo ridotto"><button class="kebab" data-act="bgesdel" data-i="${i}" aria-label="Togli il settore">${ICON.close}</button></div>`).join('')}</div><button class="btn sm ghost" data-act="bgesadd">${ICON.plus} Aggiungi settore</button></div>
       <div class="field"><label for="bge-t">Viaggio con il bus <small>facoltativo</small></label><select id="bge-t" data-bge="tripId"><option value="">— solo biglietto, senza bus —</option>${trips.map(t => `<option value="${esc(t.id)}"${E.tripId === t.id ? ' selected' : ''}>${esc(fmtDate(t.data))} · ${esc(t.nome)}</option>`).join('')}</select></div>
       <div class="field"><label for="bge-x">Note <small>facoltative</small></label><input id="bge-x" data-bge="note" value="${esc(E.note || '')}"></div></div>`,
       `${!UI.modal.isNew ? `<button class="btn danger" data-act="bgevdel" style="margin-right:auto">${ICON.trash} Togli l'evento</button>` : ''}<button class="btn" data-act="close">Annulla</button><button class="btn primary" data-act="bgevsave">${UI.modal.isNew ? 'Crea l\'evento' : 'Salva'}</button>`);
@@ -4323,7 +4458,7 @@
     const L = bgStock().sort((a, b) => String((bgEv(a.evId) || {}).data).localeCompare(String((bgEv(b.evId) || {}).data)));
     return `${bgHead('Biglietti comprati dall\'agenzia per i pacchetti bus + biglietto', bgCan() ? `<button class="btn primary" data-act="bgstnew">${ICON.plus} Biglietti comprati</button>` : '')}${tabs}
       <section class="box tablecard"><div class="tscroll"><table class="rt"><thead><tr><th>Evento</th><th>Settore</th><th>Circuito</th><th>Emessi il</th><th class="r">Comprati</th><th class="r">Dati ai clienti</th><th class="r">Ancora liberi</th><th class="r">€ a biglietto</th><th>Viaggio</th></tr></thead><tbody>
-        ${L.map(s => { const e = bgEv(s.evId); const t = s.tripId && S.trips.find(x => x.id === s.tripId); const lib = stLiberi(s); return `<tr><td><b>${esc(evLbl(e))}</b>${s.note ? `<br><small>${esc(s.note)}</small>` : ''}</td><td>${esc(s.sett)}</td><td>${circB(s.circ)}</td><td>${esc(dd2(s.emis))}</td><td class="r">${s.q}</td><td class="r">${s.q - lib}</td><td class="r">${lib ? `<span class="pill tbd">${lib} liberi</span>` : '<span class="pill ok">finiti</span>'}</td><td class="r">${money(s.prezzo)}</td><td>${t ? `<button class="bg-link" data-act="opentrip" data-id="${esc(t.id)}">${ICON.bus} ${esc(t.nome)}</button>` : '—'}</td></tr>`; }).join('') || '<tr><td colspan="9" class="emptyrow">Nessun biglietto comprato dall\'agenzia: premi «Biglietti comprati»</td></tr>'}
+        ${L.map(s => { const e = bgEv(s.evId); const t = s.tripId && S.trips.find(x => x.id === s.tripId); const lib = stLiberi(s); return `<tr><td><b>${esc(evLbl(e))}</b>${s.note ? `<br><small>${esc(s.note)}</small>` : ''}</td><td>${esc(s.sett)}</td><td>${circB(s.circ)}</td><td>${esc(dd2(s.emis))}</td><td class="r">${esc(s.q)}</td><td class="r">${esc(s.q - lib)}</td><td class="r">${lib ? `<span class="pill tbd">${lib} liberi</span>` : '<span class="pill ok">finiti</span>'}</td><td class="r">${money(s.prezzo)}</td><td>${t ? `<button class="bg-link" data-act="opentrip" data-id="${esc(t.id)}">${ICON.bus} ${esc(t.nome)}</button>` : '—'}</td></tr>`; }).join('') || '<tr><td colspan="9" class="emptyrow">Nessun biglietto comprato dall\'agenzia: premi «Biglietti comprati»</td></tr>'}
       </tbody></table></div></section>
       <div class="small bg-note">I biglietti comprati entrano tra le emissioni del circuito nel giorno in cui li avete emessi e restano tra i sospesi dell'agenzia finché non li date ai clienti: in «Vendita» (scegli «Biglietto dell'agenzia») oppure nell'incasso del viaggio con il bus collegato.</div>`;
   }
@@ -4336,7 +4471,7 @@
     const trips = S.trips.filter(t => (t.fine || t.data) >= todayISO()).sort((a, b) => a.data.localeCompare(b.data));
     openModal('Biglietti comprati dall\'agenzia', evs.length ? `<div class="bge">
       <div class="field"><label for="bgs-e">Evento</label><select id="bgs-e" data-bgs="evId">${evs.map(x => `<option value="${esc(x.id)}"${x.id === M.evId ? ' selected' : ''}>${esc(fmtDate(x.data))} · ${esc(x.nome)} · ${esc(circL(x.circ))}</option>`).join('')}</select><span class="small">Se l'evento non c'è ancora, crealo prima nella scheda «Eventi».</span></div>
-      ${e ? `<div class="field"><label>Settore</label><div class="bg-chips">${(e.settori || []).map(s => `<button type="button" data-act="bgsset" data-v="${esc(s.nome)}" aria-pressed="${M.sett === s.nome}">${esc(s.nome)} <small>${esc(fmt2(+s.intero || 0))} €</small></button>`).join('')}</div></div>` : ''}
+      ${e ? `<div class="field"><label>Settore</label><div class="bg-chips">${(e.settori || []).map(s => `<button type="button" data-act="bgsset" data-v="${esc(s.nome)}" aria-pressed="${esc(M.sett === s.nome)}">${esc(s.nome)} <small>${esc(fmt2(+s.intero || 0))} €</small></button>`).join('')}</div></div>` : ''}
       <div class="grid2"><div class="field"><label for="bgs-q">Quanti biglietti</label><input id="bgs-q" data-bgs="q" class="pay-imp" inputmode="numeric" value="${esc(String(M.q || ''))}" style="max-width:150px"></div><div class="field"><label for="bgs-p">Prezzo pagato a biglietto €</label><input id="bgs-p" data-bgs="prezzo" inputmode="decimal" value="${M.prezzo !== '' ? esc(fmt2(+M.prezzo)) : ''}"></div></div>
       <div class="grid2"><div class="field"><label for="bgs-d">Emessi sul circuito il</label><input id="bgs-d" type="date" data-bgs="emis" value="${esc(M.emis)}"></div><div class="field"><label for="bgs-t">Per il viaggio con il bus <small>facoltativo</small></label><select id="bgs-t" data-bgs="tripId"><option value="">—</option>${trips.map(t => `<option value="${esc(t.id)}"${t.id === M.tripId ? ' selected' : ''}>${esc(fmtDate(t.data))} · ${esc(t.nome)}</option>`).join('')}</select></div></div>
       <div class="field"><label for="bgs-n">Note <small>facoltative</small></label><input id="bgs-n" data-bgs="note" value="${esc(M.note || '')}" placeholder="es. blocco per il pacchetto bus + biglietto"></div>
@@ -4367,7 +4502,7 @@
       </tbody></table></div></section>`;
     }
     return `${bgHead('Ogni giorno: emesso sul circuito, incassato nelle tre agenzie, sospesi')}${tabs}
-      <div class="bg-filt"><span class="bg-l">Circuito</span><div class="seg">${used.map(x => `<button data-act="bgccirc" data-v="${esc(x)}" aria-pressed="${x === c}">${esc(circL(x))}</button>`).join('')}</div><span class="bg-l">Settimana</span><div class="seg"><button data-act="bgweek" data-v="-7" aria-label="Settimana prima">‹</button><button aria-pressed="true">${esc(dd2(w0).slice(0, 5))} – ${esc(dd2(addDays(w0, 6)).slice(0, 5))}</button><button data-act="bgweek" data-v="7" aria-label="Settimana dopo">›</button></div></div>
+      <div class="bg-filt"><span class="bg-l">Circuito</span><div class="seg">${used.map(x => `<button data-act="bgccirc" data-v="${esc(x)}" aria-pressed="${esc(x === c)}">${esc(circL(x))}</button>`).join('')}</div><span class="bg-l">Settimana</span><div class="seg"><button data-act="bgweek" data-v="-7" aria-label="Settimana prima">‹</button><button aria-pressed="true">${esc(dd2(w0).slice(0, 5))} – ${esc(dd2(addDays(w0, 6)).slice(0, 5))}</button><button data-act="bgweek" data-v="7" aria-label="Settimana dopo">›</button></div></div>
       <section class="box tablecard"><div class="tscroll"><table class="rt bg-ctl"><thead><tr><th>Emissioni del</th><th class="r">Emesso</th>${AG.map(a => `<th class="r">Incassato ${esc(a.nome)}</th>`).join('')}<th class="r">Sospesi</th></tr></thead><tbody>${days.map(row).join('')}
         <tr class="tot"><td><b>Settimana</b></td><td class="r"><b>${money(r2(tot.em))}</b></td>${AG.map(() => '<td></td>').join('')}<td class="r"><b>${money(r2(tot.em - tot.inc))}</b></td></tr></tbody></table></div></section>
       ${weekly}
@@ -4478,8 +4613,8 @@
     // quanto risultava già pagato nella lista prima dell'app (colonna «pagato» del Word)
     const bk0 = t && deriveBookings(t).find(b => b.id === resolveBk(m.tripId, m.bkId)); const legacy = bk0 && !m.pid ? Math.max(0, bkMoney(t, bk0).paid - paidMovs(t.id, bk0.id)) : 0;
     const tot = +m.docTot || +m.tot; const paidTot = paid.reduce((a, x) => a + (+x.tot || 0), 0) + legacy;
-    const pl = (legacy > 0.009 ? [`<Payment><Advance>true</Advance><Date>${paid[0] ? paid[0].day : m.day}</Date><Amount>${n2(legacy)}</Amount><Paid>true</Paid></Payment>`] : []).concat(paid.map(x => `<Payment><Advance>${x.tipo === 'acconto' ? 'true' : 'false'}</Advance><Date>${x.day}</Date><Amount>${n2(x.tot)}</Amount><Paid>true</Paid></Payment>`));
-    if (tot - paidTot > 0.009) pl.push(`<Payment><Advance>false</Advance><Date>${(t && t.quota && t.quota.saldoEntro) || (t && t.data) || todayISO()}</Date><Amount>${n2(tot - paidTot)}</Amount><Paid>false</Paid></Payment>`);
+    const pl = (legacy > 0.009 ? [`<Payment><Advance>true</Advance><Date>${xq(paid[0] ? paid[0].day : m.day)}</Date><Amount>${n2(legacy)}</Amount><Paid>true</Paid></Payment>`] : []).concat(paid.map(x => `<Payment><Advance>${x.tipo === 'acconto' ? 'true' : 'false'}</Advance><Date>${xq(x.day)}</Date><Amount>${n2(x.tot)}</Amount><Paid>true</Paid></Payment>`));
+    if (tot - paidTot > 0.009) pl.push(`<Payment><Advance>false</Advance><Date>${xq((t && t.quota && t.quota.saldoEntro) || (t && t.data) || todayISO())}</Date><Amount>${n2(tot - paidTot)}</Amount><Paid>false</Paid></Payment>`);
     const met = (m.parts || [])[0] ? m.parts[0].m : ''; const pn = (C.pag || {})[met] || '';
     const note = [`Viaggi in Pullman · ${m.cliente}`, m.pratica ? 'pratica ' + m.pratica : '', `incasso del ${fmtDate(m.day)} (${(m.parts || []).map(p => MET_L[p.m] || p.m).join(' + ')}) registrato da ${m.who} · ${agName(m.ag)}`, m.note].filter(Boolean).join(' · ');
     return `<Document><DocumentType>I</DocumentType><Date>${todayISO()}</Date>`
@@ -4513,7 +4648,7 @@
     return `<h2>Danea Easyfatt</h2><p class="sub">Servono al pulsante «Apri in Danea» delle fatture dei tour. I valori devono essere scritti esattamente come in Danea.</p>
       <div class="box form"><label>Codice IVA dei viaggi (tabella «Categorie Iva» di Danea)<input id="dn-iva" value="${esc(C.iva)}" placeholder="74ter"></label>
         <h3>Tipo di pagamento per metodo (tabella «Tipi pagamento» di Danea)</h3><div class="small">Lascia vuoto se non vuoi indicarlo: lo sceglierete in Danea.</div>
-        ${METODI.map(([k, l]) => `<label class="kv"><span>${esc(l)}</span><input data-dnpag="${k}" value="${esc((C.pag || {})[k] || '')}" placeholder="es. ${k === 'bonifico' ? 'Bonifico bancario' : k === 'contanti' ? 'Contanti' : k === 'pos' ? 'Bancomat / POS' : ''}"></label>`).join('')}
+        ${METODI.map(([k, l]) => `<label class="kv"><span>${esc(l)}</span><input data-dnpag="${esc(k)}" value="${esc((C.pag || {})[k] || '')}" placeholder="es. ${esc(k === 'bonifico' ? 'Bonifico bancario' : k === 'contanti' ? 'Contanti' : k === 'pos' ? 'Bancomat / POS' : '')}"></label>`).join('')}
         <div><button class="btn primary" data-act="savedanea">Salva</button></div></div>
       <div class="box form"><h3>Codice prodotto Danea dei viaggi</h3><div class="small">Si scrive in ogni viaggio: «Modifica gita» › «Codice prodotto Danea» (es. 261018 boschi e zafferana 18/10/26). Se manca, la riga della fattura ha solo la descrizione.</div></div>`;
   }
@@ -4652,11 +4787,11 @@
 
   // ---- Impostazioni › Registratore telematico ----
   function rtSettingsHTML() {
-    const C = rtCfg(); const rep = (key, k) => `<input class="rt-in" data-rtrep="${esc(key)}" data-k="${k}" value="${esc(((C.rep[key] || {})[k]) || '')}" inputmode="numeric" placeholder="${key === '*' ? 'n°' : 'come sopra'}" aria-label="Reparto ${esc(key)} ${k}">`;
+    const C = rtCfg(); const rep = (key, k) => `<input class="rt-in" data-rtrep="${esc(key)}" data-k="${esc(k)}" value="${esc(((C.rep[key] || {})[k]) || '')}" inputmode="numeric" placeholder="${esc(key === '*' ? 'n°' : 'come sopra')}" aria-label="Reparto ${esc(key)} ${k}">`;
     return `<h2>Registratore telematico</h2><p class="sub">Preparazione allo scontrino diretto dall'app (Custom Q3X-F, uno per agenzia). L'indirizzo e la matricola di ogni registratore si scrivono in Impostazioni › Agenzie e casse. Per ora l'app non manda nulla al registratore: gli scontrini restano «da emettere» come prima.</p>
       <div class="box form"><h3>Tipi di pagamento del registratore</h3><div class="small">Per ogni metodo dell'app, il numero e la descrizione del pagamento come sono programmati sul registratore (es. 1 Contanti, 8 Bancomat).</div>
         <table class="rt rt-tab"><thead><tr><th>Metodo nell'app</th><th>N° sul registratore</th><th>Descrizione sul registratore</th></tr></thead><tbody>
-        ${METODI.map(([k, l]) => `<tr><td>${esc(l)}</td><td><input class="rt-in" data-rtpag="${k}" data-k="n" value="${esc((C.pag[k] || {}).n || '')}" inputmode="numeric" placeholder="n°" aria-label="Numero pagamento ${esc(l)}"></td><td><input class="rt-in wide" data-rtpag="${k}" data-k="d" value="${esc((C.pag[k] || {}).d || '')}" placeholder="es. ${k === 'contanti' ? 'Contanti' : k === 'pos' ? 'Bancomat' : l}" aria-label="Descrizione pagamento ${esc(l)}"></td></tr>`).join('')}
+        ${METODI.map(([k, l]) => `<tr><td>${esc(l)}</td><td><input class="rt-in" data-rtpag="${esc(k)}" data-k="n" value="${esc((C.pag[k] || {}).n || '')}" inputmode="numeric" placeholder="n°" aria-label="Numero pagamento ${esc(l)}"></td><td><input class="rt-in wide" data-rtpag="${esc(k)}" data-k="d" value="${esc((C.pag[k] || {}).d || '')}" placeholder="es. ${esc(k === 'contanti' ? 'Contanti' : k === 'pos' ? 'Bancomat' : l)}" aria-label="Descrizione pagamento ${esc(l)}"></td></tr>`).join('')}
         </tbody></table>
         <div class="rt-note">${ICON.alert}<span>Bonifico, PayPal, Buono regalo e Voucher: da verificare con il commercialista.</span></div></div>
       <div class="box form"><h3>Reparti del registratore</h3><div class="small">Il numero del reparto per ogni parte dello scontrino. La prima riga vale per tutte le categorie; nelle righe sotto si scrive solo dove una categoria usa un reparto diverso (vuoto = come la prima riga).</div>
@@ -4665,7 +4800,7 @@
         ${CATS.map(c => `<tr><td>${esc(c)}</td>${RT_PARTS.map(([k]) => `<td>${rep(c, k)}</td>`).join('')}</tr>`).join('')}
         </tbody></table></div>
       <div class="box form"><h3>IVA dei reparti</h3><div class="small">Come è programmato ogni reparto sul registratore. Serve per l'anteprima dello scontrino (riga «di cui IVA» e lettera accanto al prezzo). Sullo scontrino dell'agenzia le gite sono «NI · Non imponibile».</div>
-        <div class="rt-int rt-ivag">${RT_PARTS.map(([k, l]) => `<label>${esc(l)}<select class="rt-sel" data-rtiva="${k}" aria-label="IVA del reparto ${esc(l)}">${RT_IVA.map(([v, t]) => `<option value="${v}"${rtIva(k) === v ? ' selected' : ''}>${esc(t)}</option>`).join('')}</select></label>`).join('')}</div>
+        <div class="rt-int rt-ivag">${RT_PARTS.map(([k, l]) => `<label>${esc(l)}<select class="rt-sel" data-rtiva="${esc(k)}" aria-label="IVA del reparto ${esc(l)}">${RT_IVA.map(([v, t]) => `<option value="${esc(v)}"${rtIva(k) === v ? ' selected' : ''}>${esc(t)}</option>`).join('')}</select></label>`).join('')}</div>
         <div class="rt-note">${ICON.alert}<span>Diritti di prevendita: l'IVA giusta va verificata con il commercialista.</span></div></div>
       <div class="box form"><h3>Intestazione dello scontrino</h3><div class="small">Le righe in alto, come sono programmate su ogni registratore. Servono solo per l'anteprima: sullo scontrino vero l'intestazione la stampa il registratore da solo.</div>
         <div class="rt-int">${S.cfg.agenzie.map(a => `<label>${esc(a.nome)}<textarea class="rt-ta" data-rtint="${esc(a.id)}" rows="4" spellcheck="false" aria-label="Intestazione dello scontrino di ${esc(a.nome)}">${esc(rtIntest(a.id))}</textarea></label>`).join('')}</div></div>
@@ -4691,10 +4826,10 @@
     const C = daneaCfg();
     const doc = m => { const d = rtDraft(m); const t = S.trips.find(x => x.id === m.tripId);
       const rows = d.righe.map(r => `<Row>${xt('Code', (r.part === 'bus' && t && t.codDanea) || '')}${xt('Description', r.desc)}<Qty>${r.q}</Qty><Price>${n2(r.prezzo)}</Price><VatCode>${xq(C.iva)}</VatCode></Row>`).join('');
-      const pays = d.pagamenti.map(p => `<Payment><Advance>false</Advance><Date>${m.day}</Date><Amount>${n2(p.importo)}</Amount><Paid>true</Paid></Payment>`).join('');
+      const pays = d.pagamenti.map(p => `<Payment><Advance>false</Advance><Date>${xq(m.day)}</Date><Amount>${n2(p.importo)}</Amount><Paid>true</Paid></Payment>`).join('');
       const met = (m.parts || [])[0] ? m.parts[0].m : ''; const pn = (C.pag || {})[met] || MET_L[met] || '';
       const note = [`Viaggi in Pullman · scontrino del ${fmtDate(m.day)} ${hm(m.at)}`, rtInfo(m), `${(m.parts || []).map(p => MET_L[p.m] || p.m).join(' + ')} · ${m.who} · ${agName(m.ag)}`].filter(Boolean).join(' · ');
-      return `<Document><DocumentType>B</DocumentType><Date>${m.day}</Date>${xt('CustomerName', m.cliente)}<PricesIncludeVat>true</PricesIncludeVat>${xt('PaymentName', pn)}${xt('InternalComment', note)}<Rows>${rows}</Rows><Payments>${pays}</Payments></Document>`; };
+      return `<Document><DocumentType>B</DocumentType><Date>${xq(m.day)}</Date>${xt('CustomerName', m.cliente)}<PricesIncludeVat>true</PricesIncludeVat>${xt('PaymentName', pn)}${xt('InternalComment', note)}<Rows>${rows}</Rows><Payments>${pays}</Payments></Document>`; };
     if (ok.length) {
       const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<EasyfattDocuments AppVersion="2" Creator="Viaggi in Pullman ${xq(VERSION)}"><Documents>${ok.map(doc).join('')}</Documents></EasyfattDocuments>\n`;
       const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([xml], { type: 'application/xml' })); a.download = name.replace(/[\\/:*?"<>|]+/g, ' ').trim() + '.DefXml';
@@ -4740,25 +4875,25 @@
       const list = Object.entries(ACC.users()).filter(([, u]) => u.role !== 'super' || ACC.role() === 'super').sort((a, b) => (a[1].active === false) - (b[1].active === false) || a[1].name.localeCompare(b[1].name));
       body = `<div class="sh"><div><h2>Operatori e permessi</h2><p class="sub">Chi può entrare, con quale ruolo e in quali agenzie. Senza agenzie spuntate, l'account può entrare in tutte.</p></div><button class="btn primary" data-act="unew">${ICON.plus} Nuovo account</button></div>
         <div class="box tablecard"><div class="tscroll"><table class="rt users"><thead><tr><th>Account</th><th>Sigla</th><th>Cellulare</th><th>Ruolo</th>${S.cfg.agenzie.map(a => `<th class="ctr">${esc(a.nome)}</th>`).join('')}<th>Attivo</th><th></th></tr></thead><tbody>
-        ${list.map(([id, u]) => { const self = id === ACC.sess.uid; const lockRole = self || (u.role === 'master' && ACC.role() !== 'super' && false); return `<tr class="${u.active === false ? 'off' : ''}"><td><span class="av">${esc((u.name || '?')[0].toUpperCase())}</span> <b>${esc(u.name)}</b>${self ? ' <small>(tu)</small>' : ''}${u.mustChange ? '<br><small>deve cambiare la password</small>' : ''}</td><td><input class="code-in" data-usig="${id}" value="${esc(u.sigla || '')}" maxlength="3" placeholder="${esc(String(u.name || '').slice(0, 2).toUpperCase())}" aria-label="Sigla di ${esc(u.name)} nel resoconto (colonna Op.)"></td><td><input class="cell-in" data-ucell="${id}" value="${esc(u.cell || '')}" inputmode="tel" autocomplete="off" placeholder="facoltativo" aria-label="Cellulare di ${esc(u.name)}"></td>
-          <td>${u.role === 'super' ? 'Super Master' : `<select data-urole="${id}" aria-label="Ruolo di ${esc(u.name)}"${lockRole ? ' disabled' : ''}>${['operatore', 'master', 'contabilita'].map(r => `<option value="${r}"${u.role === r ? ' selected' : ''}>${ROLE_L[r]}</option>`).join('')}</select>`}</td>
-          ${S.cfg.agenzie.map(a => `<td class="ctr"><input type="checkbox" class="sw" data-uag="${id}" data-ag="${a.id}"${(u.agencies || []).includes(a.id) ? ' checked' : ''} aria-label="${esc(u.name)} in ${esc(a.nome)}"${u.role === 'super' || u.role === 'contabilita' ? ' disabled' : ''}></td>`).join('')}
-          <td class="ctr"><input type="checkbox" class="sw" data-uact="${id}"${u.active !== false ? ' checked' : ''}${self || u.role === 'super' ? ' disabled' : ''} aria-label="${esc(u.name)} attivo"></td>
-          <td class="r">${u.role === 'super' && ACC.role() !== 'super' ? '' : `<button class="btn sm" data-act="ureset" data-id="${id}">Reimposta password</button>`}</td></tr>`; }).join('')}
+        ${list.map(([id, u]) => { const self = id === ACC.sess.uid; const lockRole = self || (u.role === 'master' && ACC.role() !== 'super' && false); return `<tr class="${esc(u.active === false ? 'off' : '')}"><td><span class="av">${esc((u.name || '?')[0].toUpperCase())}</span> <b>${esc(u.name)}</b>${self ? ' <small>(tu)</small>' : ''}${u.mustChange ? '<br><small>deve cambiare la password</small>' : ''}</td><td><input class="code-in" data-usig="${esc(id)}" value="${esc(u.sigla || '')}" maxlength="3" placeholder="${esc(String(u.name || '').slice(0, 2).toUpperCase())}" aria-label="Sigla di ${esc(u.name)} nel resoconto (colonna Op.)"></td><td><input class="cell-in" data-ucell="${esc(id)}" value="${esc(u.cell || '')}" inputmode="tel" autocomplete="off" placeholder="facoltativo" aria-label="Cellulare di ${esc(u.name)}"></td>
+          <td>${u.role === 'super' ? 'Super Master' : `<select data-urole="${esc(id)}" aria-label="Ruolo di ${esc(u.name)}"${lockRole ? ' disabled' : ''}>${['operatore', 'master', 'contabilita'].map(r => `<option value="${esc(r)}"${u.role === r ? ' selected' : ''}>${ROLE_L[r]}</option>`).join('')}</select>`}</td>
+          ${S.cfg.agenzie.map(a => `<td class="ctr"><input type="checkbox" class="sw" data-uag="${esc(id)}" data-ag="${esc(a.id)}"${(u.agencies || []).includes(a.id) ? ' checked' : ''} aria-label="${esc(u.name)} in ${esc(a.nome)}"${u.role === 'super' || u.role === 'contabilita' ? ' disabled' : ''}></td>`).join('')}
+          <td class="ctr"><input type="checkbox" class="sw" data-uact="${esc(id)}"${u.active !== false ? ' checked' : ''}${self || u.role === 'super' ? ' disabled' : ''} aria-label="${esc(u.name)} attivo"></td>
+          <td class="r">${u.role === 'super' && ACC.role() !== 'super' ? '' : `<button class="btn sm" data-act="ureset" data-id="${esc(id)}">Reimposta password</button>`}</td></tr>`; }).join('')}
         </tbody></table></div></div>
         <div class="two"><div class="box form"><h3>Cosa può fare ogni ruolo</h3><ul class="small ul"><li><b>Operatore</b>: liste, posti sul bus, anagrafica, incassi e resoconto della sua agenzia, messaggi ai clienti.</li><li><b>Master</b>: tutto quello dell'operatore, più contabilità, impostazioni e account.</li><li><b>Contabilità</b>: vede cassa e contabilità di tutte le agenzie, senza modificare.</li></ul></div>
         <div class="box form"><h3>Password dimenticata</h3><div class="small">Premi «Reimposta password»: scegli una password provvisoria e dilla alla persona. Al primo accesso l'app le chiede di sceglierne una nuova.</div></div></div>`;
     } else if (sec === 'agenzie') body = `<h2>Agenzie e casse</h2><p class="sub">Ogni agenzia ha la sua cassa: gli incassi vanno nella cassa dell'agenzia scelta all'accesso.</p>
       ${S.cfg.agenzie.map((a, i) => `<div class="box form agf"><div class="grid3"><label>Agenzia<input data-cfgag="${i}" data-k="nome" value="${esc(a.nome)}"></label><label>Nome della cassa<input data-cfgag="${i}" data-k="cassa" value="${esc(a.cassa || '')}"></label><label>Indirizzo<input data-cfgag="${i}" data-k="indirizzo" value="${esc(a.indirizzo || '')}" placeholder="via, numero, città"></label></div><div class="grid3"><label>Contanti in cassa all'inizio (riporto) €<input data-cfgag="${i}" data-k="cassaIniziale" inputmode="decimal" value="${esc(a.cassaIniziale || '')}" placeholder="0"></label><span class="small" style="grid-column:span 2;align-self:end">Il fondo cassa da cui parte il conto dei contanti nel resoconto giornaliero (colonna «Saldo» del foglio CASSA).</span></div><div class="grid3"><label>Telefono dell'agenzia<input data-cfgag="${i}" data-k="tel" value="${esc(a.tel || '')}" inputmode="tel" autocomplete="off" placeholder="es. 0932 000000"></label><span class="small" style="grid-column:span 2;align-self:end">Compare agli altri operatori quando manca internet, per sentirsi al telefono prima di vendere posti o incassare (se l'operatore ha un cellulare nel suo account, si mostra quello). Il telefono dei messaggi WhatsApp resta quello di Impostazioni › WhatsApp.</span></div><div class="grid3"><label>Indirizzo del registratore telematico<input data-cfgag="${i}" data-k="rtIp" value="${esc(a.rtIp || '')}" placeholder="es. 192.168.1.50" inputmode="decimal" autocomplete="off"></label><label>Matricola del registratore (facoltativa)<input data-cfgag="${i}" data-k="rtMatricola" value="${esc(a.rtMatricola || '')}" placeholder="es. 99MEY012345" autocomplete="off"></label><span class="small" style="align-self:end">Custom Q3X-F collegato al router dell'agenzia. Per ora l'app non lo usa: serve per il collegamento diretto.</span></div></div>`).join('')}`;
-    else if (sec === 'luoghi') body = `<div class="sh"><div><h2>Luoghi di partenza e mappe</h2><p class="sub">Per ogni punto di salita incolla il link di Google Maps: nel messaggio WhatsApp il cliente lo tocca e trova il punto preciso. Il codice è quello della colonna «part» della lista (es. RG, MD).</p></div><button class="btn primary" data-act="lnew">${ICON.plus} Aggiungi luogo</button></div>
-      <div class="box tablecard"><div class="tscroll"><table class="rt luoghi"><thead><tr><th>Codice</th><th>Città</th><th>Punto di salita</th><th>Link Google Maps</th><th></th></tr></thead><tbody>
-      ${(S.cfg.luoghi || []).map((l, i) => `<tr><td><input data-cfgl="${i}" data-k="code" value="${esc(l.code || '')}" placeholder="RG" aria-label="Codice" class="code-in"></td><td><input data-cfgl="${i}" data-k="citta" value="${esc(l.citta || '')}" placeholder="Ragusa" aria-label="Città"></td><td><input data-cfgl="${i}" data-k="luogo" value="${esc(l.luogo || '')}" placeholder="es. Palazama" aria-label="Punto di salita"></td><td><input data-cfgl="${i}" data-k="maps" value="${esc(l.maps || '')}" placeholder="https://maps.app.goo.gl/…" aria-label="Link Google Maps"></td>
-        <td class="r nowrap"><a class="btn sm" href="${esc(l.maps || `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent([l.luogo, l.citta].filter(Boolean).join(', '))}`)}" target="_blank" rel="noopener">${l.maps ? 'Prova il link' : 'Cerca su Maps'}</a><button class="kebab" data-act="ldel" data-i="${i}" aria-label="Togli">${ICON.close}</button></td></tr>`).join('') || '<tr><td colspan="5" class="emptyrow">Nessun luogo: premi «Aggiungi luogo».</td></tr>'}
+    else if (sec === 'luoghi') body = `<div class="sh"><div><h2>Luoghi di partenza e mappe</h2><p class="sub">Per ogni punto di salita incolla il link di Google Maps: nel messaggio WhatsApp il cliente lo tocca e trova il punto preciso. Il codice è quello della colonna «part» della lista (es. RG, MD). Il colore serve a evidenziare la partenza nella lista dell'accompagnatore.</p></div><button class="btn primary" data-act="lnew">${ICON.plus} Aggiungi luogo</button></div>
+      <div class="box tablecard"><div class="tscroll"><table class="rt luoghi"><thead><tr><th>Codice</th><th>Città</th><th>Punto di salita</th><th>Colore</th><th>Link Google Maps</th><th></th></tr></thead><tbody>
+      ${(S.cfg.luoghi || []).map((l, i) => `<tr><td><input data-cfgl="${i}" data-k="code" value="${esc(l.code || '')}" placeholder="RG" aria-label="Codice" class="code-in"></td><td><input data-cfgl="${i}" data-k="citta" value="${esc(l.citta || '')}" placeholder="Ragusa" aria-label="Città"></td><td><input data-cfgl="${i}" data-k="luogo" value="${esc(l.luogo || '')}" placeholder="es. Palazama" aria-label="Punto di salita"></td><td class="nowrap"><span class="lcolw"><i class="lcold" style="background:${esc(LCOL_HEX[lcolKey(l)] || 'transparent')}"></i><select data-cfgl="${i}" data-k="colore" aria-label="Colore nella lista dell'accompagnatore">${LCOL.map(([k, lab]) => `<option value="${esc(k)}"${lcolKey(l) === k ? ' selected' : ''}>${esc(lab)}</option>`).join('')}</select></span></td><td><input data-cfgl="${i}" data-k="maps" value="${esc(l.maps || '')}" placeholder="https://maps.app.goo.gl/…" aria-label="Link Google Maps"></td>
+        <td class="r nowrap"><a class="btn sm" href="${esc(safeUrl(l.maps) || `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent([l.luogo, l.citta].filter(Boolean).join(', '))}`)}" target="_blank" rel="noopener">${safeUrl(l.maps) ? 'Prova il link' : 'Cerca su Maps'}</a><button class="kebab" data-act="ldel" data-i="${i}" aria-label="Togli">${ICON.close}</button></td></tr>`).join('') || '<tr><td colspan="6" class="emptyrow">Nessun luogo: premi «Aggiungi luogo».</td></tr>'}
       </tbody></table></div></div>
       <div class="box form"><h3>Come si prende il link</h3><ol class="small ul"><li>Premi «Cerca su Maps» accanto al luogo: si apre Google Maps.</li><li>Clicca sul punto esatto della fermata, poi su <b>Condividi</b> › <b>Copia link</b>.</li><li>Torna qui e incolla il link nella colonna «Link Google Maps».</li></ol></div>`;
     else if (sec === 'whatsapp') { const c = waCfg(); body = `<h2>WhatsApp ai clienti</h2>
       <div class="box form"><h3>Testo del messaggio «a mano»</h3><textarea id="s-wa" style="min-height:190px">${esc(S.cfg.waTemplate || DEFAULT_WA)}</textarea>
-      <span class="small">Le parole tra graffe si riempiono con i dati del cliente; una riga che resta vuota non viene mandata. Clicca per inserirle:</span><div class="chips">${WA_PH.map(p => `<code data-act="insph" data-p="${p}">{${p}}</code>`).join('')}</div>
+      <span class="small">Le parole tra graffe si riempiono con i dati del cliente; una riga che resta vuota non viene mandata. Clicca per inserirle:</span><div class="chips">${WA_PH.map(p => `<code data-act="insph" data-p="${esc(p)}">{${p}}</code>`).join('')}</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" data-act="savewa">Salva il testo</button><button class="btn" data-act="resetwa">Ripristina il testo standard</button></div></div>
       <div class="box form"><h3>Telefono dell'agenzia nel messaggio</h3><input id="s-tel" value="${esc(S.cfg.telAgenzia || '')}" placeholder="es. 0932 000000"><div><button class="btn" data-act="savetel">Salva</button></div></div>
       <div class="box form"><h3>Invio automatico</h3><div class="small">${waReady(c) ? '<span class="pill ok">Attivo</span> I codici di Meta sono inseriti.' : '<span class="pill tbd">Non ancora attivo</span> I codici di Meta li inserisce il tecnico dal Super Master.'}</div>${WA_GUIDE()}</div>`; }
@@ -4768,7 +4903,7 @@
         <div style="display:flex;gap:8px;flex-wrap:wrap">${st.linked ? '<button class="btn" data-act="syncnow">Sincronizza adesso</button>' : st.hasKey ? '<button class="btn primary" data-act="glink">Collega Dropbox</button>' : ''}</div></div>`; }
     else if (sec === 'danea') body = daneaSettingsHTML();
     else if (sec === 'registratore') body = rtSettingsHTML();
-    else if (sec === 'suppl') { const C = supplCfg(); const row = (k, l) => `<tr><td>${l}</td>${['tour', 'gita'].map(c => `<td><span class="sp-in"><input class="rt-in" data-spc="${c}" data-k="${k}" inputmode="decimal" value="${esc(String(C[c][k] ?? '').replace('.', ','))}" aria-label="${l} ${c}"><i>€</i></span></td>`).join('')}</tr>`;
+    else if (sec === 'suppl') { const C = supplCfg(); const row = (k, l) => `<tr><td>${l}</td>${['tour', 'gita'].map(c => `<td><span class="sp-in"><input class="rt-in" data-spc="${esc(c)}" data-k="${esc(k)}" inputmode="decimal" value="${esc(String(C[c][k] ?? '').replace('.', ','))}" aria-label="${esc(l)} ${c}"><i>€</i></span></td>`).join('')}</tr>`;
       body = `<h2>Supplementi file</h2><p class="sub">Il prezzario fisso dei posti nelle prime file. Vale per tutti i tour e le gite in giornata (non per eventi e biglietteria); nella lista la fila si sceglie dalla colonna «fila» e il supplemento entra da solo nel prezzo della persona.</p>
         <div class="box form"><table class="rt rt-tab sp-tab"><thead><tr><th>Posto</th><th>Tour <small>a persona, al giorno</small></th><th>Gite in giornata <small>a persona</small></th></tr></thead><tbody>
         ${row(1, '1ª fila')}${row(2, '2ª fila')}${row(3, '3ª fila')}${row(4, '4ª fila')}${row('p2', '1ª fila 2ª porta')}</tbody></table>
@@ -4779,7 +4914,7 @@
       <div class="small">Recuperando una copia, i viaggi si aggiungono a quelli che ci sono già: se un viaggio dell'elenco 2027 è ancora vuoto, la lista della copia ci entra dentro.</div></div>`;
     return `<div class="setp"><nav class="snav" aria-label="Sezioni delle impostazioni"><h1>Impostazioni</h1>
         <div class="sme"><span class="av">${esc((me.name || '?')[0].toUpperCase())}</span><span><b>${esc(me.name)}</b><br><small>${esc(ROLE_L[me.role])}</small></span></div>
-        ${secs.map(([k, l, i, c]) => `<button class="sitem" data-act="ssec" data-v="${k}" aria-current="${UI.ssec === k ? 'page' : 'false'}"><span class="sic" style="background:${c}" aria-hidden="true">${i}</span>${esc(l)}</button>`).join('')}
+        ${secs.map(([k, l, i, c]) => `<button class="sitem" data-act="ssec" data-v="${esc(k)}" aria-current="${esc(UI.ssec === k ? 'page' : 'false')}"><span class="sic" style="background:${esc(c)}" aria-hidden="true">${i}</span>${esc(l)}</button>`).join('')}
         <div class="small sver">Versione ${esc(VERSION)}</div></nav><section class="sbody">${body}</section></div>`;
   }
   function userModal(id) {
@@ -4789,8 +4924,8 @@
     UI.modal = { kind: 'user', id };
     openModal(u ? `Reimposta la password · ${esc(u.name)}` : 'Nuovo account', `
       ${u ? '' : `<div class="field"><label for="nu-n">Nome dell'account</label><input id="nu-n" autocomplete="off" placeholder="es. Giulia"></div>
-      <div class="field"><label for="nu-r">Ruolo</label><select id="nu-r">${['operatore', 'master', 'contabilita'].map(r => `<option value="${r}">${ROLE_L[r]}</option>`).join('')}</select></div>
-      <div class="field"><label>Agenzie in cui può entrare</label><div class="chips">${S.cfg.agenzie.map(a => `<label class="chk"><input type="checkbox" data-nuag="${a.id}"> ${esc(a.nome)}</label>`).join('')}</div><span class="small">Nessuna spunta = tutte le agenzie.</span></div>
+      <div class="field"><label for="nu-r">Ruolo</label><select id="nu-r">${['operatore', 'master', 'contabilita'].map(r => `<option value="${esc(r)}">${ROLE_L[r]}</option>`).join('')}</select></div>
+      <div class="field"><label>Agenzie in cui può entrare</label><div class="chips">${S.cfg.agenzie.map(a => `<label class="chk"><input type="checkbox" data-nuag="${esc(a.id)}"> ${esc(a.nome)}</label>`).join('')}</div><span class="small">Nessuna spunta = tutte le agenzie.</span></div>
       <div class="field"><label for="nu-c">Cellulare (facoltativo)</label><input id="nu-c" inputmode="tel" autocomplete="off" placeholder="es. 333 000 0000"><span class="small">Si mostra agli altri operatori solo quando manca internet, per sentirsi al telefono.</span></div>`}
       <div class="field"><label for="nu-p">Password provvisoria (almeno 8 caratteri)</label><input id="nu-p" autocomplete="new-password" value="${esc(tempPw())}"><span class="small">Dilla alla persona: al primo accesso ne sceglie una sua.</span></div>`,
       `<button class="btn" data-act="close">Annulla</button><button class="btn primary" data-act="usave">${u ? 'Reimposta' : 'Crea l\'account'}</button>`);
@@ -4814,16 +4949,16 @@
       .filter(e => UI.lgf !== 'err' || e.lv !== 'info').sort((a, b) => b.at.localeCompare(a.at)).slice(0, 300);
     const c = waCfg(); const st = STORE.status();
     return `<div class="sup"><div class="pagehead"><div><h1>Super Master</h1><div class="sub">Invisibile agli altri account · ${st.linked ? 'Dropbox collegato' : 'solo su questo computer'} · versione ${esc(VERSION)}</div></div><div class="hbtns"><button class="btn" data-act="lexport">Scarica il registro</button><button class="btn" data-act="logout">Esci</button></div></div>
-      <div class="two"><section class="box sup-log" aria-label="Log tecnico"><div class="sh"><h2>Log tecnico · ultimi 7 giorni</h2><div class="seg"><button data-act="lgf" data-v="all" aria-pressed="${UI.lgf !== 'err'}">Tutto</button><button data-act="lgf" data-v="err" aria-pressed="${UI.lgf === 'err'}">Errori e avvisi</button></div></div>
-        <div class="logl">${ev.map(e => `<div class="lg ${e.lv}"><span>${esc(dayISO(new Date(e.at)).slice(5).split('-').reverse().join('/'))} ${esc(hm(e.at))}</span><span class="lv">${esc(e.lv.toUpperCase())}</span><span>${esc(e.who ? e.who + ' · ' : '')}${esc(e.ag ? agName(e.ag) + ' · ' : '')}${esc(e.m)}<small> · ${esc(e.dev)}</small></span></div>`).join('') || '<div class="small">Niente nel registro.</div>'}</div></section>
+      <div class="two"><section class="box sup-log" aria-label="Log tecnico"><div class="sh"><h2>Log tecnico · ultimi 7 giorni</h2><div class="seg"><button data-act="lgf" data-v="all" aria-pressed="${esc(UI.lgf !== 'err')}">Tutto</button><button data-act="lgf" data-v="err" aria-pressed="${esc(UI.lgf === 'err')}">Errori e avvisi</button></div></div>
+        <div class="logl">${ev.map(e => `<div class="lg ${esc(e.lv)}"><span>${esc(dayISO(new Date(e.at)).slice(5).split('-').reverse().join('/'))} ${esc(hm(e.at))}</span><span class="lv">${esc(e.lv.toUpperCase())}</span><span>${esc(e.who ? e.who + ' · ' : '')}${esc(e.ag ? agName(e.ag) + ' · ' : '')}${esc(e.m)}<small> · ${esc(e.dev)}</small></span></div>`).join('') || '<div class="small">Niente nel registro.</div>'}</div></section>
         <div class="sup-col">${diagBox()}<section class="box form"><h2>Password e account</h2>
-          ${Object.entries(ACC.users()).filter(([id]) => id !== ACC.sess.uid).map(([id, u]) => `<div class="kv"><span><b>${esc(u.name)}</b> · ${esc(ROLE_L[u.role])}${u.active === false ? ' · disattivato' : ''}</span><button class="btn sm" data-act="ureset" data-id="${id}">Reimposta</button></div>`).join('') || '<div class="small">Nessun altro account.</div>'}
+          ${Object.entries(ACC.users()).filter(([id]) => id !== ACC.sess.uid).map(([id, u]) => `<div class="kv"><span><b>${esc(u.name)}</b> · ${esc(ROLE_L[u.role])}${u.active === false ? ' · disattivato' : ''}</span><button class="btn sm" data-act="ureset" data-id="${esc(id)}">Reimposta</button></div>`).join('') || '<div class="small">Nessun altro account.</div>'}
           <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn danger" data-act="resetall">Reimposta tutte le password, Master compresi</button><button class="btn" data-act="unewm">+ Nuovo Master</button></div></section>
         <section class="box form"><h2>Solo per il tecnico</h2>
           <label class="kv"><span><b>Modalità manutenzione</b><br><small>Gli altri account non possono entrare finché è attiva</small></span><input type="checkbox" class="sw" data-maint="1"${S.cfg.maint ? ' checked' : ''}></label>
           <div class="kv"><span><b>Sincronizzazione</b><br><small>${st.linked ? `${st.pending} modifiche in attesa${st.error ? ' · errore ' + esc(st.error) : ''}` : 'Dropbox non collegato'}</small></span>${st.linked ? '<button class="btn sm" data-act="syncnow">Sincronizza</button>' : ''}</div>
           <div class="kv"><span><b>Copia di questo computer</b><br><small>Cancella i dati salvati qui e li riscarica da Dropbox (le modifiche non inviate si perdono)</small></span><button class="btn sm danger" data-act="wipelocal"${st.linked ? '' : ' disabled'}>Riscarica</button></div></section>
-        <section class="box form"><h2>Chiavi e collegamenti</h2><div class="small">Codici dell'invio automatico WhatsApp (Meta). Si salvano in Dropbox e servono a tutti i computer per l'invio; li vede solo il Super Master.</div>${waSettingsHTML()}<div><button class="btn primary" data-act="savekeys">Salva le chiavi</button></div></section></div></div></div>`;
+        <section class="box form"><h2>Chiavi e collegamenti</h2><div class="small">Codici dell'invio automatico WhatsApp (Meta). Si salvano in Dropbox e servono a tutti i computer per l'invio: sullo schermo li vede solo il Super Master, ma restano salvati su ogni computer collegato. Usate un token con i soli permessi WhatsApp e rigeneratelo se un computer si perde.</div>${waSettingsHTML()}<div><button class="btn primary" data-act="savekeys">Salva le chiavi</button></div></section></div></div></div>`;
   }
   function exportLog() {
     const ev = STORE.list('/registro/').flatMap(([, d]) => (d.ev || []).map(e => Object.assign({ dev: d.dev }, e))).sort((a, b) => a.at.localeCompare(b.at));
@@ -4861,7 +4996,7 @@
       const allEv = Object.values(byDev).flat().sort((a, b) => a.t.localeCompare(b.t) || (a.n - b.n));
       const reg = STORE.list('/registro/').filter(([p]) => !p.startsWith('/registro/dispositivi/')).flatMap(([, d]) => (d.ev || []).map(e => Object.assign({ dev: d.dev }, e))).filter(e => { const dd = dayISO(new Date(e.at)); return dd >= from && dd <= to; }).sort((a, b) => a.at.localeCompare(b.at));
       const hm2 = iso => { const d = new Date(iso); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`; };
-      const q = v => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`;
+      const q = v => `"${csvSafe(v).replace(/"/g, '""')}"`;
       const KL = { avvio: 'Avvio', accesso: 'Accesso', pagina: 'Pagina aperta', azione: 'Pulsante', campo: 'Campo modificato', modulo: 'Modulo', trascina: 'Trascinamento', finestra: 'Finestra', avviso: 'Messaggio mostrato', salva: 'Salvataggio', sync: 'Sincronizzazione', 'sync-unione': 'Unione con altro computer', 'sync-conflitto': 'Conflitto risolto automaticamente', 'sync-errore': 'ERRORE sincronizzazione', rete: 'Rete', 'rete-errore': 'ERRORE rete', 'rete-lenta': 'Rete lenta', errore: 'ERRORE programma', 'console-error': 'ERRORE console', 'console-warn': 'Avviso console', lento: 'Rallentamento', stato: 'Stato', diagnostica: 'Diagnostica', 'registro-info': 'Registro', 'registro-avviso': 'Registro · avviso', 'registro-errore': 'ERRORE registro' };
       const isErr = r => /errore/.test(r.k);
       const csv = '﻿' + [['Data', 'Ora', 'Computer', 'Chi c\'era', 'Sessione', 'N.', 'Utente', 'Agenzia', 'Pagina', 'Tipo', 'Cosa è successo', 'Dettagli'].map(q).join(';')]
@@ -4921,12 +5056,15 @@
   const G_ACT = [['menu', 'Apre il menu della riga'], ['sel', 'Seleziona / deseleziona la riga'], ['selbk', 'Seleziona tutta la prenotazione'], ['range', 'Seleziona da… a… (intervallo)'], ['pay', 'Apre l\'incasso (€) della riga'], ['map', 'Mostra la prenotazione sulla piantina'], ['detach', 'Stacca la persona dalla comitiva'], ['none', 'Niente']];
   const G_MOUSE = [['click', 'Clic sul numero della riga'], ['dbl', 'Doppio clic sul numero'], ['meta', '⌘ Cmd + clic sul numero'], ['shift', 'Maiusc + clic sul numero'], ['alt', '⌥ Opzione + clic sul numero'], ['right', 'Tasto destro sulla riga (sul trackpad: clic con due dita)']];
   const G_KEYS = [['next', 'Sposta la selezione nella lista del bus dopo'], ['prev', 'Sposta la selezione nella lista del bus prima'], ['selrow', 'Seleziona / deseleziona la riga dove stai scrivendo'], ['selbk', 'Seleziona tutta la prenotazione della riga dove stai scrivendo'], ['pay', 'Apre l\'incasso (€) della riga dove stai scrivendo'], ['menu', 'Apre il menu della riga dove stai scrivendo'], ['insB', 'Inserisce una riga vuota sotto'], ['insA', 'Inserisce una riga vuota sopra'], ['map', 'Mostra sulla piantina la riga dove stai scrivendo'], ['detach', 'Stacca dalla comitiva la persona della riga dove stai scrivendo (o quelle selezionate)']];
-  const G_DEF = () => ({ mouse: { click: 'menu', dbl: 'selbk', meta: 'sel', shift: 'range', alt: 'pay', right: 'menu' },
+  // 2.1.14: gesti sulla piantina (clic su un posto occupato)
+  const G_SACT = [['menu', 'Apre il menu del posto'], ['mvbk', 'Sposta tutta la prenotazione'], ['mv', 'Sposta o scambia la persona'], ['selbk', 'Seleziona tutta la prenotazione'], ['pay', 'Apre l\'incasso (€) della prenotazione'], ['none', 'Niente']];
+  const G_SEAT = [['click', 'Clic su un posto occupato'], ['dbl', 'Doppio clic su un posto occupato'], ['alt', '⌥ Opzione + clic su un posto occupato'], ['meta', '⌘ Cmd + clic su un posto occupato'], ['shift', 'Maiusc + clic su un posto occupato']];
+  const G_DEF = () => ({ seat: { click: 'menu', dbl: 'mvbk', alt: 'mv', meta: 'selbk', shift: 'none' }, mouse: { click: 'menu', dbl: 'selbk', meta: 'sel', shift: 'range', alt: 'pay', right: 'menu' },
     keys: { next: 'Ctrl+Alt+ArrowRight', prev: 'Ctrl+Alt+ArrowLeft', selrow: 'Ctrl+Alt+KeyS', selbk: 'Ctrl+Alt+KeyA', pay: 'Ctrl+Alt+KeyE', menu: 'Ctrl+Alt+KeyM', insB: 'Ctrl+Alt+ArrowDown', insA: 'Ctrl+Alt+ArrowUp', map: 'Ctrl+Alt+KeyP', detach: 'Ctrl+Alt+KeyD' }, dragSel: true });
   const myUser = () => (ACC.sess && ACC.users()[ACC.sess.uid]) || null;
   function gest() {
     const d = G_DEF(); const u = myUser(); const g = (u && u.gest) || {};
-    return { mouse: Object.assign(d.mouse, g.mouse || {}), keys: Object.assign(d.keys, g.keys || {}), dragSel: g.dragSel == null ? d.dragSel : !!g.dragSel };
+    return { mouse: Object.assign(d.mouse, g.mouse || {}), seat: Object.assign(d.seat, g.seat || {}), keys: Object.assign(d.keys, g.keys || {}), dragSel: g.dragSel == null ? d.dragSel : !!g.dragSel };
   }
   function gestSave(fn) { const u = myUser(); if (!u) return; const g = gest(); fn(g); u.gest = g; save(); }
   // combinazione di tasti → testo leggibile sul Mac («⌃⌥→»)
@@ -5025,10 +5163,12 @@
     const g = gest();
     return `<h2>Gesti e scorciatoie</h2><p class="sub">Valgono solo per il tuo account (${esc((ACC.me() || {}).name || '')}), su ogni computer. Servono soprattutto nelle liste: selezionare più persone, spostarle da un bus all'altro, aprire il menu o l'incasso.</p>
       <div class="box form gx"><h3>${ICON.mouse} Mouse e trackpad</h3>
-        ${G_MOUSE.map(([k, l]) => `<label class="kv gx-r"><span>${esc(l)}</span><select data-gm="${k}">${G_ACT.filter(([a]) => k !== 'right' || a !== 'range').map(([a, al]) => `<option value="${a}"${g.mouse[k] === a ? ' selected' : ''}>${esc(al)}</option>`).join('')}</select></label>`).join('')}
+        ${G_MOUSE.map(([k, l]) => `<label class="kv gx-r"><span>${esc(l)}</span><select data-gm="${esc(k)}">${G_ACT.filter(([a]) => k !== 'right' || a !== 'range').map(([a, al]) => `<option value="${esc(a)}"${g.mouse[k] === a ? ' selected' : ''}>${esc(al)}</option>`).join('')}</select></label>`).join('')}
         <label class="kv gx-r"><span>Trascinare ${ICON.grip} una riga già selezionata<br><small>sposta insieme tutte le righe selezionate (su un'altra lista o sulla linguetta di un bus)</small></span><input type="checkbox" class="sw" data-gdrag="1"${g.dragSel ? ' checked' : ''}></label></div>
+      <div class="box form gx"><h3>${ICON.bus} Piantina del bus</h3><div class="small">Cosa succede facendo clic su un posto già occupato. «Sposta tutta la prenotazione»: poi tocchi il posto da cui farla partire e gli altri del gruppo si siedono accanto.</div>
+        ${G_SEAT.map(([k, l]) => `<label class="kv gx-r"><span>${esc(l)}</span><select data-gs="${esc(k)}">${G_SACT.map(([a, al]) => `<option value="${esc(a)}"${g.seat[k] === a ? ' selected' : ''}>${esc(al)}</option>`).join('')}</select></label>`).join('')}</div>
       <div class="box form gx"><h3>${ICON.key} Tastiera</h3><div class="small">Funzionano mentre scrivi nella lista («la riga dove stai scrivendo» è quella con il cursore). Premi «Cambia» e poi la nuova combinazione, con almeno uno tra ⌃ Ctrl, ⌥ Opzione e ⌘ Cmd. Esc annulla, ⌫ toglie la scorciatoia.</div>
-        ${G_KEYS.map(([k, l]) => `<div class="kv gx-r"><span>${esc(l)}</span><span class="gx-k"><kbd class="${gRec === k ? 'rec' : ''}">${gRec === k ? 'Premi i tasti…' : esc(comboLabel(g.keys[k]))}</kbd><button class="btn sm" data-act="gkrec" data-k="${k}">Cambia</button></span></div>`).join('')}
+        ${G_KEYS.map(([k, l]) => `<div class="kv gx-r"><span>${esc(l)}</span><span class="gx-k"><kbd class="${esc(gRec === k ? 'rec' : '')}">${gRec === k ? 'Premi i tasti…' : esc(comboLabel(g.keys[k]))}</kbd><button class="btn sm" data-act="gkrec" data-k="${esc(k)}">Cambia</button></span></div>`).join('')}
         <div class="kv gx-r"><span>Togliere la selezione · chiudere menu e riquadri</span><span class="gx-k"><kbd>Esc</kbd></span></div></div>
       <div><button class="btn" data-act="gkreset">Ripristina i gesti iniziali</button></div>`;
   }
@@ -5041,6 +5181,7 @@
     const d = e.target.dataset || {};
     if (d.gm) { gestSave(g => { g.mouse[d.gm] = e.target.value; }); toast('Salvato'); return; }
     if (d.gdrag) { gestSave(g => { g.dragSel = e.target.checked; }); return; }
+    if (d.gs) { if (G_SACT.some(([a]) => a === e.target.value) && G_SEAT.some(([k]) => k === d.gs)) gestSave(g => { g.seat[d.gs] = e.target.value; }); toast('Salvato'); return; }
   });
 
   // ---------- lavoro senza internet ----------
@@ -5279,7 +5420,7 @@
   function caseBody(c) {
     if (c.kind === 'posto') return `<ul class="cx-l"><li><b>${esc(c.mine.nome)}</b> · messo da ${esc(whoTxt(c.mine))} <small>(senza internet)</small></li><li><b>${esc(c.other.nome)}</b> · messo da ${esc(whoTxt(c.other))}</li></ul>
       <div class="cx-n">Dopo l'unione sul posto ${esc(c.seat)} è rimasto <b>${esc(c.kept)}</b>.${c.lost ? ` ${esc(c.lost)} ${c.lostAt ? 'ora è al ' + esc(c.lostAt) : 'ora è <b>senza posto</b>'}.` : ''}</div>`;
-    if (c.kind === 'bus') { const li = (a, tag) => a.map(x => `<li><b>${esc(x.nome)}</b> · ${esc(whoTxt(x))}${tag}</li>`).join(''); return `<div class="cx-n">Dopo l'unione sul ${esc(c.busL)} ci sono <b>${c.n} persone</b> e <b>${c.cap} posti</b>.</div><ul class="cx-l">${li(c.mine, ' <small>(senza internet)</small>')}${li(c.other, '')}</ul>`; }
+    if (c.kind === 'bus') { const li = (a, tag) => a.map(x => `<li><b>${esc(x.nome)}</b> · ${esc(whoTxt(x))}${tag}</li>`).join(''); return `<div class="cx-n">Dopo l'unione sul ${esc(c.busL)} ci sono <b>${esc(c.n)} persone</b> e <b>${esc(c.cap)} posti</b>.</div><ul class="cx-l">${li(c.mine, ' <small>(senza internet)</small>')}${li(c.other, '')}</ul>`; }
     return `<div class="cx-n">Dovuto <b>${money(c.due)}</b> · pagato <b>${money(c.paid)}</b> · <b>${money(c.extra)} in più</b>.</div><ul class="cx-l">${(c.movs || []).map(m => `<li><b>${money(m.tot)}</b> · ${esc(whoTxt({ by: m.by, ag: m.ag }))} · ${esc(fmtDate(String(m.at).slice(0, 10)).slice(0, 5))} ${esc(hm(m.at))}${m.qui ? ' <small>(da questo computer)</small>' : ''}</li>`).join('')}</ul>`;
   }
   const caseOpenBtn = c => ACC.can('viaggi') && S.trips.some(x => x.id === c.tripId) ? `<button class="btn sm" data-act="cxopen" data-id="${esc(c.id)}">${c.kind === 'incasso' ? 'Apri la prenotazione' : 'Apri la piantina'}</button>` : '';
@@ -5346,7 +5487,7 @@
   const closedMsg = t => `Lista chiusa${t.chiusa && t.chiusa.by ? ' da ' + t.chiusa.by : ''}: non si prendono nuove prenotazioni${isMaster() ? '' : ' (la riapre il Master)'}`;
   function lockBtnHTML(t) {
     if (tripCat(t) === 'biglietteria' && !t.chiusa && !isMaster()) return '';
-    if (isMaster()) return `<button class="btn sm ${t.chiusa ? 'lk-on' : 'ghost'}" data-act="tlock" title="${t.chiusa ? 'Riapri la lista: si possono di nuovo prendere prenotazioni' : 'Chiudi la lista: niente nuove prenotazioni'}">${t.chiusa ? ICON.lock + ' Lista chiusa · riapri' : ICON.unlock + ' Chiudi la lista'}</button>`;
+    if (isMaster()) return `<button class="btn sm ${esc(t.chiusa ? 'lk-on' : 'ghost')}" data-act="tlock" title="${esc(t.chiusa ? 'Riapri la lista: si possono di nuovo prendere prenotazioni' : 'Chiudi la lista: niente nuove prenotazioni')}">${t.chiusa ? ICON.lock + ' Lista chiusa · riapri' : ICON.unlock + ' Chiudi la lista'}</button>`;
     return t.chiusa ? `<span class="pill lk-pill">${ICON.lock} Lista chiusa</span>` : '';
   }
   function closedBannerHTML(t) {
@@ -5400,7 +5541,7 @@
     return best;
   }
   const LIST_L = { rows: 'lista', attesa: 'lista d\'attesa', annullati: 'non partono più' };
-  const F_L = { cognome: 'cognome', nome: 'nome', nascita: 'data', tel: 'contatto', natoA: 'luogo di nascita', part: 'partenza', hotel: 'hotel', cam: 'camera', fila: 'fila', note: 'note', pagato: '€', bus: 'bus', stato: 'stato' };
+  const F_L = { cognome: 'cognome', nome: 'nome', nascita: 'data', tel: 'contatto', natoA: 'luogo di nascita', part: 'partenza', hotel: 'hotel', cam: 'camera', fila: 'fila', note: 'note', nota2: 'note 2', pagato: '€', bus: 'bus', stato: 'stato' };
   const nmOf = x => `${String(x.cognome || '').replace(RX, '$1').trim()} ${x.nome || ''}`.trim() || 'riga senza nome';
   const few = (a, n = 3) => a.length <= n ? a.join(', ') : a.slice(0, n).join(', ') + ` e altri ${a.length - n}`;
   function sumLista(a, b) {
@@ -5529,7 +5670,7 @@
     UI.modal = { kind: 'hist', tripId: t.id, sec };
     const days = []; L.forEach(v => { const d = ddS(v.at); let g = days.find(x => x.d === d); if (!g) days.push(g = { d, v: [] }); g.v.push(v); });
     openModal(`Cronologia della ${HSEC_L[sec]}`, `<div class="hi-top"><span>${esc(t.nome)} · ${esc(fmtTripDate(t))}</span>${t.histLock ? `<span class="pill lk-pill">${ICON.lock} Indietro e Ripristina bloccati dal Master</span>` : ''}</div>
-      ${L.length ? days.map(g => `<div class="hi-day">${esc(g.d)}</div>${g.v.map((v, i) => `<div class="hi-v${v === L[0] ? ' now' : ''}"><div class="hi-t">${esc(hmS(v.at))}</div><div class="hi-b"><div class="hi-w"><b>${esc(v.by || (v.base ? 'Versione di partenza' : '—'))}</b>${v.ag ? `<span class="code">${esc(agName(v.ag))}</span>` : ''}${v === L[0] ? '<span class="pill ok">ultima versione</span>' : ''}</div><div class="hi-x">${esc(v.txt || '')}</div></div>${v === L[0] ? '' : `<button class="btn sm" data-act="hrest" data-id="${esc(v.id)}"${can ? '' : ' disabled title="Bloccato dal Master"'}>Ripristina</button>`}</div>`).join('')}`).join('')
+      ${L.length ? days.map(g => `<div class="hi-day">${esc(g.d)}</div>${g.v.map((v, i) => `<div class="hi-v${esc(v === L[0] ? ' now' : '')}"><div class="hi-t">${esc(hmS(v.at))}</div><div class="hi-b"><div class="hi-w"><b>${esc(v.by || (v.base ? 'Versione di partenza' : '—'))}</b>${v.ag ? `<span class="code">${esc(agName(v.ag))}</span>` : ''}${v === L[0] ? '<span class="pill ok">ultima versione</span>' : ''}</div><div class="hi-x">${esc(v.txt || '')}</div></div>${v === L[0] ? '' : `<button class="btn sm" data-act="hrest" data-id="${esc(v.id)}"${can ? '' : ' disabled title="Bloccato dal Master"'}>Ripristina</button>`}</div>`).join('')}`).join('')
         : `<div class="infobox">Ancora nessuna versione salvata per la ${HSEC_L[sec]} di questo viaggio. Da adesso ogni modifica viene salvata qui, con chi l'ha fatta.</div>`}`,
       `<button class="btn" data-act="close">Chiudi</button>`, true);
   }
@@ -5539,7 +5680,7 @@
     return `<div class="hbar" role="group" aria-label="Indietro e cronologia">
       <button class="btn sm" id="h-undo" data-act="hundo"${!st.length || !can ? ' disabled' : ''} title="${!can ? 'Bloccato dal Master' : last ? 'Annulla: ' + esc(sumOf(sec, last.before, last.after, t)) : 'Nessuna modifica da annullare fatta da questo computer'}">${ICON.undo} Indietro</button>
       <button class="btn sm" data-act="hlist">${ICON.hist} Cronologia</button>
-      ${isMaster() ? `<button class="btn sm ${t.histLock ? 'lk-on' : 'ghost'} ico-only" data-act="hlock" title="${t.histLock ? 'Sblocca: anche gli operatori possono usare Indietro e Ripristina' : 'Blocca Indietro e Ripristina per gli operatori'}" aria-label="${t.histLock ? 'Sblocca Indietro' : 'Blocca Indietro'}">${t.histLock ? ICON.lock : ICON.unlock}</button>` : t.histLock ? `<span class="lk-ico" title="Indietro e Ripristina bloccati dal Master">${ICON.lock}</span>` : ''}</div>`;
+      ${isMaster() ? `<button class="btn sm ${esc(t.histLock ? 'lk-on' : 'ghost')} ico-only" data-act="hlock" title="${esc(t.histLock ? 'Sblocca: anche gli operatori possono usare Indietro e Ripristina' : 'Blocca Indietro e Ripristina per gli operatori')}" aria-label="${esc(t.histLock ? 'Sblocca Indietro' : 'Blocca Indietro')}">${t.histLock ? ICON.lock : ICON.unlock}</button>` : t.histLock ? `<span class="lk-ico" title="Indietro e Ripristina bloccati dal Master">${ICON.lock}</span>` : ''}</div>`;
   }
   // aggiorna i pulsanti senza ridisegnare la pagina (si chiama a ogni salvataggio)
   function histBtns() { const t = UI.view === 'trip' && trip(); const el = $('.hbar'); if (t && el) el.outerHTML = histBarHTML(t); }
@@ -5561,13 +5702,13 @@
   // ---------- MANUALE D'ISTRUZIONI e ricerca «Aiuto» (2.1.7) ----------
   // Il manuale va aggiornato a ogni versione: mk.py si ferma se HELP_VER non è uguale alla versione dell'app.
   // Le «Novità» si prendono da sole da CHANGES.txt (le ultime 3 versioni): mk.py le scrive qui sotto, in HELP_NEWS.
-  const HELP_VER = '2.1.11';
+  const HELP_VER = '2.1.14';
   const HELP_CAT = [['primi', 'Primi passi'], ['viaggi', 'Viaggi e liste'], ['posti', 'Posti sul bus'], ['stampe', 'Stampe e messaggi'], ['cassa', 'Incassi e cassa'], ['bigl', 'Biglietteria'], ['buoni', 'Buoni regalo'], ['rete', 'Internet e computer'], ['imp', 'Account e impostazioni']];
   const HELP = [
     // ---- primi passi ----
     { id: 'accesso', c: 'primi', t: 'Entrare nell\'app e scegliere l\'agenzia', k: 'login accedere password nome agenzia ragusa modica marina entrare ricordami',
-      s: ['Apri l\'app dal suo indirizzo o dall\'icona sul computer.', 'Scrivi il tuo nome e la tua password.', 'Lascia la spunta su «Ricordami su questo computer» se il computer è dell\'agenzia.', 'Clicca «Entra».', 'Scegli l\'agenzia in cui lavori oggi (Ragusa, Modica o Marina di Ragusa): gli incassi vanno nella sua cassa.'],
-      n: 'Per cambiare agenzia durante la giornata clicca il nome dell\'agenzia in alto (con la puntina rossa).' },
+      s: ['Apri l\'app dal suo indirizzo o dall\'icona sul computer.', 'Scrivi il tuo nome e la tua password.', 'Metti la spunta su «Ricordami su questo computer» solo se il computer è dell\'agenzia e non lo usano altri.', 'Clicca «Accedi».', 'Scegli l\'agenzia in cui lavori oggi (Ragusa, Modica o Marina di Ragusa): gli incassi vanno nella sua cassa.'],
+      n: 'Per cambiare agenzia durante la giornata clicca il nome dell\'agenzia in alto (con la puntina rossa). Per sicurezza l\'app ti fa uscire da sola dopo 30 minuti in cui non la usi e quando cambia il giorno: rientri con nome e password.' },
     { id: 'password', c: 'primi', t: 'Cambiare la password o password dimenticata', k: 'password dimenticata cambiare nuova reimpostare account bloccato',
       s: ['Per cambiarla: in alto clicca «Impostazioni», poi «Il mio account».', 'Scrivi la password di adesso e due volte quella nuova (almeno 8 caratteri).', 'Clicca «Cambia la password».', 'Se l\'hai dimenticata: chiedi a un Master di andare in Impostazioni › «Operatori e permessi» e premere «Reimposta password» accanto al tuo nome.', 'Il Master ti dice una password provvisoria: al primo accesso l\'app ti chiede di sceglierne una nuova.'] },
     { id: 'menu', c: 'primi', t: 'Il menu in alto: a cosa serve ogni voce', k: 'menu barra voci sezioni dove trovo icone',
@@ -5583,9 +5724,10 @@
       s: ['Apri il viaggio e la scheda «Lista prenotazioni».', 'Scrivi come in Word: nella prima riga il cognome seguito da «x» e il numero di persone (es. «Rossi x 3») e il nome.', 'Nelle righe sotto scrivi le altre persone della comitiva.', 'Premi Invio per andare alla riga sotto.', 'Compila data, contatto, partenza (es. RG, MD), fila e note: si salva da solo.'],
       n: 'Se scrivi «x 4» su una comitiva da 3, l\'app aggiunge da sola le righe vuote da completare.' },
     { id: 'menuriga', c: 'viaggi', t: 'Il menu della riga: spostare, staccare, eliminare', k: 'menu riga numero tasto destro eliminare riga sopra sotto staccare capogruppo abituale saldato attesa',
-      s: ['Clicca il numero a sinistra della riga (oppure tasto destro sulla riga).', 'Da qui: incasso, «Mostra sulla piantina», «Stacca» una persona dalla comitiva, «Riga sopra» e «Riga sotto».', 'Accendi «Cliente abituale» (precedenza nelle prime file) o «Saldato» (anche se il prezzo è diverso).', 'Sposta in lista d\'attesa o in «Non parte più» (da rimborsare, già rimborsato, senza rimborso).', '«Elimina questa riga» in fondo, in rosso.'] },
+      s: ['Clicca il numero a sinistra della riga (oppure tasto destro sulla riga).', 'Il menu ha due parti: in alto «Solo …» vale per la sola persona di quella riga; sotto «Tutta la comitiva …» vale per tutto il gruppo.', 'Se hai selezionato più righe (⌘ + clic sul numero, oppure «Seleziona tutta la comitiva») le voci valgono per le persone selezionate: la comitiva intera solo se è tutta selezionata.', 'Da qui: incasso, «Mostra sulla piantina», «Sposta in» un altro bus, «Stacca» dalla comitiva, «Riga sopra» e «Riga sotto», lista d\'attesa e «Non parte più».', 'Accendi «Cliente abituale» (precedenza nelle prime file) o «Saldato» (anche se il prezzo è diverso).', '«Elimina questa riga» in fondo, in rosso.'],
+      n: 'Se sposti o metti in lista d\'attesa solo il capogruppo, «Cognome x N» passa alla persona che viene dopo nella lista: la comitiva non resta mai senza numero. Chi sposti da solo resta nella sua comitiva (per farne una prenotazione a sé usa «Stacca»).' },
     { id: 'attesa', c: 'viaggi', t: 'Lista d\'attesa e persone che non partono più', k: 'lista attesa conferma annullati non parte rimborso rinuncia',
-      s: ['Sotto la lista c\'è la «Lista d\'attesa»: scrivi lì chi aspetta un posto.', 'Quando si libera un posto clicca il numero della riga d\'attesa e scegli «Conferma: passa nella lista partecipanti».', 'Chi non parte più: menu della riga › «Non parte più…» e scegli da rimborsare, già rimborsato o senza rimborso.', 'Se ci ripensa: nelle tabelle in fondo clicca il numero della riga › «Riparte».'] },
+      s: ['Sotto la lista c\'è la «Lista d\'attesa»: scrivi lì chi aspetta un posto.', 'Quando si libera un posto clicca il numero della riga d\'attesa e scegli «Conferma: passa nella lista partecipanti».', 'Chi non parte più: menu della riga › «Non parte più…» e scegli da rimborsare, già rimborsato o senza rimborso.', '«Solo …» toglie una persona sola (la comitiva scende di uno); «Tutta la comitiva …» toglie tutto il gruppo, che entra in lista d\'attesa come «Cognome x N».', 'Se ci ripensa: nelle tabelle in fondo clicca il numero della riga › «Riparte».'] },
     { id: 'listachiusa', c: 'viaggi', t: 'Chiudere la lista (niente nuove prenotazioni)', k: 'lucchetto chiudere lista chiusa bloccare prenotazioni riaprire completo esaurito',
       s: ['Solo il Master: apri il viaggio e in alto clicca «Chiudi la lista».', 'Con la lista chiusa non si aggiungono righe, le comitive non crescono e non si conferma dalla lista d\'attesa.', 'Si possono ancora correggere i dati, completare i nomi mancanti, sistemare i posti, incassare e scrivere nella lista d\'attesa.', 'Per riaprirla il Master clicca «Lista chiusa · riapri».'] },
     { id: 'indietro', c: 'viaggi', t: 'Annullare un errore: tasto Indietro e Cronologia', k: 'indietro annullare errore sbagliato ctrl z cronologia versione ripristinare tornare prima chi ha modificato',
@@ -5600,15 +5742,19 @@
       s: ['Apri il viaggio e la scheda «Posti sul bus».', 'A sinistra c\'è la lista della gita: trascina una prenotazione sul posto della piantina (si siede tutta la comitiva) oppure un\'etichetta con il nome (solo quella persona).', 'In alternativa: clicca la prenotazione nella lista, poi clicca il posto.', 'Per sistemare tutti da soli con le vostre regole clicca «Sistema chi non ha il posto».'],
       n: 'Le richieste dei clienti (es. 1ª fila DX) si vedono sotto il nome: verde rispettata, rosso non rispettata.' },
     { id: 'spostaposto', c: 'posti', t: 'Spostare, scambiare o liberare un posto', k: 'spostare scambiare posto liberare togliere nota posto menu posto',
-      s: ['Clicca il posto occupato sulla piantina: si apre il menu del posto.', '«Sposta o scambia», poi clicca il posto di arrivo (se è occupato, i due si scambiano).', 'Nel menu puoi scrivere una nota sul posto (es. no lattosio) e premere «Salva».', '«Togli dal posto» lascia la persona sul bus senza posto; «Togli dal bus» la toglie da quel bus.'],
-      n: 'Puoi anche trascinare un posto su un altro.' },
+      s: ['Clicca il posto occupato sulla piantina: si apre il menu del posto.', '«Sposta o scambia», poi clicca il posto di arrivo (se è occupato, i due si scambiano).', '«Sposta tutta la prenotazione» (oppure doppio clic sul posto): poi clicca il posto da cui farla partire e gli altri del gruppo si siedono accanto.', 'Nel menu puoi scrivere una nota sul posto (es. no lattosio) e premere «Salva».', '«Togli dal posto» lascia la persona sul bus senza posto; «Togli dal bus» la toglie da quel bus.'],
+      n: 'Puoi anche trascinare un posto su un altro. Cosa fanno il clic, il doppio clic e ⌥/⌘/Maiusc + clic sui posti si sceglie in Impostazioni › Gesti e scorciatoie › Piantina del bus.' },
+    { id: 'sospeso', c: 'posti', t: 'Posti in sospeso: mettere da parte le persone mentre sistemi la piantina', k: 'sospeso posti in sospeso parcheggio da parte mettere da parte sistemare spostare liberare avviso dimenticato',
+      s: ['Sopra la piantina c\'è il riquadro «Posti in sospeso».', 'Trascina lì un posto occupato, oppure clicca il posto › «Metti in sospeso»: il posto si libera e la persona resta da parte nel riquadro.', 'Sistema gli altri come vuoi.', 'Per rimetterla: trascina il suo nome su un posto, oppure clicca il nome e poi il posto.', 'La ✕ accanto al nome la toglie dal sospeso: resta sul bus senza posto.'],
+      n: 'Se qualcuno resta in sospeso, la linguetta del bus mostra un numero rosso e l\'app avvisa prima di uscire dalla piantina, stampare o mandare i messaggi WhatsApp.' },
     { id: 'guida', c: 'posti', t: 'Riservare un posto per guida o 2° autista', k: 'guida secondo autista riservare posto accompagnatore',
       s: ['Clicca un posto libero sulla piantina.', 'Clicca «Riserva per guida / 2° autista».', 'Per togliere la riserva clicca di nuovo il posto e «Togli la riserva».'] },
     { id: 'piubus', c: 'posti', t: 'Più bus sullo stesso viaggio', k: 'secondo bus aggiungere bus piu bus lista per bus spostare bus cambiare piantina',
       s: ['Nella scheda «Posti sul bus» clicca il «+» accanto alle linguette dei bus.', 'Scegli la piantina del pullman e clicca «Aggiungi bus».', 'Nella lista prenotazioni ogni bus ha la sua lista: per spostare persone selezionale e usa «Sposta in».', 'Per cambiare il modello di un bus usa «Cambia» sotto «Piantina» nel pannello del bus.'] },
     // ---- stampe e messaggi ----
     { id: 'stampe', c: 'stampe', t: 'Stampare piantina, cartelli, lista e rooming list', k: 'stampare stampa piantina cartelli lista rooming autista accompagnatore pdf',
-      s: ['Apri il viaggio.', 'Nella scheda «Posti sul bus» clicca «Stampa piantina» o «Stampa cartelli» (divisi per lato autista e lato hostess).', 'Nella «Lista prenotazioni» clicca «Stampa lista»; per i tour anche «Rooming list».', 'Nell\'anteprima clicca «Stampa» e scegli la stampante o «Salva come PDF».'] },
+      s: ['Apri il viaggio.', 'Nella scheda «Posti sul bus» clicca «Stampa piantina» o «Stampa cartelli» (divisi per lato autista e lato hostess).', '«Stampa lista passeggeri» (sotto «Messaggi WhatsApp ai clienti») fa la lista per l\'accompagnatore: solo le persone di quel bus, con data, partenze e orari, nome del bus e numero di persone; niente prezzi, note della gita, supplementi o lista d\'attesa. La partenza di ognuno è colorata.', 'Nella «Lista prenotazioni» clicca «Stampa lista»; per i tour anche «Rooming list».', 'Nell\'anteprima clicca «Stampa» e scegli la stampante o «Salva come PDF».'],
+      n: 'Sulla piantina «X 2», «X 5» dice quanti sono nel gruppo; in alto a destra del riquadro c\'è la fila pagata con il supplemento (es. «1ª fila»).' },
     { id: 'programma', c: 'stampe', t: 'Allegare il programma del viaggio (PDF o foto)', k: 'programma pdf foto allegare trascinare locandina',
       s: ['Apri il viaggio.', 'Trascina il PDF o la foto sul riquadro «Trascina qui il programma» in alto.', 'Per vederlo clicca il suo nome; per toglierlo usa la «x» accanto.'] },
     { id: 'whatsapp', c: 'stampe', t: 'Mandare ai clienti posto e programma su WhatsApp', k: 'whatsapp messaggio clienti inviare posto programma invia a tutti',
@@ -5646,6 +5792,9 @@
     { id: 'bgbus', c: 'bigl', t: 'Biglietteria: vendere biglietto + bus', k: 'vendere biglietto bus pacchetto biglietto piu bus concerto con il bus mettere in lista posti liberi',
       s: ['In «Biglietteria», scheda «Vendita», scegli l\'evento collegato al viaggio con il bus.', 'Nel riquadro azzurro vedi i posti liberi sul bus: clicca «Vendi biglietto + bus».', 'Scrivi quante persone, i nomi (il cognome si ripete da solo se è lo stesso), il telefono, il tipo di biglietto e il giorno di emissione.', 'Clicca «Metti in lista e incassa»: le persone entrano nella lista del viaggio e si apre l\'incasso con bus + biglietto.'],
       n: 'Se sul bus non ci sono abbastanza posti la vendita è bloccata. La parte sotto il riquadro azzurro vende solo il biglietto, senza il bus.' },
+    { id: 'note2', c: 'viaggi', t: 'Note 2: note interne che non vanno in stampa', k: 'note 2 nota interna privata promemoria non stampare stampa lista appunti',
+      s: ['Nella lista prenotazioni, accanto alla colonna «note», c\'è la colonna «note 2».', 'Scrivi lì gli appunti solo per voi dell\'agenzia (es. «ha pagato con bonifico», «richiamare venerdì»).', 'Quando stampi la lista, la colonna «note 2» non compare: nella stampa c\'è solo «note».'],
+      n: 'Le note scritte in «note» vanno in stampa e servono anche per le richieste di posto (es. «vicino al finestrino»); quelle in «note 2» no.' },
     { id: 'piantinaaccanto', c: 'posti', t: 'Vedere la piantina accanto alla lista', k: 'piantina accanto lista vicino affiancata nascondere mostrare piantina nascosta dock',
       s: ['Apri la lista prenotazioni del viaggio.', 'Clicca «Piantina accanto» (sopra la lista, a destra): la piantina compare a fianco e puoi trascinare le persone sui posti.', 'Per toglierla clicca «Nascondi piantina».'],
       n: 'Negli eventi la piantina parte nascosta. L\'app ricorda la scelta per ogni viaggio.' },
@@ -5688,7 +5837,7 @@
     { id: 'agenzie', c: 'imp', t: 'Agenzie, casse e telefoni', k: 'agenzia cassa telefono indirizzo fondo cassa registratore impostazioni',
       s: ['Solo il Master: Impostazioni › «Agenzie e casse».', 'Per ogni agenzia: nome, nome della cassa, indirizzo, contanti iniziali, telefono dell\'agenzia.', 'Le modifiche si salvano da sole.'] },
     { id: 'luoghi', c: 'imp', t: 'Luoghi di partenza e mappe', k: 'luoghi partenza fermata google maps link punto salita',
-      s: ['Impostazioni › «Luoghi di partenza e mappe».', 'Clicca «Aggiungi luogo» e scrivi codice (es. RG), città e punto di salita.', 'Clicca «Cerca su Maps», poi su Google Maps «Condividi» › «Copia link» e incolla il link nella colonna.'] },
+      s: ['Impostazioni › «Luoghi di partenza e mappe».', 'Clicca «Aggiungi luogo» e scrivi codice (es. RG), città e punto di salita.', 'Clicca «Cerca su Maps», poi su Google Maps «Condividi» › «Copia link» e incolla il link nella colonna.', 'Nella colonna «Colore» scegli il colore con cui la partenza è evidenziata nella lista per l\'accompagnatore (di partenza: Ragusa verde, Modica giallo, Coffa azzurro, Ispica viola, Rosolini arancio).'] },
     { id: 'backup', c: 'imp', t: 'Copia di sicurezza dei dati', k: 'copia sicurezza backup scaricare salvare dati',
       s: ['Solo il Master: Impostazioni › «Copia di sicurezza».', 'Clicca il pulsante per scaricare la copia: è un file con tutti i viaggi, i clienti e gli incassi.', 'Conservala in un posto sicuro (es. una cartella di Dropbox).'] }
   ];
@@ -5711,7 +5860,7 @@
       .filter(r => r.hit && r.sc >= 2).sort((a, b) => b.sc - a.sc);
     return R.length ? R.filter(r => r.sc >= R[0].sc * 0.4).slice(0, 8) : [];
   }
-  const HELP_NEWS = "VERSIONE 2.1.11 · 05/11/2026\nCARTELLI SENZA I NUMERI DEI POSTI\n\n1. Nei cartelli da stampare, sul bordo resta solo la scritta «LATO AUTISTA» o «LATO HOSTESS»: niente più numeri dei posti.\n\n\nVERSIONE 2.1.10 · 05/11/2026\nLISTA DEGLI EVENTI: COLONNE PIÙ EQUILIBRATE (da caricare al posto della 2.1.8 e della 2.1.9)\n\n1. Nella lista degli eventi la colonna «note / mail» non si prende più tutto lo spazio libero: le colonne strette (data, part, emissione, posto, quota, €) hanno la loro misura e lo spazio che resta si divide in parti uguali tra cognome, nome, contatto, fila e note. Sugli schermi stretti la lista scorre di lato come prima.\n2. Una nota lunga si legge tutta passando sopra con il mouse.\n\n\nVERSIONE 2.1.9 · 05/11/2026\nCORREZIONI DOPO UN SECONDO CONTROLLO DELLA 2.1.8 (da caricare al posto della 2.1.8)\n\n1. Eventi creati prima della 2.1.8: restano come erano (biglietto a tutti, la fila resta una richiesta di posto sul bus). Nel riquadro del biglietto c'è l'avviso «Regola di prima» con il pulsante «Usa la regola nuova». Gli eventi nuovi e quelli collegati alla Biglietteria usano la regola nuova.\n2. «Vendi biglietto + bus»: il cliente entra sempre come prenotazione a sé («Cognome x N»), dopo le righe riservate alle comitive, mai dentro una comitiva sopra che aspetta ancora dei nomi; si vende solo per i viaggi di tipo «Evento».\n3. Posti finiti: si contano riga per riga nella lista di ogni bus, così chi viene spostato da solo in un bus pieno è lui a risultare «senza posto». L'avviso rosso compare anche quando è pieno un solo bus.\n4. Biglietti dell'agenzia: con persone che hanno biglietti di tipi diversi si incassa una persona alla volta.\n5. Diritti contati anche per i biglietti a 0 € (es. bambini gratis).\n6. Un tipo di biglietto senza prezzo non prende più il prezzo del primo tipo: la quota resta «—» finché non scrivi il prezzo.\n7. Biglietteria: si collegano solo i viaggi di tipo «Evento»; se scolleghi un viaggio da «Modifica evento» i prezzi restano scritti nella lista; un evento collegato non si può togliere (prima va scollegato).\n8. Excel della cassa: con più di 3 righe, dalla terza in poi si uniscono in Q3 con i totali giusti (scritto nelle note).\n9. Piccole cose: «Apri il viaggio» chiude la finestra; la data di emissione senza anno nel futuro (es. 28/12 scritta a gennaio) è dell'anno scorso; nell'incasso il nome lungo della riga si legge passando sopra con il mouse.\n";
+  const HELP_NEWS = "VERSIONE 2.1.14 · 06/11/2026\nMIGLIORIE DEL 6/11: LISTA PER L'ACCOMPAGNATORE, POSTI IN SOSPESO, MENU E SPOSTAMENTI (da caricare al posto della 2.1.13)\n\n1. Posti sul bus › «Stampa lista passeggeri» (sotto «Messaggi WhatsApp ai clienti»): lista per l'accompagnatore con solo le persone di quel bus. Ci sono nome della gita, data, partenze con orari (e quante persone salgono in ognuna), nome del bus e numero di persone; per ognuno contatto, partenza, note e posto. Niente prezzi, note della gita, supplementi delle file e lista d'attesa.\n2. Colori delle partenze: nella lista per l'accompagnatore la partenza di ognuno è colorata. Il colore si sceglie in Impostazioni › Luoghi di partenza (colonna «Colore»); se non lo scegli: Ragusa verde, Modica giallo, Coffa azzurro, Ispica viola, Rosolini arancio.\n3. Piantina: «Sposta tutta la prenotazione» nel menu del posto, oppure doppio clic sul posto. Poi tocchi il posto da cui farla partire e gli altri del gruppo si siedono accanto. In Impostazioni › Gesti e scorciatoie c'è il riquadro «Piantina del bus» per scegliere cosa fanno clic, doppio clic e ⌥ / ⌘ / Maiusc + clic sui posti.\n4. Posti in sospeso: riquadro sopra la piantina per mettere da parte le persone mentre sistemi gli altri (trascina lì il posto, oppure menu del posto › «Metti in sospeso»). Si rimettono trascinando il nome su un posto, oppure clic sul nome e poi sul posto. Se qualcuno resta lì, la linguetta del bus mostra un numero rosso e l'app avvisa prima di uscire dalla piantina, stampare o mandare i messaggi.\n5. Scritte sulla piantina: «X 2», «X 6» staccati. In ogni fila del gruppo ci sono i nomi di chi siede proprio lì (con tre posti vicini il terzo va sotto il secondo), con il nome intero quando ci sta. Nel riquadro «X N», in alto a destra, la fila pagata con il supplemento (es. «1ª fila»).\n6. Menu della riga (tasto destro): parte «Solo …» per la persona di quella riga e parte «Tutta la comitiva …». Con più righe selezionate le voci valgono per le persone selezionate, e per la comitiva intera solo se è tutta selezionata. Nuove voci: solo questa persona in lista d'attesa o «Non parte più», «Seleziona tutta la comitiva», «Elimina le righe selezionate».\n7. Spostamenti nella lista: chi viene spostato non entra più per sbaglio in un'altra comitiva a cui mancano dei nomi (resta una riga vuota per il nome che manca). Se si sposta, si stacca o si elimina il capogruppo, «Cognome x N» passa alla persona che viene dopo nella stessa lista: prima poteva passare a chi stava in un'altra lista e chi era sotto restava senza numero.\n8. Eliminare la riga di una persona della comitiva: il numero «x N» resta e il nome che manca resta da scrivere; chi sta sotto non entra nella comitiva.\n9. Stampa della lista: il riquadro delle partenze in alto ora è alto come tutta l'intestazione.\n10. Manuale «Aiuto» aggiornato: menu della riga, posti in sospeso, spostare tutta la prenotazione, stampa per l'accompagnatore, colori dei luoghi.\n\nVERSIONE 2.1.13 · 06/11/2026\nCORREZIONI DI SICUREZZA (da caricare al posto della 2.1.12)\n\n1. «Recupera da una copia»: si accettano solo copie con dati in ordine. Gite, clienti e movimenti con codici interni, date o tipi non validi vengono scartati e l'avviso dice quanti sono. Una copia preparata ad arte non può più inserire comandi nelle pagine dell'app. Si usa solo dal Master.\n2. Programmi PDF e cronologia: l'app legge, scrive e cancella file su Dropbox solo dentro /programmi e /cronologia, mai altrove.\n3. «Link programma» della gita: si accettano solo indirizzi internet (https://…). Un indirizzo scritto senza https:// (es. www.laterra.it/…) si completa da solo. Vale anche per il link mandato ai clienti e per i link di Google Maps dei luoghi di partenza.\n4. Pagina del posto per i clienti: il link del programma si apre solo se è un indirizzo internet e non si possono più aggiungere note inventate al link.\n5. Accesso: dopo 30 minuti senza usare l'app, e quando cambia il giorno, l'app ti fa uscire e si rientra con nome e password. «Ricordami su questo computer» non è più spuntato di serie.\n6. Password: l'impronta è più robusta (600.000 passaggi invece di 150.000) e si aggiorna da sola al primo accesso di ciascuno, senza cambiare la password.\n7. File CSV (cassa e diagnostica): un testo che comincia con = + - @ non diventa più una formula quando si apre il file in Excel.\n8. Gite chiuse o bloccate dal Master: solo il Master può eliminarle.\n9. Protezione del browser (Content-Security-Policy): la pagina può usare solo i propri file e comunicare solo con Dropbox, Meta (WhatsApp) e Google Fonts. Se blocca qualcosa, lo annota nella diagnostica.\n10. File di Danea: le date sono controllate anche nel file per l'importazione.\n11. Nuovo file avvio.js: va caricato su GitHub insieme agli altri.\n\nVERSIONE 2.1.12 · 06/11/2026\nLISTA PRENOTAZIONI: NUOVA COLONNA «NOTE 2» E SPAZI SISTEMATI\n\n1. Nuova colonna «note 2», accanto a «note»: appunti interni che restano solo nella lista dell'app e non vanno nella stampa.\n2. La colonna «note / mail» si chiama solo «note».\n3. Colonna «posto» più corta: c'è scritto solo bus e posto, es. «B1 7» (il nome intero del bus si legge passando sopra con il mouse).\n4. Colonne «quota» ed «€» più strette; colonna «N» a sinistra più stretta.\n5. Cognome, nome, data e partenza restano larghi come prima; lo spazio che resta si divide tra «note» e «note 2». Sugli schermi stretti la lista scorre di lato.\n6. Con il tema scuro la lista resta chiara e leggibile (prima quota, posto e pulsanti € diventavano scuri o sbiaditi).\n\n\nVERSIONE 2.1.11 · 05/11/2026\nCARTELLI SENZA I NUMERI DEI POSTI\n\n1. Nei cartelli da stampare, sul bordo resta solo la scritta «LATO AUTISTA» o «LATO HOSTESS»: niente più numeri dei posti.\n\n\nVERSIONE 2.1.10 · 05/11/2026\nLISTA DEGLI EVENTI: COLONNE PIÙ EQUILIBRATE (da caricare al posto della 2.1.8 e della 2.1.9)\n\n1. Nella lista degli eventi la colonna «note / mail» non si prende più tutto lo spazio libero: le colonne strette (data, part, emissione, posto, quota, €) hanno la loro misura e lo spazio che resta si divide in parti uguali tra cognome, nome, contatto, fila e note. Sugli schermi stretti la lista scorre di lato come prima.\n2. Una nota lunga si legge tutta passando sopra con il mouse.\n";
   const GIOVANNI = 'SE PROPRIO NON STAI TROVANDO SOLUZIONE AL PROBLEMA ALLORA È GIUNTA L\'ORA DI CHIAMARE GIOVANNI';
   const HUI = { q: '', open: '', giov: false };
   function helpArt(a) {
@@ -5819,32 +5968,67 @@
   const ddmm = () => fmtDate(todayISO()).slice(0, 5);
 
   // ---------- menu delle righe ----------
+  // 2.1.14: il menu ragiona su chi tocca davvero. Con più righe selezionate (e la riga cliccata tra queste) le voci valgono
+  // per le persone selezionate; la comitiva intera solo se è tutta selezionata. Senza selezione ci sono due parti
+  // separate: le voci per la sola persona della riga e quelle per tutta la comitiva.
   function rowMenu(id, el) {
     const t = trip(); const D = deriveBookings(t); const bk = D.find(x => x.persone.some(p => p.id === id)); const r = rowById(t, id); if (!r) return;
     const head = bk && bk.id === id; const P = bk && bk.persone.find(p => p.id === id); const bigl = tripCat(t) === 'biglietteria';
     const multi = multiBus(t); const lk = listKey(t, r); const pos = listRows(t, lk).indexOf(r) + 1;
     const sel = (UI.lsel || []).filter(x => { const rr = rowById(t, x); return rr && !isEmptyRow(rr); });
     const inSel = sel.includes(id) && sel.length > 1;
-    const B = (act, ico, txt, extra = '', cls = '') => `<button class="${cls}" data-act="${act}" ${extra}>${ico}<span>${txt}</span></button>`;
+    const B = (act, ico, txt, extra = '', cls = '') => `<button class="${esc(cls)}" data-act="${esc(act)}" ${extra}>${ico}<span>${txt}</span></button>`;
     const comit = bk && bk.persone.length > 1;
     const others = multi ? tripLists(t).filter(L => L.id !== lk) : [];
-    let h = `<div class="ph"><b>${bk ? `${esc(bkName(bk))}${comit ? ' x ' + bk.persone.length : ''}` : 'Riga vuota'}</b><span>Riga ${pos}${multi ? ' · ' + esc(listName(t, lk)) : ''}${bk && !head ? ` · ${esc(P.cognome)} ${esc(P.nome)}` : ''}</span></div>`;
-    if (inSel) h += `<div class="pm-sec sel"><div class="pm-t">${sel.length} righe selezionate</div>${others.length ? `<div class="pm-chips"><span>Sposta in</span>${others.map(L => `<button data-act="lmove" data-to="${esc(L.id)}">${esc(L.b ? L.b.label : L.label)}</button>`).join('')}</div>` : ''}${B('lselclear', ICON.close, 'Togli la selezione')}</div>`;
-    if (bk) {
-      h += `<div class="pm-sec"><div class="pm-t">${comit ? 'Comitiva' : 'Prenotazione'}</div>`;
-      if (ACC.can('cassa')) h += comit ? B('pay', ICON.euro, 'Incasso di tutta la comitiva', `data-id="${bk.id}"`) + (head ? '' : B('pay', ICON.euro, `Incasso solo di ${esc(P.nome || P.cognome)}`, `data-id="${bk.id}" data-pid="${id}"`)) : B('pay', ICON.euro, 'Incasso e documento', `data-id="${bk.id}"`);
-      if (!bigl) h += B('selbk', ICON.pin, 'Mostra sulla piantina', `data-id="${bk.id}"`);
-      if (others.length && !inSel) h += `<div class="pm-chips"><span>${head || !comit ? (comit ? 'Sposta la comitiva in' : 'Sposta in') : `Sposta solo ${esc(P.nome || P.cognome)} in`}</span>${others.map(L => `<button data-act="lmove1" data-id="${id}" data-whole="${head ? 1 : 0}" data-to="${esc(L.id)}">${esc(L.b ? L.b.label : L.label)}</button>`).join('')}</div>`;
-      if (comit && !head) h += B('detach', ICON.unlink, `Stacca ${esc(P.nome || P.cognome)} dalla comitiva <small>diventa una prenotazione a sé</small>`, `data-id="${id}"`);
-      if (comit && head) h += B('detach', ICON.unlink, `Stacca il capogruppo <small>${esc(bk.persone[1].cognome)} ${esc(bk.persone[1].nome)} diventa capogruppo (x ${Math.max(bk.n, bk.persone.length) - 1})</small>`, `data-id="${id}"`);
-      if (r.stacc) h += B('reattach', ICON.link2, `Rimetti nella comitiva ${esc(r.stacc.da.replace(/ x \d+$/, ''))} <small>staccata il ${esc(fmtDate(r.stacc.il.slice(0, 10)).slice(0, 5))}${r.stacc.chi ? ' da ' + esc(r.stacc.chi) : ''}</small>`, `data-id="${id}"`);
-      h += B('rsel', ICON.sel, (UI.lsel || []).includes(id) ? 'Togli dalla selezione' : 'Seleziona questa riga', `data-id="${id}"`);
+    const chips = (lbl, act, extra) => others.length ? `<div class="pm-chips"><span>${lbl}</span>${others.map(L => `<button data-act="${esc(act)}" ${extra} data-to="${esc(L.id)}">${esc(L.b ? L.b.label : L.label)}</button>`).join('')}</div>` : '';
+    const annDet = (act, extra, what) => bigl ? B(act, ICON.xcirc, `${what} <small>vuole vendere il biglietto</small>`, `${extra} data-k="vende"`) : `<details class="pm-det"><summary>${ICON.xcirc}<span>${what}: non parte più…</span></summary>${B(act, '', 'da rimborsare', `${extra} data-k="da"`)}${B(act, '', 'già rimborsato', `${extra} data-k="fatto"`)}${B(act, '', 'senza rimborso', `${extra} data-k="no"`)}</details>`;
+    const who = P ? esc(P.nome || P.cognome) : '';
+    let h = `<div class="ph"><b>${bk ? `${esc(bkName(bk))}${comit ? ' x ' + bk.persone.length : ''}` : 'Riga vuota'}</b><span>Riga ${pos}${multi ? ' · ' + esc(listName(t, lk)) : ''}${bk && (!head || comit) ? ` · ${esc(P.cognome)} ${esc(P.nome)}` : ''}</span></div>`;
+    if (inSel) {
+      // persone selezionate: quali comitive sono intere e quali no
+      const set = new Set(sel); const full = D.filter(b => b.persone.every(p => set.has(p.id)));
+      const one = full.length === 1 && full[0].persone.length === sel.length && full[0].persone.length > 1 ? full[0] : null;
+      const what = one ? `Tutta la comitiva ${esc(bkName(one))} x ${one.persone.length}` : `Le ${sel.length} persone selezionate`;
+      const anyGroup = sel.some(x => { const b = D.find(y => y.persone.some(p => p.id === x)); return b && b.persone.length > 1 && !full.includes(b); });
+      h += `<div class="pm-sec sel"><div class="pm-t">${one ? `Comitiva ${esc(bkName(one))} x ${one.persone.length} · selezionata tutta` : `${sel.length} righe selezionate${full.length ? ` · ${full.length === 1 ? '1 comitiva intera' : full.length + ' comitive intere'}` : ''}`}</div>`;
+      h += chips('Sposta in', 'lmove', '');
+      if (!bigl && one) h += B('selbk', ICON.pin, 'Mostra sulla piantina', `data-id="${esc(one.id)}"`);
+      if (anyGroup) h += B('detach', ICON.unlink, 'Stacca dalle loro comitive <small>le persone selezionate diventano prenotazioni a sé</small>', '');
+      h += B('toattsel', ICON.clock, `${what} in lista d'attesa`, '');
+      h += annDet('toannsel', '', what);
+      h += B('lselclear', ICON.close, 'Togli la selezione');
+      h += B('rowdelsel', ICON.trash, `Elimina le ${sel.length} righe selezionate`, '', 'danger');
       h += '</div>';
+      return openPop(el, h, 'rmenu');
     }
-    h += `<div class="pm-sec"><div class="pm-two">${B('rowins', ICON.up, 'Riga sopra', `data-id="${id}" data-d="0"`)}${B('rowins', ICON.down, 'Riga sotto', `data-id="${id}" data-d="1"`)}</div></div>`;
-    if (bk && head && !bigl) h += `<div class="pm-sec">${B('abituale', ICON.star, 'Cliente abituale <small>precedenza nelle prime file</small>', `data-id="${bk.id}"`, 'tg' + (bk.head.abituale ? ' on' : ''))}${B('saldato', ICON.check, 'Saldato <small>anche se il prezzo è diverso</small>', `data-id="${bk.id}"`, 'tg' + (bk.head.saldato ? ' on' : ''))}</div>`;
-    if (bk) h += `<div class="pm-sec">${B('toatt', ICON.clock, comit ? 'Tutta la comitiva in lista d\'attesa' : 'In lista d\'attesa', `data-id="${bk.id}"`)}${bigl ? B('toann', ICON.xcirc, 'Vuole vendere il biglietto', `data-id="${bk.id}" data-k="vende"`) : `<details class="pm-det"><summary>${ICON.xcirc}<span>Non parte più…</span></summary>${B('toann', '', 'da rimborsare', `data-id="${bk.id}" data-k="da"`)}${B('toann', '', 'già rimborsato', `data-id="${bk.id}" data-k="fatto"`)}${B('toann', '', 'senza rimborso', `data-id="${bk.id}" data-k="no"`)}</details>`}</div>`;
-    h += `<div class="pm-sec">${B('rowdel', ICON.trash, 'Elimina questa riga', `data-id="${id}"`, 'danger')}</div>`;
+    if (bk) {
+      // la sola persona di questa riga
+      h += `<div class="pm-sec"><div class="pm-t">${comit ? `Solo ${who}${head ? ' <small>(capogruppo)</small>' : ''}` : 'Prenotazione'}</div>`;
+      if (ACC.can('cassa')) h += comit ? (head ? '' : B('pay', ICON.euro, `Incasso solo di ${who}`, `data-id="${esc(bk.id)}" data-pid="${esc(id)}"`)) : B('pay', ICON.euro, 'Incasso e documento', `data-id="${esc(bk.id)}"`);
+      if (!bigl && !comit) h += B('selbk', ICON.pin, 'Mostra sulla piantina', `data-id="${esc(bk.id)}"`);
+      h += chips(comit ? `Sposta solo ${who} in` : 'Sposta in', 'lmove1', `data-id="${esc(id)}" data-whole="0"`);
+      if (comit && !head) h += B('detach', ICON.unlink, `Stacca ${who} dalla comitiva <small>diventa una prenotazione a sé</small>`, `data-id="${esc(id)}"`);
+      if (comit && head) { const nx = nextInList(t, bk, r, [id]); h += B('detach', ICON.unlink, `Stacca il capogruppo <small>${esc(nx ? nx.cognome : '')} ${esc(nx ? nx.nome : '')} diventa capogruppo (x ${Math.max(bk.n, bk.persone.length) - 1})</small>`, `data-id="${esc(id)}"`); }
+      if (r.stacc) h += B('reattach', ICON.link2, `Rimetti nella comitiva ${esc(r.stacc.da.replace(/ x \d+$/, ''))} <small>staccata il ${esc(fmtDate(r.stacc.il.slice(0, 10)).slice(0, 5))}${r.stacc.chi ? ' da ' + esc(r.stacc.chi) : ''}</small>`, `data-id="${esc(id)}"`);
+      h += B(comit ? 'toatt1' : 'toatt', ICON.clock, comit ? `Solo ${who} in lista d'attesa <small>la comitiva diventa x ${Math.max(bk.n, bk.persone.length) - 1}</small>` : 'In lista d\'attesa', comit ? `data-id="${esc(id)}"` : `data-id="${esc(bk.id)}"`);
+      h += comit ? annDet('toann1', `data-id="${esc(id)}"`, `Solo ${who}`) : annDet('toann', `data-id="${esc(bk.id)}"`, 'Questa prenotazione');
+      h += B('rsel', ICON.sel, (UI.lsel || []).includes(id) ? 'Togli dalla selezione' : 'Seleziona questa riga', `data-id="${esc(id)}"`);
+      h += '</div>';
+      // tutta la comitiva
+      if (comit) {
+        h += `<div class="pm-sec"><div class="pm-t">Tutta la comitiva ${esc(bkName(bk))} x ${bk.persone.length}</div>`;
+        if (ACC.can('cassa')) h += B('pay', ICON.euro, 'Incasso di tutta la comitiva', `data-id="${esc(bk.id)}"`);
+        if (!bigl) h += B('selbk', ICON.pin, 'Mostra sulla piantina', `data-id="${esc(bk.id)}"`);
+        h += B('rselbk', ICON.sel, 'Seleziona tutta la comitiva', `data-id="${esc(id)}"`);
+        h += chips('Sposta tutta la comitiva in', 'lmove1', `data-id="${esc(id)}" data-whole="1"`);
+        h += B('toatt', ICON.clock, 'Tutta la comitiva in lista d\'attesa', `data-id="${esc(bk.id)}"`);
+        h += annDet('toann', `data-id="${esc(bk.id)}"`, 'Tutta la comitiva');
+        h += '</div>';
+      }
+    }
+    h += `<div class="pm-sec"><div class="pm-two">${B('rowins', ICON.up, 'Riga sopra', `data-id="${esc(id)}" data-d="0"`)}${B('rowins', ICON.down, 'Riga sotto', `data-id="${esc(id)}" data-d="1"`)}</div></div>`;
+    if (bk && !bigl) h += `<div class="pm-sec">${B('abituale', ICON.star, `Cliente abituale <small>${comit ? 'tutta la comitiva · ' : ''}precedenza nelle prime file</small>`, `data-id="${esc(bk.id)}"`, 'tg' + (bk.head.abituale ? ' on' : ''))}${B('saldato', ICON.check, `Saldato <small>${comit ? 'tutta la comitiva · ' : ''}anche se il prezzo è diverso</small>`, `data-id="${esc(bk.id)}"`, 'tg' + (bk.head.saldato ? ' on' : ''))}</div>`;
+    h += `<div class="pm-sec">${B('rowdel', ICON.trash, comit ? `Elimina la riga di ${who} <small>la comitiva resta x ${Math.max(bk.n, bk.persone.length)}: il nome mancante resta da scrivere</small>` : 'Elimina questa riga', `data-id="${esc(id)}"`, 'danger')}</div>`;
     openPop(el, h, 'rmenu');
   }
   // menu della colonna «fila»: le file a pagamento con prezzo e posti liberi (le file finite non compaiono),
@@ -5853,7 +6037,7 @@
     const t = trip(); const r = rowById(t, id); if (!r) return; const FI = filaInfo(t); const cur = String(r.fila || '').trim().toLowerCase();
     const D = deriveBookings(t); const bk = D.find(b => b.persone.some(p => p.id === id)); const P = bk && bk.persone.find(p => p.id === id);
     const tour = tripCat(t) === 'tour'; const pr = v => v ? `+${fmtNum(v)} €${tour ? ` <small>(${fmtNum(v / FI.days)} € × ${FI.days} giorni)</small>` : ''}` : '<small>senza prezzo</small>';
-    const B = (v, l, n) => `<button class="fm-b${cur === v.toLowerCase() ? ' on' : ''}" data-act="filaset" data-id="${id}" data-v="${esc(v)}">${l}${n != null ? `<i>${n}</i>` : ''}</button>`;
+    const B = (v, l, n) => `<button class="fm-b${esc(cur === v.toLowerCase() ? ' on' : '')}" data-act="filaset" data-id="${esc(id)}" data-v="${esc(v)}">${l}${n != null ? `<i>${n}</i>` : ''}</button>`;
     const rows = FI.rows.map(x => { const mine = cur.startsWith(x.k + ' fila'); if (!x.free && !mine) return '';
       return `<div class="fm-r"><div class="fm-l"><b>${x.label}</b><span>${pr(x.price)}</span></div><div class="fm-o">${B(`${x.k} fila`, 'Qualsiasi', x.free)}${x.freeSx || cur === `${x.k} fila sx` ? B(`${x.k} fila sx`, 'Sx', x.freeSx) : ''}${x.freeDx || cur === `${x.k} fila dx` ? B(`${x.k} fila dx`, 'Dx', x.freeDx) : ''}</div></div>`; }).join('');
     const pmine = /porta/.test(cur);
@@ -5864,35 +6048,35 @@
     openPop(el, `<div class="ph"><b>Fila${P ? ` di ${esc(P.cognome)} ${esc(P.nome)}` : ''}</b><span>Supplemento a persona · in verde i posti ancora liberi</span></div>
       <div class="fm">${rows}${porta}${full.length ? `<div class="fm-full">Esaurite: ${full.map(esc).join(', ')}</div>` : ''}
         <details class="fm-more"${freeOn ? ' open' : ''}><summary>Richieste senza supplemento</summary><div class="fm-free">${free.map(([v, l]) => B(v, l)).join('')}</div></details>
-        ${cur ? `<button class="fm-none" data-act="filaset" data-id="${id}" data-v="">${ICON.close} Togli la fila</button>` : ''}</div>`, 'fmenu');
+        ${cur ? `<button class="fm-none" data-act="filaset" data-id="${esc(id)}" data-v="">${ICON.close} Togli la fila</button>` : ''}</div>`, 'fmenu');
   }
   function attMenu(id, el) {
     openPop(el, `<div class="ph"><b>Lista d'attesa</b><span>Quando si libera il posto</span></div>
-      <button data-act="attconf" data-id="${id}">Conferma: passa nella lista partecipanti</button>
-      <button class="danger" data-act="attdel" data-id="${id}">Elimina questa riga</button>`);
+      <button data-act="attconf" data-id="${esc(id)}">Conferma: passa nella lista partecipanti</button>
+      <button class="danger" data-act="attdel" data-id="${esc(id)}">Elimina questa riga</button>`);
   }
   function annMenu(id, el) {
     const r = trip().annullati.find(x => x.id === id); if (!r) return;
     if (r.stato === 'vende') return openPop(el, `<div class="ph"><b>${esc(r.cognome || 'Riga')}</b><span>vuole vendere il biglietto</span></div>
-      <button data-act="annrest" data-id="${id}">Ci ripensa: rimetti tra i biglietti venduti</button>
-      <button class="danger" data-act="anndel" data-id="${id}">Biglietto rivenduto: togli la riga</button>`);
+      <button data-act="annrest" data-id="${esc(id)}">Ci ripensa: rimetti tra i biglietti venduti</button>
+      <button class="danger" data-act="anndel" data-id="${esc(id)}">Biglietto rivenduto: togli la riga</button>`);
     openPop(el, `<div class="ph"><b>${esc(r.cognome || 'Riga')}</b><span>non parte più</span></div>
-      ${r.stato !== 'da' ? `<button data-act="annmove" data-id="${id}" data-k="da">Sposta in «da rimborsare»</button>` : ''}
-      ${r.stato !== 'fatto' ? `<button data-act="annmove" data-id="${id}" data-k="fatto">Sposta in «già rimborsati»</button>` : ''}
-      ${r.stato !== 'no' ? `<button data-act="annmove" data-id="${id}" data-k="no">Sposta in «senza rimborso»</button>` : ''}
-      <button data-act="annrest" data-id="${id}">Riparte: rimetti nella lista partecipanti</button>
-      <button class="danger" data-act="anndel" data-id="${id}">Elimina questa riga</button>`);
+      ${r.stato !== 'da' ? `<button data-act="annmove" data-id="${esc(id)}" data-k="da">Sposta in «da rimborsare»</button>` : ''}
+      ${r.stato !== 'fatto' ? `<button data-act="annmove" data-id="${esc(id)}" data-k="fatto">Sposta in «già rimborsati»</button>` : ''}
+      ${r.stato !== 'no' ? `<button data-act="annmove" data-id="${esc(id)}" data-k="no">Sposta in «senza rimborso»</button>` : ''}
+      <button data-act="annrest" data-id="${esc(id)}">Riparte: rimetti nella lista partecipanti</button>
+      <button class="danger" data-act="anndel" data-id="${esc(id)}">Elimina questa riga</button>`);
   }
   // menu del posto: stesso stile del menu della riga, diviso in Posto, Prenotazione e Togli
   function seatMenu(s, el) {
     const t = trip(), b = bus(); const a = b.seats[s]; const bk = bkById(b, a.b); const p = bk.persone.find(x => x.id === a.pid);
     const n = bk.full ? bk.full.persone.length : bk.persone.length; const ss = seatsOf(b, bk.id);
-    const B = (act, ico, txt, extra = '', cls = '') => `<button class="${cls}" data-act="${act}" ${extra}>${ico}<span>${txt}</span></button>`;
+    const B = (act, ico, txt, extra = '', cls = '') => `<button class="${esc(cls)}" data-act="${esc(act)}" ${extra}>${ico}<span>${txt}</span></button>`;
     let h = `<div class="ph"><b>${esc(p.cognome)} ${esc(p.nome)}</b><span>Posto ${s}${multiBus(t) ? ' · ' + esc(b.label) : ''}${p.tel ? ' · ' + esc(p.tel) : ''}</span></div>`;
-    h += `<div class="pm-sec"><div class="pm-t">Posto ${s}</div>${B('mv', ICON.move, 'Sposta o scambia <small>poi tocca il posto dove metterlo</small>', `data-s="${s}"`)}
-      <div class="pm-note"><label for="np-in">Nota sul posto</label><div class="npin"><input id="np-in" placeholder="es. no lattosio" value="${esc(p.np || '')}" data-s="${s}" maxlength="40"><button class="btn sm" data-act="savenp" data-s="${s}">Salva</button></div></div></div>`;
-    h += `<div class="pm-sec"><div class="pm-t">Prenotazione ${esc(bkName(bk))}${n > 1 ? ' x ' + n : ''}</div>${B('selbk', ICON.sel, `Seleziona tutta la prenotazione <small>${ss.length ? (ss.length > 1 ? 'posti ' : 'posto ') + esc(fmtSeats(ss)) : 'nessun posto'}</small>`, `data-id="${bk.id}"`)}${ACC.can('cassa') ? B('pay', ICON.euro, n > 1 ? 'Incasso di tutta la comitiva' : 'Incasso e documento', `data-id="${bk.id}"`) : ''}</div>`;
-    h += `<div class="pm-sec"><div class="pm-t">Togli</div>${B('freeseat', ICON.erase, 'Togli dal posto <small>resta su questo bus, senza posto</small>', `data-s="${s}"`)}${B('unbus', ICON.out, 'Togli dal bus <small>resta nella lista, senza bus</small>', `data-s="${s}"`)}${B('freebk', ICON.trash, n > 1 ? `Togli dal bus tutta la comitiva <small>${n} persone</small>` : 'Togli dal bus la prenotazione', `data-id="${bk.id}"`, 'danger')}</div>`;
+    h += `<div class="pm-sec"><div class="pm-t">Posto ${s}</div>${B('mv', ICON.move, 'Sposta o scambia <small>poi tocca il posto dove metterlo</small>', `data-s="${esc(s)}"`)}
+      <div class="pm-note"><label for="np-in">Nota sul posto</label><div class="npin"><input id="np-in" placeholder="es. no lattosio" value="${esc(p.np || '')}" data-s="${esc(s)}" maxlength="40"><button class="btn sm" data-act="savenp" data-s="${esc(s)}">Salva</button></div></div></div>`;
+    h += `<div class="pm-sec"><div class="pm-t">Prenotazione ${esc(bkName(bk))}${n > 1 ? ' x ' + n : ''}</div>${n > 1 ? B('mvbk', ICON.move, `Sposta tutta la prenotazione <small>poi tocca il posto da cui farla partire${gKeyFor('mvbk')}</small>`, `data-id="${esc(bk.id)}"`) : ''}${B('selbk', ICON.sel, `Seleziona tutta la prenotazione <small>${ss.length ? (ss.length > 1 ? 'posti ' : 'posto ') + esc(fmtSeats(ss)) : 'nessun posto'}</small>`, `data-id="${esc(bk.id)}"`)}${ACC.can('cassa') ? B('pay', ICON.euro, n > 1 ? 'Incasso di tutta la comitiva' : 'Incasso e documento', `data-id="${esc(bk.id)}"`) : ''}</div>`;
+    h += `<div class="pm-sec"><div class="pm-t">Togli</div>${B('sosp', ICON.clock, 'Metti in sospeso <small>libera il posto e la tiene da parte sopra la piantina</small>', `data-s="${esc(s)}"`)}${B('freeseat', ICON.erase, 'Togli dal posto <small>resta su questo bus, senza posto</small>', `data-s="${esc(s)}"`)}${B('unbus', ICON.out, 'Togli dal bus <small>resta nella lista, senza bus</small>', `data-s="${esc(s)}"`)}${B('freebk', ICON.trash, n > 1 ? `Togli dal bus tutta la comitiva <small>${n} persone</small>` : 'Togli dal bus la prenotazione', `data-id="${esc(bk.id)}"`, 'danger')}</div>`;
     openPop(el, h, 'rmenu');
   }
   const insertAt = t => { let i = t.rows.length; while (i > 0 && isEmptyRow(t.rows[i - 1])) i--; return i; };
@@ -5903,6 +6087,41 @@
     return { bk, rows };
   }
 
+  // 2.1.14: togliere dalla lista una o più persone. Le comitive tutte comprese escono intere («Cognome x N»);
+  // le altre persone escono da sole e la loro comitiva scende di uno (come staccarle e poi toglierle).
+  function takeOut(t, ids) {
+    const before = groupMap(t); const set = new Set(ids); const out = []; const me = (ACC.me() || {}).name || '';
+    deriveBookings(t).forEach(bk => { if (!bk.persone.every(p => set.has(p.id))) return; const m = moveBookingOut(t, bk.id); if (m) { out.push({ whole: true, rows: m.rows, bk: m.bk }); bk.persone.forEach(p => set.delete(p.id)); } });
+    [...set].forEach(id => {
+      const r = rowById(t, id); if (!r || isEmptyRow(r)) return;
+      const bk = deriveBookings(t).find(b => b.persone.some(p => p.id === id));
+      if (bk && bk.persone.length > 1) detachRow(t, id, me);
+      const m = moveBookingOut(t, id); if (m) out.push({ whole: false, rows: m.rows, bk: m.bk, from: bk && bk.persone.length > 1 ? bkName(bk) : '' });
+    });
+    keepGroups(t, before);
+    return out;
+  }
+  // eliminare righe: il numero «x N» della comitiva resta (il nome che manca resta da scrivere) e passa a chi rimane
+  // se si elimina il capogruppo; chi sta sotto non entra nella comitiva al posto di chi è stato tolto
+  function deleteRows(t, ids) {
+    const before = groupMap(t); headsStay(t, ids);
+    ids.forEach(id => { const r = rowById(t, id); if (r) { unseatRow(t, r); t.rows = t.rows.filter(x => x !== r); } });
+    keepGroups(t, before);
+  }
+  function toWaiting(t, ids) {
+    const out = takeOut(t, ids); if (!out.length) return toast('Niente da spostare');
+    let ai = t.attesa.length; while (ai > 0 && isEmptyRow(t.attesa[ai - 1])) ai--;
+    const add = out.map(o => { const h = o.rows[0]; const base = String(h.cognome || '').replace(RX, '$1').trim(); return { ...blankAtt(), cognome: o.whole ? (RX.test(String(h.cognome || '').trim()) ? h.cognome : `${base} x ${o.rows.length}`) : base, nome: h.nome, nascita: h.nascita, tel: h.tel, part: h.part, note: h.note, richiesta: ddmm() }; });
+    t.attesa.splice(ai, 0, ...add); UI.lsel = []; closePop(); commit();
+    toast(out.length === 1 ? `${out[0].whole ? `${bkName(out[0].bk)}${out[0].rows.length > 1 ? ' x ' + out[0].rows.length : ''}` : `${String(out[0].rows[0].cognome).replace(RX, '$1').trim()} ${out[0].rows[0].nome}`} in lista d'attesa${out[0].from ? ` · la comitiva ${out[0].from} ha una persona in meno` : ''}` : `${out.reduce((a, o) => a + o.rows.length, 0)} persone in lista d'attesa`);
+  }
+  function toCancelled(t, ids, k) {
+    const out = takeOut(t, ids); if (!out.length) return toast('Niente da spostare');
+    out.forEach(o => o.rows.forEach(r => t.annullati.push({ ...r, stato: k, dataAnn: ddmm() })));
+    UI.lsel = []; closePop(); commit();
+    const n = out.reduce((a, o) => a + o.rows.length, 0);
+    toast(`${n === 1 ? `${String(out[0].rows[0].cognome).replace(RX, '$1').trim()} ${out[0].rows[0].nome}` : n + ' persone'}: ${k === 'vende' ? 'vuole vendere il biglietto' : 'non parte più'}`);
+  }
   function doDetach(t, ids) {
     const done = []; const me = (ACC.me() || {}).name || '';
     ids.forEach(id => { const r = rowById(t, id); if (!r) return; const pid = (deriveBookings(t).find(b => b.persone.some(p => p.id === id)) || {}).id; const paid = pid ? pidPaid(t.id, pid, id) : 0; const x = detachRow(t, id, me); if (x) done.push({ r, from: x.from, paid, capo: x.capo, nuovo: x.nuovo }); });
@@ -5933,7 +6152,9 @@
     if (!rows.length) return toast('Sono già in quella lista');
     const split = D.filter(bk => bk.persone.length > 1 && bk.persone.some(p => rows.includes(p.row)) && !bk.persone.every(p => rows.includes(p.row) || listKey(t, p.row) === (to || '')));
     const n = moveRowsToList(t, rows.map(r => r.id), to || ''); commit();
-    toast(`${n === 1 ? `${String(rows[0].cognome).replace(RX, '$1')} ${rows[0].nome}`.trim() : n + ' persone'} ${n === 1 ? 'è' : 'sono'} in ${listName(t, to || '')}${(to || '') ? ': il posto si sceglie sulla piantina' : ''}${split.length ? ` · ${split.map(bkName).join(', ')}: la comitiva resta unita anche su due liste` : ''}`);
+    // nomi delle comitive dopo lo spostamento (se si è spostato solo il capogruppo, il nome è quello del nuovo capogruppo)
+    const D2 = split.length ? deriveBookings(t) : []; const splitN = [...new Set(rows.map(r => D2.find(b => b.persone.some(p => p.id === r.id))).filter(b => b && b.persone.length > 1).map(bkName))];
+    toast(`${n === 1 ? `${String(rows[0].cognome).replace(RX, '$1')} ${rows[0].nome}`.trim() : n + ' persone'} ${n === 1 ? 'è' : 'sono'} in ${listName(t, to || '')}${(to || '') ? ': il posto si sceglie sulla piantina' : ''}${split.length && splitN.length ? ` · ${splitN.join(', ')}: la comitiva resta unita anche su due liste` : ''}`);
     DIAG.ev('azione', `Spostate ${n} righe in ${listName(t, to || '')}`);
   }
 
@@ -5955,7 +6176,7 @@
       ${res.titolo || res.data ? `<div class="field"><label>Gita</label><div><b>${esc(res.titolo || '—')}</b>${res.data ? ` · ${esc(fmtTripDate(res))}` : ''}</div></div>` : ''}
       <div class="field"><label>Ho trovato ${P.raw.length} righe: ${P.bookings.length} prenotazioni, ${pers} persone · ${res.attesa.length} in lista d'attesa · ${res.annullati.length} righe «non partono più»</label></div>
       ${P.warn.length ? `<div class="warnbox"><b>Da controllare:</b><ul>${P.warn.map(w => `<li>${esc(w)}</li>`).join('')}</ul></div>` : ''}
-      <div class="preview-list">${P.bookings.map(g => `<div><b>${esc(g.persone[0].cognome)} x ${g.n}</b> ${g.persone[0].part ? `<span class="code">${esc(g.persone[0].part)}</span>` : ''} — ${esc(g.persone.map(p => `${p.cognome} ${p.nome}`).join(', '))}${(() => { const rs = reqSummary(g); return rs.text ? ` <span class="pill ${rs.paid ? 'warn' : 'tbd'}">${esc(rs.text)}</span>` : ''; })()}</div>`).join('')}</div>`;
+      <div class="preview-list">${P.bookings.map(g => `<div><b>${esc(g.persone[0].cognome)} x ${g.n}</b> ${g.persone[0].part ? `<span class="code">${esc(g.persone[0].part)}</span>` : ''} — ${esc(g.persone.map(p => `${p.cognome} ${p.nome}`).join(', '))}${(() => { const rs = reqSummary(g); return rs.text ? ` <span class="pill ${esc(rs.paid ? 'warn' : 'tbd')}">${esc(rs.text)}</span>` : ''; })()}</div>`).join('')}</div>`;
     $('#imp-go').disabled = !P.raw.length;
     $('#imp-go').textContent = UI.modal.mode === 'new' ? 'Crea la gita' : `Importa ${P.raw.length} righe`;
   }
@@ -5989,12 +6210,44 @@
   function onSeat(s, el) {
     const t = trip(), b = bus(); if (!b) return; const a = b.seats[s];
     closePop();
-    if (a && a.res && UI.move == null) return openPop(el, `<div class="ph"><b>Posto ${s}</b><span>${esc(a.res)}</span></div><button data-act="unreserve" data-s="${s}">Togli la riserva</button>`);
+    if (a && a.res && UI.move == null) return openPop(el, `<div class="ph"><b>Posto ${s}</b><span>${esc(a.res)}</span></div><button data-act="unreserve" data-s="${esc(s)}">Togli la riserva</button>`);
     if (UI.move != null) { const from = UI.move; UI.move = null; moveSeat(b, from, s); toast(a ? `Scambiati i posti ${from} e ${s}` : `Spostato dal ${from} al ${s}`); return commit(); }
-    if (UI.sel) { if (a && a.b === UI.sel) return seatMenu(s, el); const id = UI.sel; const r = dropFamily(t, id, b, s); if (r.ok) UI.sel = null; afterFamily(r, t, b, id); return commit(); }
+    if (UI.sel) { const whole = UI.moveBk && UI.moveBk === UI.sel; if (a && a.b === UI.sel && !whole) return seatMenu(s, el); const id = UI.sel; const r = dropFamily(t, id, b, s); if (r.ok) { UI.sel = null; UI.moveBk = null; } afterFamily(r, t, b, id); return commit(); }
     if (UI.selP) { const r = dropPerson(t, UI.selP, b, s); if (!r.ok) return toast(r.msg); UI.selP = null; toast(r.swap ? 'Posti scambiati' : `Messo al posto ${s}`); return commit(); }
     if (a) seatMenu(s, el);
-    else openPop(el, `<div class="ph"><b>Posto ${s} libero</b><span>Trascina qui una prenotazione o una persona dalla lista</span></div><button data-act="reserve" data-s="${s}">Riserva per guida / 2° autista</button>`);
+    else openPop(el, `<div class="ph"><b>Posto ${s} libero</b><span>Trascina qui una prenotazione o una persona dalla lista</span></div><button data-act="reserve" data-s="${esc(s)}">Riserva per guida / 2° autista</button>`);
+  }
+  // 2.1.14 · posti in sospeso: persone tolte dal posto e tenute da parte accanto alla piantina mentre si sistemano gli altri.
+  // Si rimettono trascinandole su un posto (oppure clic sul nome e poi sul posto). Se qualcuno resta lì, l'app avvisa.
+  function sospPark(t, b, pid) { const r = rowById(t, pid); if (!r || isEmptyRow(r)) return false; if (multiBus(t) && r.bus !== b.id) pinGroup(t, [pid]); unseatRow(t, r); r.bus = b.id; b.sosp = (b.sosp || []).filter(x => x !== pid).concat([pid]); return true; }
+  function sospAll(t) { if (!t || !t.buses) return []; syncAll(t); const out = []; t.buses.forEach(b => (b.sosp || []).forEach(pid => { const r = rowById(t, pid); if (r) out.push({ b, r, name: `${String(r.cognome || '').replace(RX, '$1').trim()} ${r.nome || ''}`.trim() + (multiBus(t) ? ` (${b.label})` : '') }); })); return out; }
+  // prima di uscire dalla piantina, stampare o mandare i messaggi: se c'è qualcuno in sospeso si chiede conferma
+  function sospGuard(t, fn) {
+    const L = sospAll(t); if (!L.length) return fn();
+    confirmBox('Posti in sospeso', `${L.length === 1 ? 'C\'è ancora una persona' : `Ci sono ancora ${L.length} persone`} nei posti in sospeso: <b>${L.map(x => esc(x.name)).join(', ')}</b>.<br>Rimettile su un posto, altrimenti restano senza posto.`, 'Continua lo stesso', fn);
+  }
+  // 2.1.14: spostare tutta la prenotazione dalla piantina (voce del menu del posto o gesto in Impostazioni › Gesti)
+  function startMoveBk(bk) { closePop(); UI.move = null; UI.selP = null; UI.sel = bk.id; UI.moveBk = bk.id; render(); toast(`${bkName(bk)}: tocca il posto da cui farla partire, gli altri si siedono accanto`); }
+  // gesto della piantina scritto nel menu (es. « · oppure doppio clic»)
+  function gKeyFor(act) { const g = gest().seat; const k = G_SEAT.find(([x]) => g[x] === act && x !== 'click'); return k ? ` · oppure ${k[1].replace(/ su un posto occupato$/, '').toLowerCase()}` : ''; }
+  let seatT = null;
+  function onSeatClick(e, s, el) {
+    const b = bus(); const a = b && b.seats[s];
+    if (!a || a.res || UI.move != null || UI.sel || UI.selP) return onSeat(s, el);
+    const g = gest().seat; const k = e.metaKey || e.ctrlKey ? 'meta' : e.shiftKey ? 'shift' : e.altKey ? 'alt' : 'click';
+    if (k !== 'click') { clearTimeout(seatT); seatT = null; return seatAct(g[k], s, el); }
+    if (e.detail >= 2 && g.dbl !== 'none') { clearTimeout(seatT); seatT = null; closePop(); return seatAct(g.dbl, s, el); }
+    if (g.dbl === 'none' || e.detail === 0) return seatAct(g.click, s, el);
+    clearTimeout(seatT); seatT = setTimeout(() => { seatT = null; seatAct(g.click, s, el); }, 240);
+  }
+  function seatAct(act, s, el) {
+    const b = bus(); const a = b && b.seats[s]; if (!a || a.res || !act || act === 'none') return;
+    const bk = bkById(b, a.b); if (!bk) return;
+    if (act === 'menu') return onSeat(s, el);
+    if (act === 'mvbk') return startMoveBk(bk);
+    if (act === 'mv') { closePop(); UI.sel = UI.selP = null; UI.move = s; render(); return; }
+    if (act === 'selbk') { closePop(); UI.move = null; UI.selP = null; UI.sel = UI.sel === bk.id ? null : bk.id; render(); return; }
+    if (act === 'pay') { closePop(); if (!ACC.can('cassa')) return toast('Il tuo account non può incassare'); return payOpen(bk.id, ''); }
   }
   function fillBus(t, b) {
     let D = syncAll(t); const st = busStats(b); let room = st.cap - st.tot; const moved = []; let left = 0;
@@ -6011,14 +6264,45 @@
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `viaggi-in-pullman-${todayISO()}.json`; document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 2000); ACC.tlog('info', 'Scaricata una copia di sicurezza');
   }
+  // ---- controlli sulla copia da recuperare (sicurezza) ----
+  // Una copia preparata ad arte non deve poter inserire codice nella pagina né far scrivere o cancellare
+  // file fuori posto su Dropbox: si accettano solo codici interni fatti di lettere, numeri, «_» e «-»,
+  // date aaaa-mm-gg, tipi di viaggio conosciuti e programmi salvati in /programmi/. Il resto si scarta.
+  const ID_RE = /^[A-Za-z0-9_-]{1,64}$/, DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+  const BAD_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+  const ID_KEYS = new Set(['id', 'g', 'bus', 'hid', 'pid', 'cid', 'bkId', 'tripId', 'tid', 'rid']);
+  const okId = v => typeof v === 'string' && ID_RE.test(v) && !BAD_KEYS.has(v);
+  const okDay = v => v == null || v === '' || (typeof v === 'string' && DAY_RE.test(v));
+  function safeData(x, depth = 0) {
+    if (depth > 30) return false;
+    if (Array.isArray(x)) return x.every(v => safeData(v, depth + 1));
+    if (!x || typeof x !== 'object') return true;
+    return Object.keys(x).every(k => {
+      if (BAD_KEYS.has(k)) return false;
+      const v = x[k];
+      if (ID_KEYS.has(k) && !(v == null || v === '' || typeof v === 'number' || okId(v))) return false;
+      return safeData(v, depth + 1);
+    });
+  }
+  const okProgPath = p => typeof p === 'string' && /^\/programmi\/[a-z0-9_-]{1,64}\/[^/]{1,120}$/.test(p) && !/\/\.{1,2}$/.test(p);
+  function safeTrip(t) {
+    if (!t || typeof t !== 'object' || Array.isArray(t) || !okId(t.id)) return false;
+    if (t.cat != null && t.cat !== '' && !Object.prototype.hasOwnProperty.call(CAT_L, t.cat)) return false;
+    if (!okDay(t.data) || !okDay(t.fine)) return false;
+    if (t.seedId != null && typeof t.seedId !== 'string') return false;
+    return safeData(t);
+  }
   // recupera una copia: anche quella della versione di prova «OnBoard» (un file con tutti i viaggi)
   function importBackup(o) {
     if (!o || !Array.isArray(o.trips)) throw new Error('copia');
-    let add = 0, into = 0, skip = 0;
+    let add = 0, into = 0, skip = 0, bad = 0;
     o.trips.forEach(src => {
       if (!src || !src.id || src.deleted) return;
       if (src.demo) { skip++; return; }
+      if (!safeTrip(src)) { bad++; return; }
       const t = tripInit(JSON.parse(JSON.stringify(src))); delete t.u; delete t.gone; LISTS.forEach(k => t[k].forEach(x => { delete x.u; }));
+      if (t.pdf && !(t.pdf && typeof t.pdf === 'object' && okProgPath(t.pdf.path))) delete t.pdf;
+      if (t.programma && !safeUrl(t.programma)) t.programma = '';
       const target = src.seedId ? S.trips.find(x => x.seedId === src.seedId || x.id === seedTripId(src.seedId)) : S.trips.find(x => x.id === src.id);
       if (target) {
         const empty = !target.rows.some(r => !isEmptyRow(r)) && !target.buses.length;
@@ -6026,11 +6310,11 @@
         const keep = { id: target.id, seedId: target.seedId }; Object.keys(target).forEach(k => delete target[k]); Object.assign(target, t, keep); tripInit(target); into++;
       } else { S.trips.push(t); add++; }
     });
-    if (o.clients && o.clients.clienti) Object.entries(o.clients.clienti).forEach(([id, c]) => { if (!S.clients.clienti[id]) S.clients.clienti[id] = c; });
-    if (Array.isArray(o.movs) && o.movs.length) { const have = new Set(allMovs().map(m => m.id)); const nw = o.movs.filter(m => okMov(m) && !have.has(m.id)); if (nw.length) { const p = `/cassa/movimenti/importati/${todayISO()}_${STORE.device.id}.json`; const cur = STORE.get(p) || { movs: [] }; cur.movs = cur.movs.concat(nw); STORE.put(p, cur); } }
+    if (o.clients && o.clients.clienti && typeof o.clients.clienti === 'object') Object.entries(o.clients.clienti).forEach(([id, c]) => { if (!okId(id) || !c || typeof c !== 'object' || Array.isArray(c) || !safeData(c)) { bad++; return; } if (!Object.prototype.hasOwnProperty.call(S.clients.clienti, id)) S.clients.clienti[id] = c; });
+    if (Array.isArray(o.movs) && o.movs.length) { const have = new Set(allMovs().map(m => m.id)); const nw = o.movs.filter(m => { if (!(okMov(m) && okId(m.id) && DAY_RE.test(m.day) && safeData(m))) { if (m) bad++; return false; } return !have.has(m.id); }); if (nw.length) { const p = `/cassa/movimenti/importati/${todayISO()}_${STORE.device.id}.json`; const cur = STORE.get(p) || { movs: [] }; cur.movs = cur.movs.concat(nw); STORE.put(p, cur); } }
     S.trips.forEach(t => t.rows.forEach(r => upsertFromRow(r)));
-    flush(); ACC.tlog('info', `Recuperata una copia: ${add} viaggi nuovi, ${into} liste dentro i viaggi dell'elenco, ${skip} saltati`);
-    return { add, into, skip };
+    flush(); ACC.tlog(bad ? 'avviso' : 'info', `Recuperata una copia: ${add} viaggi nuovi, ${into} liste dentro i viaggi dell'elenco, ${skip} saltati${bad ? `, ${bad} elementi scartati perché non validi` : ''}`);
+    return { add, into, skip, bad };
   }
 
   document.addEventListener('click', e => {
@@ -6038,12 +6322,12 @@
     const el = e.target.closest('[data-act]');
     if (!e.target.closest('#pop') && !(el && ['rowmenu', 'attmenu', 'annmenu', 'memenu', 'filapick'].includes(el.dataset.act))) closePop();
     if (!e.target.closest('.acbox') && !e.target.closest('input.wc')) acClose();
-    if (seatEl && !el) return onSeat(+seatEl.dataset.seat, seatEl);
+    if (seatEl && !el) return onSeatClick(e, +seatEl.dataset.seat, seatEl);
     if (!el) return;
     const act = el.dataset.act; const t = trip(); const b = bus();
     if (ACT_PERM[act] && !ACC.can(ACT_PERM[act])) { closeModal(); toast('Questa funzione non è disponibile per il tuo account'); render(); return; }
     switch (act) {
-      case 'nav': UI.pay = null; UI.lsel = []; UI.view = el.dataset.v; if (el.dataset.ssec) UI.ssec = el.dataset.ssec; UI.sel = UI.selP = null; UI.move = null; closePop(); render(); window.scrollTo(0, 0); break;
+      case 'nav': { const go = () => { UI.pay = null; UI.lsel = []; UI.view = el.dataset.v; if (el.dataset.ssec) UI.ssec = el.dataset.ssec; UI.sel = UI.selP = null; UI.move = null; closePop(); render(); window.scrollTo(0, 0); }; if (UI.view === 'trip' && t) sospGuard(t, go); else go(); break; }
       // accesso
       case 'gtap': GATE.taps++; if (GATE.taps >= 10) { GATE.taps = 0; GATE.step = 'tech'; GATE.msg = ''; render(); } break;
       case 'gback': GATE.step = null; GATE.msg = ''; GATE.taps = 0; render(); break;
@@ -6121,9 +6405,9 @@
       case 'year': UI.year = el.dataset.v; render(); window.scrollTo(0, 0); break;
       case 'hcat': UI.cat = el.dataset.v; render(); break;
       case 'hidepast': UI.hidePast = el.checked; render(); break;
-      case 'opentrip': { UI.pay = null; UI.lsel = []; UI.lview = 'all'; UI.view = 'trip'; UI.tripId = el.dataset.id; const tt = trip(); UI.busId = tt && tt.buses[0] ? tt.buses[0].id : null; UI.sel = UI.selP = null; UI.sec = el.dataset.sec || 'lista'; render(); window.scrollTo(0, 0); break; }
+      case 'opentrip': { const go = () => { UI.pay = null; UI.lsel = []; UI.lview = 'all'; UI.view = 'trip'; UI.tripId = el.dataset.id; const tt = trip(); UI.busId = tt && tt.buses[0] ? tt.buses[0].id : null; UI.sel = UI.selP = null; UI.sec = el.dataset.sec || 'lista'; render(); window.scrollTo(0, 0); }; if (UI.view === 'trip' && t && t.id !== el.dataset.id) sospGuard(t, go); else go(); break; }
       case 'openbus': UI.view = 'trip'; UI.tripId = el.dataset.trip; UI.busId = el.dataset.bus; UI.sel = UI.selP = null; UI.sec = 'posti'; render(); window.scrollTo(0, 0); break;
-      case 'sec': UI.sec = el.dataset.v; UI.sel = UI.selP = null; UI.move = null; render(); window.scrollTo(0, 0); break;
+      case 'sec': { const go = () => { UI.sec = el.dataset.v; UI.sel = UI.selP = null; UI.move = null; render(); window.scrollTo(0, 0); }; if (UI.sec === 'posti' && el.dataset.v !== 'posti' && t) sospGuard(t, go); else go(); break; }
       case 'tab': UI.busId = el.dataset.id; UI.move = null; render(); break;
       case 'dock': UI.dock = !UI.dock; (UI.dockMap = UI.dockMap || {})[UI.tripId] = UI.dock; render(); break;
       case 'onlyfree': UI.onlyFree = el.checked; render(); break;
@@ -6134,6 +6418,8 @@
         const v = { nome: $('#t-nome').value.trim(), data: $('#t-data').value, fine: $('#t-fine').value, programma: $('#t-prog').value.trim(), cat: $('#t-cat').value, codDanea: ($('#t-danea') ? $('#t-danea').value.trim() : ''), code: $('#t-code').value.trim(), extra: $('#t-extra').checked, serv: SERV.map(x => x[0]).filter(k => (UI.modal.serv || []).includes(k)) };
         if (!v.nome) { toast('Scrivi il nome della gita'); $('#t-nome').focus(); break; }
         if (!v.data) { toast('Scegli la data di partenza'); break; }
+        if (v.programma && !safeUrl(v.programma)) { toast('Il link del programma deve essere un indirizzo internet (https://…)'); $('#t-prog').focus(); break; }
+        v.programma = safeUrl(v.programma);
         if (UI.modal.id) { const tr0 = S.trips.find(x => x.id === UI.modal.id); if (v.cat === 'evento' && tripCat(tr0) !== 'evento') v.tkFila = true; Object.assign(tr0, v); closeModal(); commit(); }
         else { const nt = tripInit({ id: uid(), ...v, buses: [] }); if (v.cat === 'evento') nt.tkFila = true;   // 2.1.8: biglietto solo a chi ha la fila
           // ogni gita, tour o evento nuovo parte con un bus da 52 posti (si cambia da «Posti sul bus»)
@@ -6141,7 +6427,7 @@
           S.trips.push(nt); UI.tripId = nt.id; UI.view = 'trip'; UI.sec = 'lista'; UI.busId = nt.buses[0] ? nt.buses[0].id : null; closeModal(); commit(); toast(v.cat === 'biglietteria' ? 'Creata: scrivi i prezzi del biglietto e i clienti; il pulsante «€» registra l\'incasso' : 'Creato con un bus da 52 posti: scrivi la lista o importa il file Word'); }
         break;
       }
-      case 'deltrip': { const id = UI.modal.id; const tr = S.trips.find(x => x.id === id); confirmBox('Elimina viaggio', `Elimino «${esc(tr.nome)}» con la lista e i bus, su tutti i computer? Non si può annullare.`, 'Elimina', () => { ACC.tlog('avviso', `Eliminato il viaggio «${tr.nome}» (${fmtDate(tr.data)})`); deleteTrip(id); UI.view = 'home'; UI.tripId = null; commit(); }); break; }
+      case 'deltrip': { const id = UI.modal.id; const tr = S.trips.find(x => x.id === id); if (!tr) break; if (!ACC.can('settings') && (tr.chiusa || tr.histLock)) { toast('Il Master ha chiuso o bloccato questa gita: solo il Master può eliminarla'); break; } confirmBox('Elimina viaggio', `Elimino «${esc(tr.nome)}» con la lista e i bus, su tutti i computer? Non si può annullare.`, 'Elimina', () => { ACC.tlog('avviso', `Eliminato il viaggio «${tr.nome}» (${fmtDate(tr.data)})`); deleteTrip(id); UI.view = 'home'; UI.tripId = null; commit(); }); break; }
       case 'addbus': busModal(el.dataset.trip); break;
       case 'picklayout': UI.modal.pick = el.dataset.id; $$('#pickgrid .model').forEach(m => m.classList.toggle('on', m.dataset.id === el.dataset.id)); break;
       case 'savebus': {
@@ -6155,10 +6441,13 @@
       case 'delbus': confirmBox('Elimina bus', `Elimino «${esc(b.label)}»? Le persone restano nella lista, senza posto${multiBus(t) && t.buses.length > 2 ? ' (nella lista «Senza bus»)' : ''}.`, 'Elimina', () => { if (multiBus(t)) pinGroup(t, t.rows.filter(r => r.bus === b.id).map(r => r.id)); t.rows = t.rows.filter(r => !(r.bus === b.id && isEmptyRow(r) && t.buses.length > 2)); t.rows.forEach(r => { if (r.bus === b.id) delete r.bus; }); t.buses = t.buses.filter(x => x.id !== b.id); UI.busId = t.buses[0] ? t.buses[0].id : null; commit(); }); break;
       case 'selbk': if (e.target.closest('[data-dragp], .kebab')) break; closePop(); UI.move = null; UI.selP = null; UI.sel = UI.sel === el.dataset.id ? null : el.dataset.id; { const SI = seatIndex(t); const D = deriveBookings(t); const bk = UI.sel && D.find(x => x.id === UI.sel); const on = bk && bk.persone.map(p => SI[p.id]).find(Boolean); if (on) UI.busId = on.b.id; } render(); break;
       case 'selp': e.stopPropagation(); UI.move = null; UI.sel = null; UI.selP = UI.selP === el.dataset.id ? null : el.dataset.id; { const x = UI.selP && seatIndex(t)[UI.selP]; if (x) UI.busId = x.b.id; } render(); break;
-      case 'cancel': UI.sel = UI.selP = null; UI.move = null; render(); break;
+      case 'cancel': UI.sel = UI.selP = null; UI.move = null; UI.moveBk = null; render(); break;
+      case 'mvbk': { const D = syncAll(t); const bb = b && bkById(b, el.dataset.id); if (bb) startMoveBk(bb); break; }
       case 'mv': UI.move = +el.dataset.s; UI.sel = UI.selP = null; closePop(); render(); break;
       case 'savenp': { const a = b.seats[+el.dataset.s]; const r = a && rowById(t, a.pid); if (!r) { closePop(); break; } r.np = $('#np-in').value.trim(); closePop(); commit(); break; }
       case 'freeseat': delete b.seats[+el.dataset.s]; closePop(); commit(); break;
+      case 'sosp': { const a = b.seats[+el.dataset.s]; closePop(); if (a && a.pid && sospPark(t, b, a.pid)) { const r = rowById(t, a.pid); commit(); toast(`${String(r.cognome).replace(RX, '$1').trim()} ${r.nome} in sospeso: rimettila su un posto quando hai finito`); } break; }
+      case 'sospdel': { b.sosp = (b.sosp || []).filter(x => x !== el.dataset.id); if (UI.selP === el.dataset.id) UI.selP = null; commit(); toast('Tolta dai posti in sospeso: resta su questo bus, senza posto'); break; }
       case 'unbus': { const a = b.seats[+el.dataset.s]; const r = rowById(t, a.pid); if (multiBus(t)) pinGroup(t, [r.id]); unseatRow(t, r); delete r.bus; closePop(); commit(); break; }
       case 'freebk': { if (multiBus(t)) pinGroup(t, (deriveBookings(t).find(x => x.id === el.dataset.id) || { persone: [] }).persone.map(p => p.id)); const D = deriveBookings(t); const bk = D.find(x => x.id === el.dataset.id); bk.persone.forEach(p => { if (p.row.bus === b.id) { unseatRow(t, p.row); delete p.row.bus; } }); closePop(); commit(); toast(`${bkName(bk)} tolta da ${b.label}`); break; }
       case 'reserve': b.seats[+el.dataset.s] = { res: 'Guida / 2° autista' }; closePop(); commit(); break;
@@ -6169,9 +6458,10 @@
       case 'deldep': b.partenze.splice(+el.dataset.i, 1); save(); $('#deps').innerHTML = depsHTML(b); break;
       case 'openpdf': openPdf(el.dataset.id); break;
       case 'delpdf': { const tr = S.trips.find(x => x.id === el.dataset.id); confirmBox('Togli il programma', `Tolgo «${esc(tr.pdf.name)}» da questo viaggio?`, 'Togli', () => { if (tr.pdf.path) STORE.delBlob(tr.pdf.path).catch(() => {}); delete tr.pdf; commit(); }); break; }
-      case 'printmap': openPrint('map'); break;
-      case 'printcards': openPrint('cards'); break;
-      case 'printlist': openPrint('list'); break;
+      case 'printmap': sospGuard(t, () => openPrint('map')); break;
+      case 'printcards': sospGuard(t, () => openPrint('cards')); break;
+      case 'printlist': sospGuard(t, () => openPrint('list')); break;
+      case 'printacc': sospGuard(t, () => openPrint('acc')); break;
       case 'rooming': openPrint('rooming'); break;
       case 'cartorder': UI.cartOrder = el.dataset.v; openPrint('cards'); break;
       case 'doprint': document.body.classList.add('printing'); setTimeout(() => window.print(), 50); break;
@@ -6179,18 +6469,24 @@
       // righe della lista
       case 'rowmenu': e.stopPropagation(); onRowNum(e, el); break;
       case 'rowins': { const i = t.rows.findIndex(r => r.id === el.dataset.id); const ref = t.rows[i]; t.rows.splice(i + (+el.dataset.d), 0, Object.assign(blankRow(), multiBus(t) && ref && ref.bus ? { bus: ref.bus } : {})); closePop(); commit(); const nr = t.rows[i + (+el.dataset.d)]; const inp = $(`[data-r="${nr.id}"][data-f="cognome"]`); if (inp) inp.focus(); break; }
-      case 'rowdel': { const r = rowById(t, el.dataset.id); closePop(); const go = () => { unseatRow(t, r); t.rows = t.rows.filter(x => x !== r); commit(); }; if (isEmptyRow(r)) go(); else confirmBox('Elimina riga', `Elimino la riga di ${esc(r.cognome)} ${esc(r.nome)}?`, 'Elimina', go); break; }
+      case 'rowdel': { const r = rowById(t, el.dataset.id); closePop(); const go = () => { if (isEmptyRow(r)) { const before = groupMap(t); const n0 = t.rows.length; t.rows = t.rows.filter(x => x !== r); keepGroups(t, before); if (t.rows.length === n0) toast('La riga resta: è il posto di un nome che manca nella comitiva sopra (per toglierla cambia il numero «x N»)'); } else deleteRows(t, [r.id]); commit(); }; if (isEmptyRow(r)) go(); else confirmBox('Elimina riga', `Elimino la riga di ${esc(r.cognome)} ${esc(r.nome)}?`, 'Elimina', go); break; }
       case 'abituale': case 'saldato': { const r = rowById(t, el.dataset.id); r[act] = !r[act]; closePop(); commit(); break; }
-      case 'toatt': { const m = moveBookingOut(t, el.dataset.id); if (!m) break; const h = m.rows[0]; let ai = t.attesa.length; while (ai > 0 && isEmptyRow(t.attesa[ai - 1])) ai--; t.attesa.splice(ai, 0, { ...blankAtt(), cognome: /x\s*\d/i.test(h.cognome) ? h.cognome : `${h.cognome} x ${m.rows.length}`, nome: h.nome, nascita: h.nascita, tel: h.tel, part: h.part, note: h.note, richiesta: ddmm() }); closePop(); commit(); toast(`${bkName(m.bk)} spostata in lista d'attesa`); break; }
-      case 'toann': { const m = moveBookingOut(t, el.dataset.id); if (!m) break; m.rows.forEach(r => t.annullati.push({ ...r, stato: el.dataset.k, dataAnn: ddmm() })); closePop(); commit(); toast(`${bkName(m.bk)}: ${el.dataset.k === 'vende' ? 'vuole vendere il biglietto' : 'non parte più'}`); break; }
+      case 'toatt1': toWaiting(t, [el.dataset.id]); break;
+      case 'toattsel': toWaiting(t, (UI.lsel || []).slice()); break;
+      case 'toann1': toCancelled(t, [el.dataset.id], el.dataset.k); break;
+      case 'toannsel': toCancelled(t, (UI.lsel || []).slice(), el.dataset.k); break;
+      case 'rselbk': closePop(); gAct('selbk', el.dataset.id); break;
+      case 'rowdelsel': { const ids = (UI.lsel || []).filter(x => { const rr = rowById(t, x); return rr && !isEmptyRow(rr); }); closePop(); if (!ids.length) break; confirmBox('Elimina righe', `Elimino le ${ids.length} righe selezionate?`, 'Elimina', () => { deleteRows(t, ids); UI.lsel = []; commit(); toast(`${ids.length} righe eliminate`); }); break; }
+      case 'toatt': { const before = groupMap(t); const m = moveBookingOut(t, el.dataset.id); if (!m) break; keepGroups(t, before); const h = m.rows[0]; let ai = t.attesa.length; while (ai > 0 && isEmptyRow(t.attesa[ai - 1])) ai--; t.attesa.splice(ai, 0, { ...blankAtt(), cognome: /x\s*\d/i.test(h.cognome) ? h.cognome : `${h.cognome} x ${m.rows.length}`, nome: h.nome, nascita: h.nascita, tel: h.tel, part: h.part, note: h.note, richiesta: ddmm() }); closePop(); commit(); toast(`${bkName(m.bk)} spostata in lista d'attesa`); break; }
+      case 'toann': { const before = groupMap(t); const m = moveBookingOut(t, el.dataset.id); if (!m) break; keepGroups(t, before); m.rows.forEach(r => t.annullati.push({ ...r, stato: el.dataset.k, dataAnn: ddmm() })); closePop(); commit(); toast(`${bkName(m.bk)}: ${el.dataset.k === 'vende' ? 'vuole vendere il biglietto' : 'non parte più'}`); break; }
       case 'attmenu': e.stopPropagation(); attMenu(el.dataset.id, el); break;
       case 'attconf': { const r = t.attesa.find(x => x.id === el.dataset.id); if (!r) { closePop(); break; } const m = RX.exec(String(r.cognome || '').trim()); const n = m ? +m[2] : 1; const base = m ? m[1].trim() : String(r.cognome || '').trim();
         const add = [{ ...blankRow(), cognome: r.cognome, nome: r.nome, nascita: r.nascita, tel: r.tel, part: r.part, note: r.note }]; for (let k = 1; k < n; k++) add.push({ ...blankRow(), cognome: base, part: r.part });
-        t.rows.splice(insertAt(t), 0, ...add); t.attesa = t.attesa.filter(x => x !== r); closePop(); commit(); toast(`${base} x ${n} è nella lista partecipanti: completa i nomi`); break; }
+        { const before = groupMap(t); t.rows.splice(insertAt(t), 0, ...add); keepGroups(t, before); } t.attesa = t.attesa.filter(x => x !== r); closePop(); commit(); toast(`${base} x ${n} è nella lista partecipanti: completa i nomi`); break; }
       case 'attdel': t.attesa = t.attesa.filter(x => x.id !== el.dataset.id); closePop(); commit(); break;
       case 'annmenu': e.stopPropagation(); annMenu(el.dataset.id, el); break;
       case 'annmove': { const r = t.annullati.find(x => x.id === el.dataset.id); if (!r) { closePop(); break; } r.stato = el.dataset.k; closePop(); commit(); break; }
-      case 'annrest': { const r = t.annullati.find(x => x.id === el.dataset.id); if (!r) { closePop(); break; } t.annullati = t.annullati.filter(x => x !== r); const o = { ...r }; delete o.stato; delete o.dataAnn; t.rows.splice(insertAt(t), 0, o); closePop(); commit(); break; }
+      case 'annrest': { const r = t.annullati.find(x => x.id === el.dataset.id); if (!r) { closePop(); break; } t.annullati = t.annullati.filter(x => x !== r); const o = { ...r }; delete o.stato; delete o.dataAnn; { const before = groupMap(t); before.set(o.id, { bk: o.id, n: 1 }); t.rows.splice(insertAt(t), 0, o); keepGroups(t, before); } closePop(); commit(); break; }
       case 'anndel': t.annullati = t.annullati.filter(x => x.id !== el.dataset.id); closePop(); commit(); break;
       case 'suppadd': { t.quota.supplN = supplN(t) + 1; commit(); const i = $(`[data-qs="${t.quota.supplN}"]`); if (i) i.focus(); break; }
       case 'suppdel': { const N = supplN(t); delete t.quota.suppl[N]; t.quota.supplN = Math.max(1, N - 1); commit(); break; }
@@ -6220,7 +6516,7 @@
       case 'settings': { const fromWa = UI.modal && UI.modal.kind === 'wa'; closeModal(); UI.view = 'settings'; UI.ssec = el.dataset.ssec || (fromWa ? 'whatsapp' : UI.ssec); } render(); window.scrollTo(0, 0); break;
       case 'insph': { const ta = $('#s-wa'); const p = `{${el.dataset.p}}`; const s0 = ta.selectionStart, s1 = ta.selectionEnd; ta.value = ta.value.slice(0, s0) + p + ta.value.slice(s1); ta.focus(); ta.selectionStart = ta.selectionEnd = s0 + p.length; break; }
       case 'resetwa': $('#s-wa').value = DEFAULT_WA; break;
-      case 'wa': UI.waPrev = null; waModal(); break;
+      case 'wa': sospGuard(t, () => { UI.waPrev = null; waModal(); }); break;
       case 'wasendall': { syncAll(t); const ids = b.bookings.filter(bk => ['ready', 'err'].includes(waState(t, b, bk).k)).map(bk => bk.id); if (!ids.length) break; confirmBox('Invia a tutti', `Mando il messaggio WhatsApp con video e programma a <b>${ids.length}</b> prenotazioni di ${esc(b.label)}?<br><span class="small">Costo indicativo: circa 0,025 € a messaggio.</span>`, `Invia a ${ids.length}`, () => waSend(ids)); break; }
       case 'wasendone': waSend([el.dataset.id]); break;
       case 'waok': { syncAll(t); const bk = bkById(b, el.dataset.id); if (bk && bk.full) { const h = bk.full.head; h.waOk = el.checked; const c = h.cid && S.clients.clienti[h.cid]; if (c) c.waOk = el.checked; save(); setTimeout(waRefresh, 0); } break; }
@@ -6246,7 +6542,10 @@
     if (d.cl && UI.cl && S.clients.clienti[UI.cl]) { S.clients.clienti[UI.cl][d.cl] = d.cl === 'part' ? el.value.toUpperCase() : el.value; save(); return; }
     if ((d.cfgag !== undefined || d.cfgl !== undefined) && !ACC.can('settings')) return;
     if (d.cfgag !== undefined) { S.cfg.agenzie[+d.cfgag][d.k] = el.value; save(); return; }
-    if (d.cfgl !== undefined) { S.cfg.luoghi[+d.cfgl][d.k] = d.k === 'code' ? el.value.toUpperCase() : el.value; save(); return; }
+    if (d.cfgl !== undefined) { if (d.k === 'colore') { S.cfg.luoghi[+d.cfgl].colore = Object.prototype.hasOwnProperty.call(LCOL_HEX, el.value) ? el.value : ''; save(); render(); return; } S.cfg.luoghi[+d.cfgl][d.k] = d.k === 'code' ? el.value.toUpperCase() : el.value; save();
+      // colore non ancora scelto: si aggiorna quello proposto per la città (senza ridisegnare la pagina mentre si scrive)
+      if ((d.k === 'code' || d.k === 'citta') && S.cfg.luoghi[+d.cfgl].colore == null) { const k = lcolKey(S.cfg.luoghi[+d.cfgl]); const sl = document.querySelector(`select[data-cfgl="${+d.cfgl}"][data-k="colore"]`); if (sl) { sl.value = k; const dot = sl.parentElement && sl.parentElement.querySelector('.lcold'); if (dot) dot.style.background = LCOL_HEX[k] || 'transparent'; } }
+      return; }
     if (d.cc) { ccDiff(); return; }
     if (d.ucell) { if (!ACC.can('users')) return; const u = ACC.users()[d.ucell]; if (u) { u.cell = el.value.trim(); save(); } return; }
     if (d.usig) { if (!ACC.can('users')) return; const u = ACC.users()[d.usig]; if (u) { u.sigla = el.value.toUpperCase().trim(); save(); } return; }
@@ -6298,8 +6597,8 @@
     if (el.id === 't-cat') { const sb = $('#t-servbox'); if (sb) sb.hidden = el.value === 'biglietteria'; return; }
     if (el.id === 'imp-file' && el.files[0]) readImportFile(el.files[0]);
     if (el.classList.contains('pdf-in') && el.files[0]) attachPdf(el.dataset.trip, el.files[0]);
-    if (el.id === 's-restore' && el.files[0]) {
-      const r = new FileReader(); r.onload = () => { try { const res = importBackup(JSON.parse(r.result)); render(); toast(`Copia recuperata: ${res.add} viaggi nuovi, ${res.into} liste inserite${res.skip ? `, ${res.skip} saltati (già presenti o di esempio)` : ''}`); } catch (err) { toast('Il file non è una copia valida'); } }; r.readAsText(el.files[0]); el.value = '';
+    if (el.id === 's-restore' && el.files[0] && ACC.can('settings')) {
+      const r = new FileReader(); r.onload = () => { try { const res = importBackup(JSON.parse(r.result)); render(); toast(`Copia recuperata: ${res.add} viaggi nuovi, ${res.into} liste inserite${res.skip ? `, ${res.skip} saltati (già presenti o di esempio)` : ''}${res.bad ? ` · ${res.bad} elementi scartati perché contenevano dati non validi` : ''}`); } catch (err) { toast('Il file non è una copia valida'); } }; r.readAsText(el.files[0]); el.value = '';
     }
   });
   document.addEventListener('submit', e => { const f = e.target.closest('form[data-form]'); if (!f) return; e.preventDefault(); gateSubmit(f).catch(err => { GATE.busy = false; GATE.msg = 'Qualcosa non ha funzionato: riprova.'; ACC.tlog('errore', 'Accesso: ' + (err && err.message || err)); render(); }); });
@@ -6345,7 +6644,9 @@
     // sopra una riga della lista: la persona (o la prenotazione) va lì, prima o dopo
     const tr = (drag.bk || drag.p || drag.rows) && e.target.closest('.lsec tr[data-rowid]');
     if (tr && !isEmptyRowEl(tr)) { e.preventDefault(); $$('.drop').forEach(x => x.classList.remove('drop')); const rc = tr.getBoundingClientRect(); tr.classList.add(e.clientY > rc.top + rc.height / 2 ? 'drop-a' : 'drop-b'); return; }
-    $$('.drop').forEach(x => x !== st && x !== tb && x !== dl && x.classList.remove('drop'));
+    const sd = e.target.closest('[data-sospdrop]');
+    $$('.drop').forEach(x => x !== st && x !== tb && x !== dl && x !== sd && x.classList.remove('drop'));
+    if (sd && (drag.seat != null || drag.p || drag.bk)) { e.preventDefault(); sd.classList.add('drop'); return; }
     if (st && !st.classList.contains('res')) { e.preventDefault(); st.classList.add('drop'); }
     else if (tb && (drag.bk || drag.p || drag.rows)) { e.preventDefault(); tb.classList.add('drop'); }
     else if (dl && (drag.seat != null || (/^L:/.test(dl.dataset.droplist) && (drag.bk || drag.p || drag.rows)))) { e.preventDefault(); dl.classList.add('drop'); }
@@ -6380,6 +6681,14 @@
       if (dr.bk) { const bk = deriveBookings(t).find(x => x.id === dr.bk); ids = bk ? bk.persone.map(p => p.id) : []; }
       if (dr.seat != null) { const a = b && b.seats[dr.seat]; ids = a && a.pid ? [a.pid] : []; }
       if (dr.rows) UI.lsel = []; doListMove(t, ids, to); return;
+    }
+    const sdz = tgt.closest('[data-sospdrop]');
+    if (sdz && b && (dr.seat != null || dr.p || dr.bk)) {
+      let ids = dr.p ? [dr.p] : [];
+      if (dr.seat != null) { const a = b.seats[dr.seat]; ids = a && a.pid ? [a.pid] : []; }
+      if (dr.bk) { const bk = deriveBookings(t).find(x => x.id === dr.bk); ids = bk ? bk.persone.map(p => p.id) : []; }
+      const n = ids.filter(id => sospPark(t, b, id)).length; if (!n) return;
+      commit(); toast(n === 1 ? 'Messa nei posti in sospeso: rimettila su un posto quando hai finito' : `${n} persone nei posti in sospeso: rimettile sul bus quando hai finito`); return;
     }
     if (st && dr.rows) { const D = deriveBookings(t); const bks = new Set(dr.rows.map(id => (D.find(x => x.persone.some(p => p.id === id)) || {}).id)); if (bks.size === 1) { const id = [...bks][0]; const bk = D.find(x => x.id === id); if (bk.persone.every(p => dr.rows.includes(p.id))) { const r = dropFamily(t, id, b, +st.dataset.seat); UI.lsel = []; afterFamily(r, t, b, id); return commit(); } } return toast('Sulla piantina si trascina una prenotazione o una persona alla volta: per spostare tante persone usa la linguetta del bus'); }
     if (st) {
@@ -6528,7 +6837,8 @@
     return new Promise(res => {
       navigator.locks.request('viaggi-laterra-app', { ifAvailable: true }, lock => {
         if (lock) { res(); return new Promise(() => {}); }
-        $('#app').innerHTML = `<div class="gate"><div class="g-card"><img src="${LOGO}" alt="La Terra" style="height:40px;align-self:center"><h1 class="g-title">Viaggi <span>in Pullman</span></h1><p class="g-sub">L'app è già aperta in un'altra finestra di questo computer. Usa quella, oppure chiudila e premi il pulsante qui sotto.</p><button class="g-btn" onclick="location.reload()">Riprova</button></div></div>`;
+        $('#app').innerHTML = `<div class="gate"><div class="g-card"><img src="${LOGO}" alt="La Terra" style="height:40px;align-self:center"><h1 class="g-title">Viaggi <span>in Pullman</span></h1><p class="g-sub">L'app è già aperta in un'altra finestra di questo computer. Usa quella, oppure chiudila e premi il pulsante qui sotto.</p><button class="g-btn" id="g-retry">Riprova</button></div></div>`;
+        const rb = document.getElementById('g-retry'); if (rb) rb.addEventListener('click', () => location.reload());
         return null;
       });
     });

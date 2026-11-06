@@ -1,14 +1,53 @@
 VIAGGI IN PULLMAN · LA TERRA
 ============================
 
-Versione: 2.1.11
-Pacchetto creato il: 05/11/2026
+Versione: 2.1.14
+Pacchetto creato il: 06/11/2026
 
 Come installarla o aggiornarla: vedi LEGGIMI.txt.
-Aggiornamento: carica su GitHub TUTTI i file, config.js compreso (contiene già la chiave di Dropbox).
+Aggiornamento: carica su GitHub TUTTI i file, config.js compreso (contiene già la chiave di Dropbox) e il nuovo avvio.js.
 
 MODIFICHE
 ---------
+
+VERSIONE 2.1.14 · 06/11/2026
+MIGLIORIE DEL 6/11: LISTA PER L'ACCOMPAGNATORE, POSTI IN SOSPESO, MENU E SPOSTAMENTI (da caricare al posto della 2.1.13)
+
+1. Posti sul bus › «Stampa lista passeggeri» (sotto «Messaggi WhatsApp ai clienti»): lista per l'accompagnatore con solo le persone di quel bus. Ci sono nome della gita, data, partenze con orari (e quante persone salgono in ognuna), nome del bus e numero di persone; per ognuno contatto, partenza, note e posto. Niente prezzi, note della gita, supplementi delle file e lista d'attesa.
+2. Colori delle partenze: nella lista per l'accompagnatore la partenza di ognuno è colorata. Il colore si sceglie in Impostazioni › Luoghi di partenza (colonna «Colore»); se non lo scegli: Ragusa verde, Modica giallo, Coffa azzurro, Ispica viola, Rosolini arancio.
+3. Piantina: «Sposta tutta la prenotazione» nel menu del posto, oppure doppio clic sul posto. Poi tocchi il posto da cui farla partire e gli altri del gruppo si siedono accanto. In Impostazioni › Gesti e scorciatoie c'è il riquadro «Piantina del bus» per scegliere cosa fanno clic, doppio clic e ⌥ / ⌘ / Maiusc + clic sui posti.
+4. Posti in sospeso: riquadro sopra la piantina per mettere da parte le persone mentre sistemi gli altri (trascina lì il posto, oppure menu del posto › «Metti in sospeso»). Si rimettono trascinando il nome su un posto, oppure clic sul nome e poi sul posto. Se qualcuno resta lì, la linguetta del bus mostra un numero rosso e l'app avvisa prima di uscire dalla piantina, stampare o mandare i messaggi.
+5. Scritte sulla piantina: «X 2», «X 6» staccati. In ogni fila del gruppo ci sono i nomi di chi siede proprio lì (con tre posti vicini il terzo va sotto il secondo), con il nome intero quando ci sta. Nel riquadro «X N», in alto a destra, la fila pagata con il supplemento (es. «1ª fila»).
+6. Menu della riga (tasto destro): parte «Solo …» per la persona di quella riga e parte «Tutta la comitiva …». Con più righe selezionate le voci valgono per le persone selezionate, e per la comitiva intera solo se è tutta selezionata. Nuove voci: solo questa persona in lista d'attesa o «Non parte più», «Seleziona tutta la comitiva», «Elimina le righe selezionate».
+7. Spostamenti nella lista: chi viene spostato non entra più per sbaglio in un'altra comitiva a cui mancano dei nomi (resta una riga vuota per il nome che manca). Se si sposta, si stacca o si elimina il capogruppo, «Cognome x N» passa alla persona che viene dopo nella stessa lista: prima poteva passare a chi stava in un'altra lista e chi era sotto restava senza numero.
+8. Eliminare la riga di una persona della comitiva: il numero «x N» resta e il nome che manca resta da scrivere; chi sta sotto non entra nella comitiva.
+9. Stampa della lista: il riquadro delle partenze in alto ora è alto come tutta l'intestazione.
+10. Manuale «Aiuto» aggiornato: menu della riga, posti in sospeso, spostare tutta la prenotazione, stampa per l'accompagnatore, colori dei luoghi.
+
+VERSIONE 2.1.13 · 06/11/2026
+CORREZIONI DI SICUREZZA (da caricare al posto della 2.1.12)
+
+1. «Recupera da una copia»: si accettano solo copie con dati in ordine. Gite, clienti e movimenti con codici interni, date o tipi non validi vengono scartati e l'avviso dice quanti sono. Una copia preparata ad arte non può più inserire comandi nelle pagine dell'app. Si usa solo dal Master.
+2. Programmi PDF e cronologia: l'app legge, scrive e cancella file su Dropbox solo dentro /programmi e /cronologia, mai altrove.
+3. «Link programma» della gita: si accettano solo indirizzi internet (https://…). Un indirizzo scritto senza https:// (es. www.laterra.it/…) si completa da solo. Vale anche per il link mandato ai clienti e per i link di Google Maps dei luoghi di partenza.
+4. Pagina del posto per i clienti: il link del programma si apre solo se è un indirizzo internet e non si possono più aggiungere note inventate al link.
+5. Accesso: dopo 30 minuti senza usare l'app, e quando cambia il giorno, l'app ti fa uscire e si rientra con nome e password. «Ricordami su questo computer» non è più spuntato di serie.
+6. Password: l'impronta è più robusta (600.000 passaggi invece di 150.000) e si aggiorna da sola al primo accesso di ciascuno, senza cambiare la password.
+7. File CSV (cassa e diagnostica): un testo che comincia con = + - @ non diventa più una formula quando si apre il file in Excel.
+8. Gite chiuse o bloccate dal Master: solo il Master può eliminarle.
+9. Protezione del browser (Content-Security-Policy): la pagina può usare solo i propri file e comunicare solo con Dropbox, Meta (WhatsApp) e Google Fonts. Se blocca qualcosa, lo annota nella diagnostica.
+10. File di Danea: le date sono controllate anche nel file per l'importazione.
+11. Nuovo file avvio.js: va caricato su GitHub insieme agli altri.
+
+VERSIONE 2.1.12 · 06/11/2026
+LISTA PRENOTAZIONI: NUOVA COLONNA «NOTE 2» E SPAZI SISTEMATI
+
+1. Nuova colonna «note 2», accanto a «note»: appunti interni che restano solo nella lista dell'app e non vanno nella stampa.
+2. La colonna «note / mail» si chiama solo «note».
+3. Colonna «posto» più corta: c'è scritto solo bus e posto, es. «B1 7» (il nome intero del bus si legge passando sopra con il mouse).
+4. Colonne «quota» ed «€» più strette; colonna «N» a sinistra più stretta.
+5. Cognome, nome, data e partenza restano larghi come prima; lo spazio che resta si divide tra «note» e «note 2». Sugli schermi stretti la lista scorre di lato.
+6. Con il tema scuro la lista resta chiara e leggibile (prima quota, posto e pulsanti € diventavano scuri o sbiaditi).
 
 VERSIONE 2.1.11 · 05/11/2026
 CARTELLI SENZA I NUMERI DEI POSTI

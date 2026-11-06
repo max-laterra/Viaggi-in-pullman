@@ -244,6 +244,8 @@ main{max-width:520px;margin:0 auto;padding:16px max(16px,env(safe-area-inset-lef
   document.getElementById('logo').src = LOGO;
   const $m = document.getElementById('main');
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  // i dati arrivano dal link: il link del programma si accetta solo se è un indirizzo internet (http/https)
+  const safeUrl = u => { const s = String(u == null ? '' : u).trim(); if (!s) return ''; try { return /^https?:$/.test(new URL(s).protocol) ? s : ''; } catch (e) { return ''; } };
   const MESI = ['gennaio', 'febbraio', 'marzo', 'aprile', 'maggio', 'giugno', 'luglio', 'agosto', 'settembre', 'ottobre', 'novembre', 'dicembre'];
   const GIORNI = ['domenica', 'lunedì', 'martedì', 'mercoledì', 'giovedì', 'venerdì', 'sabato'];
   const pd = s => { const [y, m, d] = String(s || '').split('-').map(Number); return new Date(y, (m || 1) - 1, d || 1); };
@@ -253,7 +255,8 @@ main{max-width:520px;margin:0 auto;padding:16px max(16px,env(safe-area-inset-lef
     try { let b = m[1].replace(/-/g, '+').replace(/_/g, '/'); while (b.length % 4) b += '='; const bin = atob(b); const bytes = Uint8Array.from(bin, c => c.charCodeAt(0)); return JSON.parse(new TextDecoder().decode(bytes)); } catch (e) { return null; }
   }
   const D = decode(window.__POSTO_HASH || location.hash);
-  if (!D) { $m.innerHTML = '<div class="err">Questo link non è completo. Chiedi all\'agenzia La Terra di rimandartelo.<br><br>Tel. 0932 626240</div>'; return; }
+  if (D && typeof D === 'object') { D.r = safeUrl(D.r); delete D.x; if (!Array.isArray(D.s)) D.s = []; if (!Array.isArray(D.n)) D.n = []; }
+  if (!D || typeof D !== 'object') { $m.innerHTML = '<div class="err">Questo link non è completo. Chiedi all\'agenzia La Terra di rimandartelo.<br><br>Tel. 0932 626240</div>'; return; }
   const L = (window.LAYOUTS || []).find(x => x.id === D.l);
   const ci = c => c === 0 ? { t: 'aisle', c: 1 } : c == null ? { t: 'void', c: 1 } : typeof c === 'number' ? { t: 'seat', s: c, c: 1 } : typeof c === 'string' ? { t: 'feat', f: c, c: 1 } : c.h ? { t: 'seat', s: c.h, h: 1, c: c.c || 1 } : c.s ? { t: 'seat', s: c.s, c: c.c || 1 } : { t: 'feat', f: c.f, c: c.c || 1 };
   const MINE = (D.s || []).map(Number);
@@ -308,15 +311,15 @@ main{max-width:520px;margin:0 auto;padding:16px max(16px,env(safe-area-inset-lef
       ${D.a ? `<div class="ic">Accompagnatore<b>${esc(D.a)}</b>${D.at ? `<a href="tel:${esc(String(D.at).replace(/[^\d+]/g, ''))}">${esc(D.at)}</a>` : ''}</div>` : ''}
       ${D.h ? `<div class="ic">Hotel<b>${esc(D.h)}</b></div>` : ''}
     </div>
-    ${D.x ? `<div class="note">${esc(D.x)}</div>` : ''}
     <div class="cta">${D.r ? `<a class="p" href="${esc(D.r)}" target="_blank" rel="noopener">Apri il programma della gita</a>` : ''}<button class="s" id="cal" type="button">Aggiungi al calendario</button></div>
     <div class="foot">La Terra viaggi in pullman · <a href="tel:+390932626240">0932 626240</a> · <a href="https://www.laterra.it" target="_blank" rel="noopener">laterra.it</a></div>`;
   document.getElementById('cal').addEventListener('click', () => {
     const d = pd(D.d); const [hh, mm] = String(D.po || '08:00').split(/[:.]/).map(Number);
     const p2 = n => String(n).padStart(2, '0');
+    const icsT = s => String(s == null ? '' : s).replace(/[\r\n]+/g, ' ');
     const st = `${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}T${p2(hh || 8)}${p2(mm || 0)}00`;
     const e = D.f && D.f !== D.d ? pd(D.f) : d; const en = `${e.getFullYear()}${p2(e.getMonth() + 1)}${p2(e.getDate())}T${D.f && D.f !== D.d ? '220000' : '235900'}`;
-    const ics = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//La Terra//OnBoard//IT', 'BEGIN:VEVENT', `UID:${st}-${MINE.join('-')}@laterra.it`, `DTSTART:${st}`, `DTEND:${en}`, `SUMMARY:${D.g} (La Terra)`, `LOCATION:${(D.pl || '').replace(/[,;]/g, ' ')}`, `DESCRIPTION:Posto ${MINE.join(' e ')} - ${D.b || ''}${D.r ? ' - Programma: ' + D.r : ''}`, 'BEGIN:VALARM', 'TRIGGER:-PT12H', 'ACTION:DISPLAY', 'DESCRIPTION:Domani si parte!', 'END:VALARM', 'END:VEVENT', 'END:VCALENDAR'].join('\r\n');
+    const ics = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//La Terra//OnBoard//IT', 'BEGIN:VEVENT', `UID:${st}-${MINE.join('-')}@laterra.it`, `DTSTART:${st}`, `DTEND:${en}`, `SUMMARY:${icsT(D.g)} (La Terra)`, `LOCATION:${icsT(D.pl).replace(/[,;]/g, ' ')}`, `DESCRIPTION:Posto ${MINE.join(' e ')} - ${icsT(D.b)}${D.r ? ' - Programma: ' + icsT(D.r) : ''}`, 'BEGIN:VALARM', 'TRIGGER:-PT12H', 'ACTION:DISPLAY', 'DESCRIPTION:Domani si parte!', 'END:VALARM', 'END:VEVENT', 'END:VCALENDAR'].join('\r\n');
     const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([ics], { type: 'text/calendar' })); a.download = 'gita-la-terra.ics'; document.body.appendChild(a); a.click(); a.remove();
   });
   document.title = `Il tuo posto · ${D.g} · La Terra OnBoard`;

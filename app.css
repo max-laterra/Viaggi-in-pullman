@@ -422,7 +422,7 @@ table.bt{width:100%;border-collapse:collapse;font-size:13px}
 .actions .btn{white-space:normal;text-align:left}
 .seat .ores{font-family:var(--cond);font-weight:700;font-size:11px;line-height:1.1;color:#3d4248;margin-top:10px;text-align:right;align-self:flex-end;max-width:70%}
 .legend .lg-x{width:auto;height:auto;border:0;font-style:normal}
-.legend .lg-x::before{content:"x2";font-family:var(--cond);font-weight:700;font-size:13px;color:var(--ink)}
+.legend .lg-x::before{content:"X 2";font-family:var(--cond);font-weight:700;font-size:13px;color:var(--ink)}
 .legend .lg-cross{background:linear-gradient(to top right,transparent 45%,#2B2F33 47%,#2B2F33 53%,transparent 55%) #fff}
 .pm-map .seat .ol{font-size:9.5pt;margin-top:2.6mm}
 .pm-map .seat .ox{font-size:15pt;margin-top:1mm}
@@ -537,6 +537,7 @@ table.wl{border-collapse:collapse;width:100%;font-size:13px;color:#1E2226;backgr
 .lph td{border:.3mm solid #333;padding:1mm 2mm}
 .lph .tt{font-family:"Barlow Condensed",Arial,sans-serif;font-weight:700;font-size:14pt;width:45%}
 .lph .deps{font-size:8.5pt;white-space:nowrap}
+.lph td.deps{display:table-cell;vertical-align:top}
 .lnote{border:.3mm solid #333;padding:1mm 2mm;font-size:8.5pt}
 .lt{font-family:"Barlow Condensed",Arial,sans-serif;font-size:11pt;text-transform:uppercase;margin:2mm 0 0}
 .lpt{width:100%;border-collapse:collapse;font-size:7.5pt}
@@ -1905,3 +1906,67 @@ input.bg-inp.r{text-align:right;max-width:120px}
 .wl.wl-ev th.c-cognome,.wl.wl-ev th.c-nome,.wl.wl-ev th.c-tel,.wl.wl-ev th.c-fila,.wl.wl-ev th.c-note{width:auto;min-width:0}
 .wl.wl-ev th.c-nascita{width:74px}.wl.wl-ev th.c-part{width:50px}.wl.wl-ev th.c-emis{width:84px}
 .wl.wl-ev th.c-posto{width:96px}.wl.wl-ev th.c-quota{width:118px}.wl.wl-ev th.c-pagato{width:66px}
+/* 2.1.12 lista prenotazioni: colonna N più stretta, posto «B1 7», quota ed € più strette, nuova colonna «note 2».
+   Cognome, nome, data e part restano larghi come prima; lo spazio che resta va a «note» e «note 2» in parti uguali. */
+.wl th:first-child,.wl td.wn{width:46px}
+.wl td.wn{padding-left:2px;padding-right:2px}
+.wl:not(.wl-ev){min-width:1240px}
+.wl:not(.wl-ev):has(th.c-hotel){min-width:1400px}
+.wl:not(.wl-ev) th.c-cognome{width:185px}.wl:not(.wl-ev) th.c-nome{width:140px}.wl:not(.wl-ev) th.c-nascita{width:104px}
+.wl:not(.wl-ev) th.c-tel{width:140px}.wl:not(.wl-ev) th.c-part{width:72px}.wl:not(.wl-ev) th.c-fila{width:130px}
+.wl:not(.wl-ev) th.c-note,.wl:not(.wl-ev) th.c-nota2{width:auto}
+.wl th.c-posto{width:64px}.wl:not(.wl-ev) th.c-quota{width:96px}.wl th.c-pagato{width:64px}
+.wl td.c-posto{text-align:center;padding-left:2px;padding-right:2px}
+.wl td.c-posto .pill{white-space:nowrap}
+.wl.wl-ev{min-width:1240px}
+.wl.wl-ev th.c-nota2{width:auto}
+.wl td.c-nota2 .wc{color:var(--ink-2)}
+.wl th.c-posto{width:70px}
+.wl td.c-posto .pill.tbd,.wl td.c-posto .pill.bad{white-space:normal;line-height:1.1;font-size:10.5px;text-align:center;padding:2px 5px}
+.wl td.wpos{text-align:center;min-width:0;padding:0 2px}
+.wl td.wpos .pill.tbd,.wl td.wpos .pill.bad{white-space:normal;line-height:1.1;font-size:10.5px;text-align:center;padding:2px 5px}
+/* la lista resta un «foglio» chiaro anche con il tema scuro: colori del tema chiaro dentro la tabella
+   (prima, con il tema scuro, quota, pillole del posto e pulsanti € diventavano scuri o poco leggibili sul foglio bianco) */
+.wl{--surface:#FFFFFF;--surface-2:#EDEAE5;--ink:#1E2226;--ink-2:#4E555C;--ink-3:#848A90;--line:#DDD8D1;--ok:#2B7A4B;--ok-bg:#DFF1E6;--warn:#B42318;--warn-bg:#FDECEA;--tbd:#A35A00;--tbd-bg:#FFF0D1;--red:#D90D36;--red-soft:#FCE3E8;color-scheme:light}
+/* tour (colonne hotel e camera in più): colonne un po' più strette, così restano spazio per le note */
+.wl:not(.wl-ev):has(th.c-hotel){min-width:1320px}
+.wl:not(.wl-ev):has(th.c-hotel) th.c-cognome{width:150px}.wl:not(.wl-ev):has(th.c-hotel) th.c-nome{width:110px}.wl:not(.wl-ev):has(th.c-hotel) th.c-nascita{width:80px}
+.wl:not(.wl-ev):has(th.c-hotel) th.c-tel{width:112px}.wl:not(.wl-ev):has(th.c-hotel) th.c-part{width:50px}.wl:not(.wl-ev):has(th.c-hotel) th.c-fila{width:96px}
+.wl.wl-ev:has(th.c-hotel){min-width:1560px}
+
+/* 2.1.14 · lista per l'accompagnatore e colori dei luoghi di partenza */
+.lp.acc .deps{white-space:normal}
+.accdep{display:flex;align-items:center;gap:1.5mm;margin:.4mm 0}
+.accsw{display:inline-block;min-width:9mm;padding:.2mm 1.2mm;border:.2mm solid #888;border-radius:1mm;font-weight:700;text-align:center}
+.lpt td.accpart{font-weight:700;text-align:center}
+.accdep,.accsw,.lpt td.accpart{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+.lcolw{display:inline-flex;align-items:center;gap:6px}
+.lcold{display:inline-block;width:16px;height:16px;border-radius:50%;border:1px solid rgba(0,0,0,.25);flex:none}
+/* 2.1.14 · piantina: tre nomi nello stesso riquadro e fila pagata nel riquadro «X N» */
+.seat .ol.l3{font-size:10.5px;margin-top:8px}
+.seat .ofila{position:absolute;top:3px;right:4px;font-family:var(--cond);font-size:10px;font-weight:700;line-height:13px;padding:0 4px;border-radius:4px;background:rgba(255,255,255,.75);color:#7D0A20;white-space:nowrap}
+.pm-map .seat .ol.l3{font-size:8pt;margin-top:2.4mm}
+.pm-map .seat .ofila{font-size:6.5pt;line-height:8pt;top:.5mm;right:.8mm;padding:0 .8mm;background:#fff;border:.2mm solid #7D0A20}
+/* 2.1.14 · posti in sospeso sopra la piantina */
+.sosp{margin:0 0 10px;padding:8px 10px;border:1.5px dashed #C9C5BF;border-radius:12px;background:#FAFAF8}
+.sosp.on{border-color:#D90D36;background:#FFF4F6}
+.sosp.drop{border-style:solid;border-color:#2B7A4B;background:#E3F5E9}
+.sosp-h{display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px;font-size:12.5px;color:#6E6E73}
+.sosp-h b{display:inline-flex;align-items:center;gap:5px;color:#1D1D1F;font-size:13px}
+.sosp-h b svg{width:15px;height:15px}
+.sosp.on .sosp-h span{color:#B00A2E;font-weight:600}
+.sosp-l{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.schip{display:inline-flex;align-items:center;min-height:30px;border-radius:9px;background:#fff;border:1px solid #D2D2D7;cursor:grab}
+.schip.on{outline:2.5px solid #D90D36;outline-offset:1px}
+.schip.svuoto{min-width:110px;border:1.5px dashed #D9D6D0;background:transparent;cursor:default}
+.schip-n{border:0;background:transparent;font:600 12.5px var(--cond, inherit);text-transform:uppercase;padding:4px 4px 4px 10px;cursor:pointer;color:#1D1D1F}
+.schip-n small{font-weight:500;text-transform:none;color:#6E6E73;margin-left:3px}
+.schip-x{border:0;background:transparent;padding:4px 7px;cursor:pointer;color:#8E8E93;display:inline-flex}
+.schip-x svg{width:13px;height:13px}
+.mtab{position:relative}
+.mtab .sospb{position:absolute;top:-7px;right:-7px;display:inline-grid;place-items:center;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:#D90D36;color:#fff;font-size:11px;font-style:normal;font-weight:700}
+@media print{.sosp{display:none!important}}
+.sosp-l{align-items:center}
+.schip{height:34px;min-height:0}
+.schip .schip-n,.schip .schip-x{min-height:0;height:100%;display:inline-flex;align-items:center;box-shadow:none}
+.schip.svuoto{height:34px}
